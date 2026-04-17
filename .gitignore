@@ -1,6 +1,7 @@
 .direnv
 .DS_Store
 /target
+/result
 *.pdf
 
 reference
