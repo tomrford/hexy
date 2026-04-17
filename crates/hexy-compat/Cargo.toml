@@ -1,0 +1,20 @@
+[package]
+name = "hexy-compat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HexView-compatible slash-flag CLI built on hexy-core."
+keywords = ["hex", "hexview", "intel-hex", "firmware"]
+
+[dependencies]
+hexy-core = { path = "../hexy-core", version = "0.1.0" }
+ed25519-dalek.workspace = true
+rsa.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+x509-cert.workspace = true
+
+[[bin]]
+name = "hexy"
+path = "src/main.rs"

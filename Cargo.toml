@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/hexy-core", "crates/hexy-compat"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/tomrford/hexy"
+
+[workspace.dependencies]
+crc = "3.4.0"
+ed25519-dalek = { version = "2.1.1", features = ["digest", "pem", "pkcs8"] }
+md-5 = "0.10.6"
+ripemd = "0.1.3"
+rsa = { version = "0.9.8", features = ["getrandom", "sha2"] }
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+thiserror = "2.0.17"
+x509-cert = "0.2.5"
+

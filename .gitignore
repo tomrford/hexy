@@ -1,0 +1,9 @@
+.direnv
+.DS_Store
+/target
+*.pdf
+
+reference
+scratchpad
+**/__pycache__
+validation/
