@@ -3,6 +3,7 @@ pub mod io;
 pub mod ops;
 pub mod range;
 pub mod segment;
+pub mod signature;
 
 pub use hexfile::HexFile;
 pub use io::{
@@ -23,3 +24,7 @@ pub use range::{
     AddressRange, AddressRangeError, merge_ranges, parse_hexview_ranges, parse_ranges,
 };
 pub use segment::Segment;
+pub use signature::{
+    SignatureBytesSource, SignatureError, SignatureKeySource, SignatureMethod, SignaturePlacement,
+    SignatureSignOptions, SignatureVerifyOptions,
+};

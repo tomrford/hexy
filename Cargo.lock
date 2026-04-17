@@ -196,9 +196,7 @@ dependencies = [
  "ed25519-dalek",
  "hexy-core",
  "rsa",
- "sha2",
  "thiserror",
- "x509-cert",
 ]
 
 [[package]]

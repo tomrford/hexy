@@ -4,9 +4,9 @@ Post-API-simplification active issues.
 
 Public core model is `HexFile`, `Segment`, `AddressRange`. No public CLI layer, no pipeline/flag surface, no in-memory CLI execution path.
 
-Current parity gaps / validated divergences are tracked in [known-divergences.md](known-divergences.md).
+Current compatibility gaps / divergences are tracked in [known-divergences.md](known-divergences.md).
 
-## Verify On Reference Machine
+## Compatibility Follow-ups
 
 These are contract questions, not just implementation bugs.
 
@@ -19,7 +19,7 @@ Current state:
 - [`write_binary`](/Users/tomford/code/projects/hexy/crates/hexy-core/src/io/binary.rs) sorts by address before concatenation
 
 Need:
-- verify HexView behavior against the reference manual / binary
+- verify behavior externally when it matters
 - then either document current behavior as correct or change it
 
 ### `/L` `FileOpen` path base
@@ -31,7 +31,7 @@ Current state:
 - [`execute_log_commands`](/Users/tomford/code/projects/hexy/crates/hexy-core/src/ops/log.rs) later resolves through the caller/load closure, which currently makes CLI behavior cwd-relative
 
 Need:
-- verify HexView behavior
+- verify behavior externally when it matters
 - then either keep cwd-relative resolution or make log-file-relative resolution explicit
 
 ## Needs Design / More Consideration
@@ -40,9 +40,9 @@ These are real issues, but the right fix is less mechanical.
 
 ### Ambiguous key / signature source parsing
 
-[`crates/hexy-compat/src/args/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-compat/src/args/signature.rs)
+[`crates/hexy-core/src/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-core/src/signature.rs)
 
-`load_signature_bytes` and `load_key_material` still use `path.exists()` to choose between filesystem input and inline material.
+`SignatureKeySource::Auto` and `SignatureBytesSource::Auto` still use `path.exists()` to choose between filesystem input and inline material.
 
 Problem:
 - cwd files can shadow intended inline input
@@ -53,8 +53,12 @@ Needs a decision on explicit source syntax or stricter rejection rules.
 ### `/DP` placement plus `/SV` hashes different images
 
 [`crates/hexy-compat/src/args/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-compat/src/args/signature.rs)
+[`crates/hexy-compat/src/args/execute.rs`](/Users/tomford/code/projects/hexy/crates/hexy-compat/src/args/execute.rs)
 
 `/DP` signs pre-placement bytes, then mutates the image by placing the signature. `/SV` verifies against the post-placement image.
+
+Current repro:
+- same-invocation placed signing plus verification fails, for example `/DP32:@append:...` with `/SV4:...`
 
 Needs a decision:
 - reject same-invocation placed `/DP` + `/SV`
@@ -110,16 +114,16 @@ Forced-range checksum still constructs a whole pattern-backed segment before exc
 
 Needs a more careful checksum-collection refactor.
 
-### Move signature ops into library
+### Refine signature API in library
 
+[`crates/hexy-core/src/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-core/src/signature.rs)
 [`crates/hexy-compat/src/args/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-compat/src/args/signature.rs)
 
-Signing/verification logic (RSA PKCS#1/PSS, Ed25519, X.509 cert loading) currently lives in the CLI layer. The library should offer the same in-memory semantics as every other HexView operation so consumers can reproduce `/DP` and `/SV` behavior without the CLI.
+Signing, verification, placement, and source resolution now live in the library. The compat CLI should stay as a thin HexView-argument adapter.
 
-Migration requires:
-- library-level signature types (method enum, target enum, key source) decoupled from CLI `CliError`/`DataProcessingParams`/`SignatureVerifyParams`
-- CLI layer translates its parsed args into the library types
-- crypto deps (`ed25519-dalek`, `rsa`, `x509-cert`, `sha2`) move behind a cargo feature gate so non-signing consumers don't pay for them
+Follow-ups worth considering:
+- decide whether the library should grow a higher-level typed request layer for the HexView signature modes
+- keep the CLI as a thin adapter over the library API, not a second crypto implementation
 
 ### CLI architecture: clap + HexView compat mode
 

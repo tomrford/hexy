@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use super::types::ParseArgError;
+use hexy_core::SignatureError;
 use hexy_core::ops::LogError;
 
 #[derive(Debug, Error)]
@@ -13,6 +14,8 @@ pub enum CliError {
     Log(#[from] LogError),
     #[error(transparent)]
     Parse(#[from] crate::ParseError),
+    #[error(transparent)]
+    Signature(#[from] SignatureError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("{0}")]
