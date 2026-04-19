@@ -7,7 +7,7 @@ description: "Guide for hexy, a HexView-compatible CLI for non-proprietary firmw
 
 Use `hexy` as a pipeline tool. Load one input image, apply ordered operations, then export once.
 
-Treat operation order as part of the interface. Do not reorder flags casually. Later flags act on the result of earlier ones, and the command line is designed around that model.
+Treat operation order as part of the interface. Do not reorder flags casually. `hexy` applies flags in its fixed execution pipeline, and each stage sees the result of earlier stages in that pipeline.
 
 Use slash-style HexView syntax in examples and commands. Keep examples in installed-binary form such as `hexy input.hex /CR:'0x1000-0x1FFF' /CS0 /XI -o output.hex`.
 

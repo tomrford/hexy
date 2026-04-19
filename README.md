@@ -56,11 +56,11 @@ Compat flags execute in a fixed pipeline order, not in argument order:
 ## Library
 
 ```rust
-use hexy_core::{AddressRange, HexFile};
+use hexy_core::{AddressRange, IntelHexWriteOptions, parse_intel_hex, write_intel_hex};
 
-let mut hf = HexFile::from_ihex(data)?;
-hf.cut(&[AddressRange::new(0x800, 0x8FF)]);
-let out = hf.to_ihex(None, None);
+let mut hf = parse_intel_hex(data)?;
+hf.cut(AddressRange::from_start_end(0x800, 0x8FF)?);
+let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 ```
 
 ## Scope

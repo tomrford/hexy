@@ -220,7 +220,7 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 - Use `rectype` only when `reclinelen` is also present.
 
 `/XN`
-- Export one raw binary stream by concatenating segments in order of appearance.
+- Export one raw binary stream by concatenating segments in ascending address order.
 - Use `/FA` first if a single contiguous image matters.
 
 `/XSB`
@@ -247,7 +247,7 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 
 `/P:file.ini`
 - Supply extra parameters for export modes that require side metadata.
-- Use it with `/XC` and `/XF`; default export behavior may infer or create companion metadata files otherwise.
+- Use it with `/XC` and `/XF`; if omitted, `hexy` looks for `<input>.ini`.
 
 ## Unsupported or out-of-scope
 
