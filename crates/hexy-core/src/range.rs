@@ -32,7 +32,7 @@ impl AddressRange {
         }
         let end = start
             .checked_add(length - 1)
-            .ok_or_else(|| AddressRangeError::InvalidFormat("address overflow".to_string()))?;
+            .ok_or_else(|| AddressRangeError::InvalidFormat("address overflow".to_owned()))?;
         Ok(Self { start, end })
     }
 
@@ -44,7 +44,7 @@ impl AddressRange {
         // Reject full 4GiB range as length would overflow u32
         if start == 0 && end == u32::MAX {
             return Err(AddressRangeError::InvalidFormat(
-                "range spans entire 4GiB address space".to_string(),
+                "range spans entire 4GiB address space".to_owned(),
             ));
         }
         Ok(Self { start, end })
@@ -86,12 +86,12 @@ impl AddressRange {
 fn parse_number(s: &str) -> Result<u32, AddressRangeError> {
     let s = s.trim();
     if s.is_empty() {
-        return Err(AddressRangeError::InvalidNumber("empty string".to_string()));
+        return Err(AddressRangeError::InvalidNumber("empty string".to_owned()));
     }
 
     let s = s.trim_end_matches(['u', 'U', 'l', 'L']).trim();
     if s.is_empty() {
-        return Err(AddressRangeError::InvalidNumber("empty string".to_string()));
+        return Err(AddressRangeError::InvalidNumber("empty string".to_owned()));
     }
     let (radix, digits) = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         (16, hex)
@@ -107,7 +107,7 @@ fn parse_number(s: &str) -> Result<u32, AddressRangeError> {
 
     let cleaned: String = digits.chars().filter(|c| *c != '.' && *c != '_').collect();
     if cleaned.is_empty() {
-        return Err(AddressRangeError::InvalidNumber("empty".to_string()));
+        return Err(AddressRangeError::InvalidNumber("empty".to_owned()));
     }
     u32::from_str_radix(&cleaned, radix)
         .map_err(|e| AddressRangeError::InvalidNumber(e.to_string()))

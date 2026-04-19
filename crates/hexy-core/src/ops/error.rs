@@ -39,7 +39,7 @@ impl OpsError {
         match self {
             OpsError::Context { .. } => self,
             other => OpsError::Context {
-                context: context.to_string(),
+                context: context.to_owned(),
                 source: Box::new(other),
             },
         }

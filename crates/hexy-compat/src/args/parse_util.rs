@@ -29,7 +29,7 @@ fn parse_single_hexview_range(s: &str, context: &str) -> Result<AddressRange, Pa
     let ranges = parse_hexview_ranges(s)?;
     match ranges.as_slice() {
         [range] => Ok(*range),
-        [] => Err(ParseArgError::InvalidRange(s.to_string())),
+        [] => Err(ParseArgError::InvalidRange(s.to_owned())),
         _ => Err(ParseArgError::InvalidOption(format!(
             "{context} requires exactly one range"
         ))),
@@ -55,12 +55,12 @@ pub(super) fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, ParseArgError> {
 pub(super) fn parse_number(s: &str) -> Result<u32, ParseArgError> {
     let s = s.trim();
     if s.is_empty() {
-        return Err(ParseArgError::InvalidNumber("empty".to_string()));
+        return Err(ParseArgError::InvalidNumber("empty".to_owned()));
     }
 
     let s = s.trim_end_matches(['u', 'U', 'l', 'L']).trim();
     if s.is_empty() {
-        return Err(ParseArgError::InvalidNumber("empty".to_string()));
+        return Err(ParseArgError::InvalidNumber("empty".to_owned()));
     }
 
     let (radix, digits) = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
@@ -80,7 +80,7 @@ pub(super) fn parse_number(s: &str) -> Result<u32, ParseArgError> {
 
     let cleaned: String = digits.chars().filter(|c| *c != '.' && *c != '_').collect();
     if cleaned.is_empty() {
-        return Err(ParseArgError::InvalidNumber("empty".to_string()));
+        return Err(ParseArgError::InvalidNumber("empty".to_owned()));
     }
 
     u32::from_str_radix(&cleaned, radix).map_err(|e| ParseArgError::InvalidNumber(e.to_string()))
@@ -89,7 +89,7 @@ pub(super) fn parse_number(s: &str) -> Result<u32, ParseArgError> {
 pub(super) fn parse_signed_number(s: &str) -> Result<i64, ParseArgError> {
     let s = s.trim();
     if s.is_empty() {
-        return Err(ParseArgError::InvalidNumber("empty".to_string()));
+        return Err(ParseArgError::InvalidNumber("empty".to_owned()));
     }
     let (sign, digits) = if let Some(rest) = s.strip_prefix('-') {
         (-1i64, rest)
@@ -206,7 +206,7 @@ pub(super) fn parse_checksum(
         0
     } else {
         algo.parse::<u8>()
-            .map_err(|_| ParseArgError::InvalidNumber(algo.to_string()))?
+            .map_err(|_| ParseArgError::InvalidNumber(algo.to_owned()))?
     };
 
     let mut parts = target.split(';');
@@ -222,7 +222,7 @@ pub(super) fn parse_checksum(
         if let Some(forced) = part.strip_prefix('!') {
             if forced_range.is_some() {
                 return Err(ParseArgError::InvalidOption(
-                    "multiple forced ranges".to_string(),
+                    "multiple forced ranges".to_owned(),
                 ));
             }
             let (range_str, pattern_str) = if let Some((r, p)) = forced.split_once('#') {
@@ -251,7 +251,7 @@ pub(super) fn parse_checksum(
 
         if range.is_some() {
             return Err(ParseArgError::InvalidOption(
-                "multiple checksum ranges".to_string(),
+                "multiple checksum ranges".to_owned(),
             ));
         }
 
@@ -316,7 +316,7 @@ pub(super) fn parse_data_processing_params(
 
     let (placement, key_and_meta) = if let Some(rest) = params_part.strip_prefix('@') {
         let (placement_raw, right) = rest.split_once(':').ok_or_else(|| {
-            ParseArgError::InvalidOption("data processing placement missing ':'".to_string())
+            ParseArgError::InvalidOption("data processing placement missing ':'".to_owned())
         })?;
         (Some(parse_placement_target(placement_raw)?), right)
     } else {
@@ -328,7 +328,7 @@ pub(super) fn parse_data_processing_params(
         .next()
         .map(str::trim)
         .unwrap_or_default()
-        .to_string();
+        .to_owned();
     if key_info.is_empty() {
         return Err(ParseArgError::MissingValue(format!("/DP{method} keyinfo")));
     }
@@ -348,8 +348,8 @@ pub(super) fn parse_signature_verify_params(
     let (key_raw, signature_raw) = value.split_once('!').ok_or_else(|| {
         ParseArgError::InvalidOption("signature verification requires keyinfo!signatureinfo".into())
     })?;
-    let key_info = strip_quotes(key_raw).trim().to_string();
-    let signature_info = strip_quotes(signature_raw).trim().to_string();
+    let key_info = strip_quotes(key_raw).trim().to_owned();
+    let signature_info = strip_quotes(signature_raw).trim().to_owned();
     if key_info.is_empty() {
         return Err(ParseArgError::MissingValue(format!("/SV{method} keyinfo")));
     }
@@ -393,7 +393,7 @@ pub(super) fn parse_output_params(s: &str) -> Result<(Option<u8>, Option<u8>), P
         } else {
             let value = parse_number(part)?;
             if value > u8::MAX as u32 {
-                return Err(ParseArgError::InvalidNumber(part.to_string()));
+                return Err(ParseArgError::InvalidNumber(part.to_owned()));
             }
             Some(value as u8)
         }
@@ -407,7 +407,7 @@ pub(super) fn parse_output_params(s: &str) -> Result<(Option<u8>, Option<u8>), P
         } else {
             let value = parse_number(part)?;
             if value > u8::MAX as u32 {
-                return Err(ParseArgError::InvalidNumber(part.to_string()));
+                return Err(ParseArgError::InvalidNumber(part.to_owned()));
             }
             Some(value as u8)
         }
@@ -435,7 +435,7 @@ pub(super) fn parse_hex_ascii_params(
         Some(parse_number(len_part)?)
     };
 
-    let separator = sep_part.map(|s| strip_quotes(s).to_string());
+    let separator = sep_part.map(|s| strip_quotes(s).to_owned());
 
     Ok((line_length, separator))
 }

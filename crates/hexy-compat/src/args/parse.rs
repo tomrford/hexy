@@ -28,7 +28,7 @@ fn parse_hex_no_sep(raw: &str) -> Result<u32, ParseArgError> {
         .strip_prefix("0x")
         .or_else(|| raw.strip_prefix("0X"))
         .unwrap_or(raw);
-    u32::from_str_radix(stripped, 16).map_err(|_| ParseArgError::InvalidNumber(raw.to_string()))
+    u32::from_str_radix(stripped, 16).map_err(|_| ParseArgError::InvalidNumber(raw.to_owned()))
 }
 
 fn unsupported_output_format(key_upper: &str) -> ParseArgError {
@@ -190,7 +190,7 @@ fn parse_numeric_option(
         "AF" => {
             let fill = parse_number(value)?;
             if fill > u8::MAX as u32 {
-                return Err(ParseArgError::InvalidNumber(value.to_string()));
+                return Err(ParseArgError::InvalidNumber(value.to_owned()));
             }
             args.align_fill = fill as u8;
             Ok(true)
@@ -215,12 +215,12 @@ fn parse_checksum_option(
     fn reject_mixed(args: &Args, is_multi: bool) -> Result<(), ParseArgError> {
         if is_multi && args.checksum.is_some() {
             return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_string(),
+                "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
         if !is_multi && !args.checksum_multi.is_empty() {
             return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_string(),
+                "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
         Ok(())
@@ -256,7 +256,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
     {
         if args.checksum.is_some() {
             return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_string(),
+                "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
         args.checksum_multi
@@ -268,7 +268,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
     {
         if args.checksum.is_some() {
             return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_string(),
+                "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
         args.checksum_multi
@@ -280,7 +280,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
     {
         if !args.checksum_multi.is_empty() {
             return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_string(),
+                "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
         args.checksum = Some(parse_checksum(algo, "@append", true)?);
@@ -291,7 +291,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
     {
         if !args.checksum_multi.is_empty() {
             return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_string(),
+                "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
         args.checksum = Some(parse_checksum(algo, "@append", false)?);
@@ -308,7 +308,7 @@ fn parse_data_processing_option(
     if let Some(method_str) = key_upper.strip_prefix("DP") {
         let method = method_str
             .parse::<u8>()
-            .map_err(|_| ParseArgError::InvalidNumber(method_str.to_string()))?;
+            .map_err(|_| ParseArgError::InvalidNumber(method_str.to_owned()))?;
         args.data_processing = Some(parse_data_processing_params(method, value)?);
         return Ok(true);
     }
@@ -323,7 +323,7 @@ fn parse_signature_verify_option(
     if let Some(method_str) = key_upper.strip_prefix("SV") {
         let method = method_str
             .parse::<u8>()
-            .map_err(|_| ParseArgError::InvalidNumber(method_str.to_string()))?;
+            .map_err(|_| ParseArgError::InvalidNumber(method_str.to_owned()))?;
         args.signature_verify = Some(parse_signature_verify_params(method, value)?);
         return Ok(true);
     }
@@ -398,7 +398,7 @@ fn parse_output_option(
                 let (len, rec_type) = parse_output_params(value)?;
                 if rec_type.is_some() && len.is_none() {
                     return Err(ParseArgError::InvalidOption(
-                        "record type requires reclinelen".to_string(),
+                        "record type requires reclinelen".to_owned(),
                     ));
                 }
                 args.bytes_per_line = len;
@@ -418,7 +418,7 @@ fn parse_output_option(
                 let (len, rec_type) = parse_output_params(value)?;
                 if rec_type.is_some() && len.is_none() {
                     return Err(ParseArgError::InvalidOption(
-                        "record type requires reclinelen".to_string(),
+                        "record type requires reclinelen".to_owned(),
                     ));
                 }
                 args.bytes_per_line = len;
@@ -505,7 +505,7 @@ pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<(), ParseArgErr
         let raw = &opt[2..];
         let value = parse_hex_no_sep(raw)?;
         if value > u8::MAX as u32 {
-            return Err(ParseArgError::InvalidNumber(raw.to_string()));
+            return Err(ParseArgError::InvalidNumber(raw.to_owned()));
         }
         args.align_fill = value as u8;
         return Ok(());
@@ -532,14 +532,14 @@ pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<(), ParseArgErr
                 return Ok(());
             }
         }
-        return Err(ParseArgError::InvalidOption(opt.to_string()));
+        return Err(ParseArgError::InvalidOption(opt.to_owned()));
     } else {
         let opt_upper = opt.to_ascii_uppercase();
         if parse_output_option(args, &opt_upper, None)? {
             return Ok(());
         }
         if !parse_simple_flag(args, &opt_upper) {
-            return Err(ParseArgError::InvalidOption(opt.to_string()));
+            return Err(ParseArgError::InvalidOption(opt.to_owned()));
         }
     }
 

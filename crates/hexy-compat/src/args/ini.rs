@@ -25,7 +25,7 @@ pub(super) fn load_ini(
             continue;
         };
         let key = key.trim().to_ascii_lowercase();
-        let value = value.trim().trim_matches('"').to_string();
+        let value = value.trim().trim_matches('"').to_owned();
         map.insert(key, value);
     }
 

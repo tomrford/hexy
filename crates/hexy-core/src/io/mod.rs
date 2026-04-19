@@ -41,7 +41,7 @@ fn parse_hex_bytes(data: &[u8], line: usize) -> Result<Vec<u8>, error::ParseErro
     if !data.len().is_multiple_of(2) {
         return Err(error::ParseError::InvalidRecord {
             line,
-            message: "odd number of hex digits".to_string(),
+            message: "odd number of hex digits".to_owned(),
         });
     }
     let mut out = Vec::with_capacity(data.len() / 2);

@@ -477,7 +477,7 @@ impl HexFile {
                 return Err(OpsError::LengthNotMultiple {
                     length: run_len,
                     expected: 2,
-                    operation: "checksum word range".to_string(),
+                    operation: "checksum word range".to_owned(),
                 });
             }
             Ok(())
@@ -675,7 +675,7 @@ fn word_sum_be(data: &[u8]) -> Result<u16, OpsError> {
         return Err(OpsError::LengthNotMultiple {
             length: data.len(),
             expected: 2,
-            operation: "word sum BE".to_string(),
+            operation: "word sum BE".to_owned(),
         });
     }
     Ok(data.chunks_exact(2).fold(0u16, |acc, chunk| {
@@ -689,7 +689,7 @@ fn word_sum_le(data: &[u8]) -> Result<u16, OpsError> {
         return Err(OpsError::LengthNotMultiple {
             length: data.len(),
             expected: 2,
-            operation: "word sum LE".to_string(),
+            operation: "word sum LE".to_owned(),
         });
     }
     Ok(data.chunks_exact(2).fold(0u16, |acc, chunk| {

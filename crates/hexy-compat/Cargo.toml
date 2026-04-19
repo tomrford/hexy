@@ -18,3 +18,6 @@ rsa.workspace = true
 [[bin]]
 name = "hexy"
 path = "src/main.rs"
+
+[lints]
+workspace = true

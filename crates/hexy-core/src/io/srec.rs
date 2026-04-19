@@ -39,7 +39,7 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
         if (line[0] != b'S' && line[0] != b's') || line.len() < 2 {
             return Err(ParseError::InvalidRecord {
                 line: line_no,
-                message: "missing S-record prefix".to_string(),
+                message: "missing S-record prefix".to_owned(),
             });
         }
 
@@ -48,7 +48,7 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
         if record_bytes.is_empty() {
             return Err(ParseError::InvalidRecord {
                 line: line_no,
-                message: "missing record length".to_string(),
+                message: "missing record length".to_owned(),
             });
         }
 
@@ -88,7 +88,7 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
                         .checked_sub(addr_len + 1)
                         .ok_or(ParseError::InvalidRecord {
                             line: line_no,
-                            message: "record length too short".to_string(),
+                            message: "record length too short".to_owned(),
                         })?;
                 let addr_end = 1 + addr_len;
                 let data_start = addr_end;
@@ -97,7 +97,7 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
                 if data_end > record_bytes.len().saturating_sub(1) {
                     return Err(ParseError::InvalidRecord {
                         line: line_no,
-                        message: "data length mismatch".to_string(),
+                        message: "data length mismatch".to_owned(),
                     });
                 }
 
@@ -190,7 +190,7 @@ pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Ve
             push_record_line(&mut out, record_digit, &record, checksum);
             addr = addr
                 .checked_add(chunk.len() as u32)
-                .ok_or_else(|| ParseError::AddressOverflow("address overflow".to_string()))?;
+                .ok_or_else(|| ParseError::AddressOverflow("address overflow".to_owned()))?;
         }
     }
 

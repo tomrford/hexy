@@ -207,7 +207,7 @@ fn resolve_key_material(source: SignatureKeySource<'_>) -> Result<Vec<u8>, Signa
             let raw = raw.trim();
             if raw.is_empty() {
                 return Err(SignatureError::InvalidKeyMaterial(
-                    "missing key info".to_string(),
+                    "missing key info".to_owned(),
                 ));
             }
             let path = Path::new(raw);
@@ -231,7 +231,7 @@ fn resolve_signature_bytes(source: SignatureBytesSource<'_>) -> Result<Vec<u8>, 
             let raw = raw.trim();
             if raw.is_empty() {
                 return Err(SignatureError::InvalidSignatureBytes(
-                    "signature info is empty".to_string(),
+                    "signature info is empty".to_owned(),
                 ));
             }
             let path = Path::new(raw);
@@ -254,18 +254,18 @@ fn parse_hex_signature(s: &str) -> Result<Vec<u8>, SignatureError> {
     let cleaned: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if cleaned.is_empty() {
         return Err(SignatureError::InvalidSignatureBytes(
-            "signature is neither an existing file path nor a hex string".to_string(),
+            "signature is neither an existing file path nor a hex string".to_owned(),
         ));
     }
     if !cleaned.len().is_multiple_of(2) {
         return Err(SignatureError::InvalidSignatureBytes(
-            "signature hex string must have even length".to_string(),
+            "signature hex string must have even length".to_owned(),
         ));
     }
     let mut out = Vec::with_capacity(cleaned.len() / 2);
     for i in (0..cleaned.len()).step_by(2) {
         let byte = u8::from_str_radix(&cleaned[i..i + 2], 16).map_err(|_| {
-            SignatureError::InvalidSignatureBytes("invalid signature hex string".to_string())
+            SignatureError::InvalidSignatureBytes("invalid signature hex string".to_owned())
         })?;
         out.push(byte);
     }
@@ -315,7 +315,7 @@ fn verify_payload(
             let key = load_rsa_public_key(key_material)?;
             let signature = RsaPkcs1v15Signature::try_from(signature_bytes).map_err(|_| {
                 SignatureError::InvalidSignatureBytes(
-                    "invalid RSA PKCS1 signature bytes".to_string(),
+                    "invalid RSA PKCS1 signature bytes".to_owned(),
                 )
             })?;
             let verifier = RsaPkcs1v15VerifyingKey::<Sha256>::new(key);
@@ -326,7 +326,7 @@ fn verify_payload(
         SignatureMethod::RsaPssSha256 { .. } => {
             let key = load_rsa_public_key(key_material)?;
             let signature = RsaPssSignature::try_from(signature_bytes).map_err(|_| {
-                SignatureError::InvalidSignatureBytes("invalid RSA PSS signature bytes".to_string())
+                SignatureError::InvalidSignatureBytes("invalid RSA PSS signature bytes".to_owned())
             })?;
             let verifier = RsaPssVerifyingKey::<Sha256>::new(key);
             verifier
@@ -336,7 +336,7 @@ fn verify_payload(
         SignatureMethod::Ed25519Ph { .. } => {
             let key = load_ed25519_public_key(key_material)?;
             let signature = EdSignature::from_slice(signature_bytes).map_err(|_| {
-                SignatureError::InvalidSignatureBytes("invalid ed25519 signature bytes".to_string())
+                SignatureError::InvalidSignatureBytes("invalid ed25519 signature bytes".to_owned())
             })?;
             let prehashed = Sha512::new_with_prefix(payload);
             key.verify_prehashed(prehashed, None, &signature)
@@ -345,7 +345,7 @@ fn verify_payload(
         SignatureMethod::Ed25519Sha512Data { .. } => {
             let key = load_ed25519_public_key(key_material)?;
             let signature = EdSignature::from_slice(signature_bytes).map_err(|_| {
-                SignatureError::InvalidSignatureBytes("invalid ed25519 signature bytes".to_string())
+                SignatureError::InvalidSignatureBytes("invalid ed25519 signature bytes".to_owned())
             })?;
             let digest = Sha512::digest(payload);
             key.verify(&digest, &signature)
@@ -371,7 +371,7 @@ fn load_rsa_private_key(key_material: &[u8]) -> Result<RsaPrivateKey, SignatureE
         return Ok(key);
     }
     Err(SignatureError::InvalidKeyMaterial(
-        "unable to parse RSA private key".to_string(),
+        "unable to parse RSA private key".to_owned(),
     ))
 }
 
@@ -397,7 +397,7 @@ fn load_rsa_public_key(key_material: &[u8]) -> Result<RsaPublicKey, SignatureErr
         return Ok(key);
     }
     Err(SignatureError::InvalidKeyMaterial(
-        "unable to parse RSA public key or certificate".to_string(),
+        "unable to parse RSA public key or certificate".to_owned(),
     ))
 }
 
@@ -412,7 +412,7 @@ fn load_ed25519_private_key(key_material: &[u8]) -> Result<EdSigningKey, Signatu
         return Ok(key);
     }
     Err(SignatureError::InvalidKeyMaterial(
-        "unable to parse ed25519 private key".to_string(),
+        "unable to parse ed25519 private key".to_owned(),
     ))
 }
 
@@ -432,7 +432,7 @@ fn load_ed25519_public_key(key_material: &[u8]) -> Result<EdVerifyingKey, Signat
         return Ok(key);
     }
     Err(SignatureError::InvalidKeyMaterial(
-        "unable to parse ed25519 public key or certificate".to_string(),
+        "unable to parse ed25519 public key or certificate".to_owned(),
     ))
 }
 

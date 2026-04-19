@@ -256,7 +256,7 @@ pub(super) fn write_c_code_output(
     let prefix = ini
         .get("prefix")
         .cloned()
-        .unwrap_or_else(|| "flashDrv".to_string());
+        .unwrap_or_else(|| "flashDrv".to_owned());
     let word_size = ini
         .get("wordsize")
         .map(|v| parse_number(v))
@@ -290,7 +290,7 @@ pub(super) fn write_c_code_output(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(&prefix)
-        .to_string();
+        .to_owned();
 
     let options = crate::CCodeWriteOptions {
         prefix: prefix.clone(),
@@ -466,20 +466,20 @@ fn build_ford_header(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("output.hex")
-            .to_string()
+            .to_owned()
     });
     lines.insert(2, format!("FILE NAME>{file_name}"));
 
     let release_date = ini
         .get("release date")
         .cloned()
-        .unwrap_or_else(|| current_date_mmddyyyy().unwrap_or_else(|| "01/01/1970".to_string()));
+        .unwrap_or_else(|| current_date_mmddyyyy().unwrap_or_else(|| "01/01/1970".to_owned()));
     lines.insert(3, format!("RELEASE DATE>{release_date}"));
 
     let download_format = ini
         .get("download format")
         .cloned()
-        .unwrap_or_else(|| "0x00".to_string());
+        .unwrap_or_else(|| "0x00".to_owned());
     lines.push(format!("DOWNLOAD FORMAT>{download_format}"));
 
     let checksum = compute_ford_checksum(hexfile);
@@ -488,7 +488,7 @@ fn build_ford_header(
     let flash_indicator = ini
         .get("flash indicator")
         .cloned()
-        .unwrap_or_else(|| "0".to_string());
+        .unwrap_or_else(|| "0".to_owned());
     lines.push(format!("FLASH INDICATOR>{flash_indicator}"));
 
     let erase = ini
@@ -497,7 +497,7 @@ fn build_ford_header(
         .unwrap_or_else(|| format_erase_sectors(hexfile, args.align_erase));
     lines.push(format!("FLASH ERASE SECTORS>{erase}"));
 
-    lines.push("$".to_string());
+    lines.push("$".to_owned());
     Ok(lines.join("\n") + "\n")
 }
 
@@ -557,7 +557,7 @@ fn current_date_mmddyyyy() -> Option<String> {
         .arg("+%m/%d/%Y")
         .output()
         .ok()?;
-    let date = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let date = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if date.is_empty() { None } else { Some(date) }
 }
 

@@ -133,7 +133,7 @@ fn push_hex_token(digits: &[u8], out: &mut Vec<u8>, line: usize) -> Result<(), P
     if !digits.len().is_multiple_of(2) {
         return Err(ParseError::InvalidRecord {
             line,
-            message: "odd number of hex digits".to_string(),
+            message: "odd number of hex digits".to_owned(),
         });
     }
 
@@ -165,7 +165,7 @@ mod tests {
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE])]);
         let options = HexAsciiWriteOptions {
             line_length: 2,
-            separator: Some(", ".to_string()),
+            separator: Some(", ".to_owned()),
         };
         let out = write_hex_ascii(&hexfile, &options);
         let parsed = parse_hex_ascii(&out, 0x1000).unwrap();

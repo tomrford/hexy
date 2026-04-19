@@ -68,7 +68,7 @@ pub fn parse_log_commands(content: &str) -> Result<Vec<LogCommand>, LogError> {
             "FILENEW" => LogCommandKind::FileNew,
             _ => {
                 return Err(LogError::UnsupportedCommand {
-                    command: cmd.to_string(),
+                    command: cmd.to_owned(),
                     line: line_no,
                 });
             }

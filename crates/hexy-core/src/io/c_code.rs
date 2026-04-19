@@ -45,7 +45,7 @@ pub fn write_c_code(
     let prefix = options.prefix.trim();
     if prefix.is_empty() {
         return Err(ParseError::InvalidOutput(
-            "Prefix must not be empty".to_string(),
+            "Prefix must not be empty".to_owned(),
         ));
     }
 
@@ -64,7 +64,7 @@ pub fn write_c_code(
     let header_name = options.header_name.trim();
     if header_name.is_empty() {
         return Err(ParseError::InvalidOutput(
-            "Header name must not be empty".to_string(),
+            "Header name must not be empty".to_owned(),
         ));
     }
     source.extend_from_slice(format!("#include \"{}.h\"\n\n", header_name).as_bytes());
@@ -133,7 +133,7 @@ fn segment_to_values(
             }
             _ => {
                 return Err(ParseError::InvalidOutput(
-                    "unsupported word size".to_string(),
+                    "unsupported word size".to_owned(),
                 ));
             }
         };
@@ -192,8 +192,8 @@ mod tests {
     fn test_write_c_code_basic() {
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02, 0x03])]);
         let options = CCodeWriteOptions {
-            prefix: "flashDrv".to_string(),
-            header_name: "flashDrv".to_string(),
+            prefix: "flashDrv".to_owned(),
+            header_name: "flashDrv".to_owned(),
             word_size: 0,
             word_type: CCodeWordType::Intel,
             decrypt: false,

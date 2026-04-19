@@ -125,6 +125,6 @@ fn map_checksum_target(target: &ChecksumTarget) -> Result<SignaturePlacement, St
         ChecksumTarget::Begin => Ok(SignaturePlacement::Begin),
         ChecksumTarget::Prepend => Ok(SignaturePlacement::Prepend),
         ChecksumTarget::OverwriteEnd => Ok(SignaturePlacement::OverwriteEnd),
-        ChecksumTarget::File(_) => Err("file target is not valid for /DP placement".to_string()),
+        ChecksumTarget::File(_) => Err("file target is not valid for /DP placement".to_owned()),
     }
 }

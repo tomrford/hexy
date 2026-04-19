@@ -1,3 +1,17 @@
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::print_stderr,
+        clippy::print_stdout,
+        clippy::str_to_string,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::unwrap_used
+    )
+)]
+
 pub mod hexfile;
 pub mod io;
 pub mod ops;

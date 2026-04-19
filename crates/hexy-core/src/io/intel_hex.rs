@@ -54,14 +54,14 @@ fn parse_intel_hex_with_address_scale(
         if eof_seen {
             return Err(ParseError::InvalidRecord {
                 line: line_num,
-                message: "data after EOF record".to_string(),
+                message: "data after EOF record".to_owned(),
             });
         }
 
         if !line.starts_with(':') {
             return Err(ParseError::InvalidRecord {
                 line: line_num,
-                message: "line does not start with ':'".to_string(),
+                message: "line does not start with ':'".to_owned(),
             });
         }
 
@@ -69,7 +69,7 @@ fn parse_intel_hex_with_address_scale(
         if hex_str.len() < 10 {
             return Err(ParseError::InvalidRecord {
                 line: line_num,
-                message: "record too short".to_string(),
+                message: "record too short".to_owned(),
             });
         }
 
@@ -140,7 +140,7 @@ fn parse_intel_hex_with_address_scale(
                 if byte_count != 2 {
                     return Err(ParseError::InvalidRecord {
                         line: line_num,
-                        message: "extended segment address must have 2 data bytes".to_string(),
+                        message: "extended segment address must have 2 data bytes".to_owned(),
                     });
                 }
                 if let Some(seg) = current_segment.take() {
@@ -153,7 +153,7 @@ fn parse_intel_hex_with_address_scale(
                 if byte_count != 2 {
                     return Err(ParseError::InvalidRecord {
                         line: line_num,
-                        message: "extended linear address must have 2 data bytes".to_string(),
+                        message: "extended linear address must have 2 data bytes".to_owned(),
                     });
                 }
                 if let Some(seg) = current_segment.take() {
@@ -328,11 +328,13 @@ fn write_record(output: &mut Vec<u8>, record_type: u8, address: u16, data: &[u8]
 fn validate_checksum(bytes: &[u8], line_num: usize) -> Result<(), ParseError> {
     let sum: u8 = bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
     if sum != 0 {
-        let actual = *bytes.last().unwrap();
-        let expected = (!bytes[..bytes.len() - 1]
-            .iter()
-            .fold(0u8, |acc, &b| acc.wrapping_add(b)))
-        .wrapping_add(1);
+        let Some((&actual, payload)) = bytes.split_last() else {
+            return Err(ParseError::InvalidRecord {
+                line: line_num,
+                message: "record too short".to_owned(),
+            });
+        };
+        let expected = (!payload.iter().fold(0u8, |acc, &b| acc.wrapping_add(b))).wrapping_add(1);
         return Err(ParseError::ChecksumMismatch {
             line: line_num,
             expected,
