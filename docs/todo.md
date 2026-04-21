@@ -38,18 +38,6 @@ Need:
 
 These are real issues, but the right fix is less mechanical.
 
-### Ambiguous key / signature source parsing
-
-[`crates/hexy-core/src/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-core/src/signature.rs)
-
-`SignatureKeySource::Auto` and `SignatureBytesSource::Auto` still use `path.exists()` to choose between filesystem input and inline material.
-
-Problem:
-- cwd files can shadow intended inline input
-- missing file-looking strings can be accepted as inline bytes or literal key material
-
-Needs a decision on explicit source syntax or stricter rejection rules.
-
 ### `/DP` placement plus `/SV` hashes different images
 
 [`crates/hexy-compat/src/args/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-compat/src/args/signature.rs)
@@ -119,7 +107,7 @@ Needs a more careful checksum-collection refactor.
 [`crates/hexy-core/src/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-core/src/signature.rs)
 [`crates/hexy-compat/src/args/signature.rs`](/Users/tomford/code/projects/hexy/crates/hexy-compat/src/args/signature.rs)
 
-Signing, verification, placement, and source resolution now live in the library. The compat CLI should stay as a thin HexView-argument adapter.
+Signing and verification live in the library. The compat CLI should stay as a thin HexView-argument adapter, including source classification for HexView-style key and signature parameters.
 
 Follow-ups worth considering:
 - decide whether the library should grow a higher-level typed request layer for the HexView signature modes

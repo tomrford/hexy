@@ -169,3 +169,47 @@ fn test_cli_dp_placement_upfront_on_empty_input_is_noop() {
 fn test_cli_dp_placement_end_on_empty_input_is_noop() {
     assert_dp_placement_empty_input_noop("@end");
 }
+
+#[test]
+fn test_cli_dp_missing_windows_style_key_path_is_file_error() {
+    let dir = temp_dir("cli_sig_missing_key");
+    let input_path = dir.join("input.bin");
+    write_file(&input_path, b"hello-signature");
+
+    let args = vec![
+        format!("/IN:{};0x1000", input_path.display()),
+        "/DP32:C:\\temp\\missing-private-key.pem".to_string(),
+    ];
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("No such file or directory") || stderr.contains("os error 2"));
+}
+
+#[test]
+fn test_cli_sv_missing_windows_style_signature_path_is_file_error() {
+    let dir = temp_dir("cli_sig_missing_sig");
+    let input_path = dir.join("input.bin");
+    write_file(&input_path, b"hello-signature");
+    let (private_path, public_path) = write_rsa_keys(&dir, "rsa_missing_sig");
+    let sig_path = dir.join("sig.bin");
+
+    let sign_args = vec![
+        format!("/IN:{};0x1000", input_path.display()),
+        format!("/DP32:{};{}", private_path.display(), sig_path.display()),
+    ];
+    let sign_output = run_hexy(&sign_args);
+    assert_success(&sign_output);
+
+    let verify_args = vec![
+        format!("/IN:{};0x1000", input_path.display()),
+        format!(
+            "/SV4:{}!C:\\temp\\missing-signature.bin",
+            public_path.display()
+        ),
+    ];
+    let verify_output = run_hexy(&verify_args);
+    assert!(!verify_output.status.success());
+    let stderr = String::from_utf8_lossy(&verify_output.stderr);
+    assert!(stderr.contains("No such file or directory") || stderr.contains("os error 2"));
+}

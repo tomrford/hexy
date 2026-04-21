@@ -305,4 +305,23 @@ mod tests {
         assert_eq!(parsed.input_file, Some(path.clone()));
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn test_parse_positional_windows_path() {
+        let args = vec![r"C:\temp\input.hex".to_owned()];
+        let parsed = Args::parse_from_with(args, |_| false).unwrap();
+        assert_eq!(parsed.input_file, Some(PathBuf::from(r"C:\temp\input.hex")));
+    }
+
+    #[test]
+    fn test_parse_dash_o_with_windows_path() {
+        let args = vec![
+            "-o".to_owned(),
+            r"C:\temp\out.hex".to_owned(),
+            "input.hex".to_owned(),
+        ];
+        let parsed = Args::parse_from_with(args, |_| false).unwrap();
+        assert_eq!(parsed.output_file, Some(PathBuf::from(r"C:\temp\out.hex")));
+        assert_eq!(parsed.input_file, Some(PathBuf::from("input.hex")));
+    }
 }

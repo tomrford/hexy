@@ -152,21 +152,29 @@ pub(super) fn parse_merge_params(value: &str) -> Result<Vec<MergeParam>, ParseAr
 }
 
 fn split_merge_range(s: &str) -> Result<(&str, Option<AddressRange>), ParseArgError> {
-    let Some((left, right)) = s.rsplit_once(':') else {
+    let Some(colon_pos) = s.rfind(':') else {
         return Ok((s, None));
     };
+    let left = &s[..colon_pos];
+    let right = &s[colon_pos + 1..];
 
     match parse_single_hexview_range(right, "merge range") {
         Ok(range) => Ok((left, Some(range))),
-        Err(err) if looks_like_merge_range_suffix(right) || left.contains(';') => Err(err),
+        Err(err) if merge_range_delimiter_is_unambiguous(s, colon_pos) => Err(err),
         Err(_) => Ok((s, None)),
     }
 }
 
-fn looks_like_merge_range_suffix(s: &str) -> bool {
-    let s = s.trim();
-    !s.is_empty()
-        && (parse_number(s).is_ok() || s.contains('-') || s.contains(',') || s.contains(':'))
+fn merge_range_delimiter_is_unambiguous(s: &str, colon_pos: usize) -> bool {
+    if let Some(semicolon_pos) = s.rfind(';') {
+        return colon_pos > semicolon_pos;
+    }
+
+    !looks_like_windows_drive_colon(s, colon_pos)
+}
+
+fn looks_like_windows_drive_colon(s: &str, colon_pos: usize) -> bool {
+    colon_pos == 1 && s.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
 }
 
 pub(super) fn parse_import_param(value: &str) -> Result<ImportParam, ParseArgError> {
@@ -513,6 +521,24 @@ mod tests {
             params[0].range,
             Some(AddressRange::from_start_length(0x0, 0x4).unwrap())
         );
+    }
+
+    #[test]
+    fn test_parse_merge_params_windows_path_with_dash_and_offset() {
+        let params = parse_merge_params(r"C:\temp\foo-bar.hex;0x0").unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].file, PathBuf::from(r"C:\temp\foo-bar.hex"));
+        assert_eq!(params[0].offset, Some(0));
+        assert_eq!(params[0].range, None);
+    }
+
+    #[test]
+    fn test_parse_merge_params_windows_forward_slash_path_with_dash_and_offset() {
+        let params = parse_merge_params("C:/temp/foo-bar.hex;0x0").unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].file, PathBuf::from("C:/temp/foo-bar.hex"));
+        assert_eq!(params[0].offset, Some(0));
+        assert_eq!(params[0].range, None);
     }
 
     #[test]

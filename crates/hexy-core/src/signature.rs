@@ -64,7 +64,6 @@ pub struct SignatureVerifyOptions<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum SignatureKeySource<'a> {
-    Auto(&'a str),
     Bytes(&'a [u8]),
     File(&'a Path),
     Text(&'a str),
@@ -72,10 +71,8 @@ pub enum SignatureKeySource<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum SignatureBytesSource<'a> {
-    Auto(&'a str),
     Bytes(&'a [u8]),
     File(&'a Path),
-    Hex(&'a str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,20 +200,6 @@ fn signature_payload(hexfile: &HexFile, with_metadata: bool) -> Result<Vec<u8>, 
 
 fn resolve_key_material(source: SignatureKeySource<'_>) -> Result<Vec<u8>, SignatureError> {
     match source {
-        SignatureKeySource::Auto(raw) => {
-            let raw = raw.trim();
-            if raw.is_empty() {
-                return Err(SignatureError::InvalidKeyMaterial(
-                    "missing key info".to_owned(),
-                ));
-            }
-            let path = Path::new(raw);
-            if path.exists() {
-                std::fs::read(path).map_err(|e| SignatureError::InvalidKeyMaterial(e.to_string()))
-            } else {
-                Ok(raw.as_bytes().to_vec())
-            }
-        }
         SignatureKeySource::Bytes(bytes) => Ok(bytes.to_vec()),
         SignatureKeySource::File(path) => {
             std::fs::read(path).map_err(|e| SignatureError::InvalidKeyMaterial(e.to_string()))
@@ -227,49 +210,11 @@ fn resolve_key_material(source: SignatureKeySource<'_>) -> Result<Vec<u8>, Signa
 
 fn resolve_signature_bytes(source: SignatureBytesSource<'_>) -> Result<Vec<u8>, SignatureError> {
     match source {
-        SignatureBytesSource::Auto(raw) => {
-            let raw = raw.trim();
-            if raw.is_empty() {
-                return Err(SignatureError::InvalidSignatureBytes(
-                    "signature info is empty".to_owned(),
-                ));
-            }
-            let path = Path::new(raw);
-            if path.exists() {
-                std::fs::read(path)
-                    .map_err(|e| SignatureError::InvalidSignatureBytes(e.to_string()))
-            } else {
-                parse_hex_signature(raw)
-            }
-        }
         SignatureBytesSource::Bytes(bytes) => Ok(bytes.to_vec()),
         SignatureBytesSource::File(path) => {
             std::fs::read(path).map_err(|e| SignatureError::InvalidSignatureBytes(e.to_string()))
         }
-        SignatureBytesSource::Hex(hex) => parse_hex_signature(hex),
     }
-}
-
-fn parse_hex_signature(s: &str) -> Result<Vec<u8>, SignatureError> {
-    let cleaned: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if cleaned.is_empty() {
-        return Err(SignatureError::InvalidSignatureBytes(
-            "signature is neither an existing file path nor a hex string".to_owned(),
-        ));
-    }
-    if !cleaned.len().is_multiple_of(2) {
-        return Err(SignatureError::InvalidSignatureBytes(
-            "signature hex string must have even length".to_owned(),
-        ));
-    }
-    let mut out = Vec::with_capacity(cleaned.len() / 2);
-    for i in (0..cleaned.len()).step_by(2) {
-        let byte = u8::from_str_radix(&cleaned[i..i + 2], 16).map_err(|_| {
-            SignatureError::InvalidSignatureBytes("invalid signature hex string".to_owned())
-        })?;
-        out.push(byte);
-    }
-    Ok(out)
 }
 
 fn sign_payload(

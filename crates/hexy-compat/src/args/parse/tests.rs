@@ -59,6 +59,100 @@ fn test_parse_i16_option_with_windows_absolute_path() {
 }
 
 #[test]
+fn test_parse_in_option_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"IN:C:\temp\input.bin;0x1000").unwrap();
+    let import = args.import_binary.expect("binary import parsed");
+    assert_eq!(import.file, PathBuf::from(r"C:\temp\input.bin"));
+    assert_eq!(import.offset, 0x1000);
+}
+
+#[test]
+fn test_parse_ia_option_with_windows_drive_and_forward_slashes() {
+    let mut args = Args::default();
+    parse_option(&mut args, "IA:C:/temp/input.txt;0x1000").unwrap();
+    let import = args.import_hex_ascii.expect("hex ascii import parsed");
+    assert_eq!(import.file, PathBuf::from("C:/temp/input.txt"));
+    assert_eq!(import.offset, 0x1000);
+}
+
+#[test]
+fn test_parse_mt_option_with_windows_absolute_path_and_range() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"MT:C:\temp\merge.hex;0x1000:0x0,0x4").unwrap();
+    assert_eq!(args.merge_transparent.len(), 1);
+    let merge = &args.merge_transparent[0];
+    assert_eq!(merge.file, PathBuf::from(r"C:\temp\merge.hex"));
+    assert_eq!(merge.offset, Some(0x1000));
+    assert_eq!(
+        merge.range,
+        Some(AddressRange::from_start_length(0x0, 0x4).unwrap())
+    );
+}
+
+#[test]
+fn test_parse_error_log_option_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"E=C:\temp\error.log").unwrap();
+    assert_eq!(args.error_log, Some(PathBuf::from(r"C:\temp\error.log")));
+}
+
+#[test]
+fn test_parse_log_file_option_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"L:C:\temp\commands.log").unwrap();
+    assert_eq!(args.log_file, Some(PathBuf::from(r"C:\temp\commands.log")));
+}
+
+#[test]
+fn test_parse_ini_file_option_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"P:C:\temp\hexy.ini").unwrap();
+    assert_eq!(args.ini_file, Some(PathBuf::from(r"C:\temp\hexy.ini")));
+}
+
+#[test]
+fn test_parse_postbuild_option_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"PB:C:\temp\postbuild.bat").unwrap();
+    assert_eq!(
+        args.postbuild,
+        Some(PathBuf::from(r"C:\temp\postbuild.bat"))
+    );
+}
+
+#[test]
+fn test_parse_checksum_file_target_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"CS0:C:\temp\checksum.bin").unwrap();
+    let checksum = args.checksum.expect("checksum parsed");
+    assert!(matches!(
+        checksum.target,
+        ChecksumTarget::File(ref path) if path == &PathBuf::from(r"C:\temp\checksum.bin")
+    ));
+}
+
+#[test]
+fn test_parse_data_processing_paths_with_windows_absolute_paths() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"DP32:C:\temp\key.pem;D:\temp\sig.bin").unwrap();
+    let dp = args.data_processing.expect("data processing parsed");
+    assert_eq!(dp.key_info, r"C:\temp\key.pem");
+    assert_eq!(dp.output_file, Some(PathBuf::from(r"D:\temp\sig.bin")));
+}
+
+#[test]
+fn test_parse_signature_verify_paths_with_windows_absolute_paths() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"SV4:C:\temp\pub.pem!D:\temp\sig.bin").unwrap();
+    let sv = args
+        .signature_verify
+        .expect("signature verification parsed");
+    assert_eq!(sv.key_info, r"C:\temp\pub.pem");
+    assert_eq!(sv.signature_info, r"D:\temp\sig.bin");
+}
+
+#[test]
 fn test_parse_sv_option() {
     let mut args = Args::default();
     parse_option(&mut args, "SV4:pub.pem!sig.bin").unwrap();

@@ -48,10 +48,6 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02X}")).collect()
-}
-
 #[test]
 fn test_sign_and_verify_rsa_pkcs1() {
     let (private_key, public_key) = rsa_keypair();
@@ -140,33 +136,30 @@ fn test_sign_append_on_empty_input_is_noop() {
 }
 
 #[test]
-fn test_sign_and_verify_with_auto_file_and_hex_sources() {
-    let dir = temp_dir("auto");
+fn test_sign_and_verify_with_explicit_file_sources() {
+    let dir = temp_dir("explicit");
     let (private_key, public_key) = rsa_keypair();
     let private_path = dir.join("rsa_private.der");
     let public_path = dir.join("rsa_public.der");
     std::fs::write(&private_path, &private_key).unwrap();
     std::fs::write(&public_path, &public_key).unwrap();
-    let private_source = private_path.display().to_string();
-    let public_source = public_path.display().to_string();
 
-    let mut hexfile = HexFile::with_segments(vec![Segment::new(0x1000, b"auto-sources".into())]);
+    let mut hexfile =
+        HexFile::with_segments(vec![Segment::new(0x1000, b"explicit-sources".into())]);
     let sign = SignatureSignOptions {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Auto(&private_source),
+        key_source: SignatureKeySource::File(&private_path),
         placement: None,
     };
     let signature = hexfile.sign(&sign).unwrap();
-    let signature_hex = hex_encode(&signature);
-
     let verify = SignatureVerifyOptions {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Auto(&public_source),
-        signature_source: SignatureBytesSource::Auto(&signature_hex),
+        key_source: SignatureKeySource::File(&public_path),
+        signature_source: SignatureBytesSource::Bytes(&signature),
     };
     hexfile.verify_signature(&verify).unwrap();
 }
