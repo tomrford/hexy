@@ -8,7 +8,7 @@ description = "HexView-compatible slash-flag CLI built on hexy-core."
 keywords = ["hex", "hexview", "intel-hex", "firmware"]
 
 [dependencies]
-hexy-core = { path = "../hexy-core", version = "0.1.1" }
+hexy-core = { path = "../hexy-core", version = "0.1.2" }
 thiserror.workspace = true
 
 [dev-dependencies]
