@@ -8,12 +8,12 @@ use super::types::{
 };
 
 pub(super) fn split_option(opt: &str) -> Option<(&str, &str)> {
-    if let Some(pos) = opt.find(':') {
-        Some((&opt[..pos], &opt[pos + 1..]))
-    } else if let Some(pos) = opt.find('=') {
-        Some((&opt[..pos], &opt[pos + 1..]))
-    } else {
-        None
+    match (opt.find(':'), opt.find('=')) {
+        (Some(colon), Some(equal)) if colon < equal => Some((&opt[..colon], &opt[colon + 1..])),
+        (Some(_), Some(equal)) => Some((&opt[..equal], &opt[equal + 1..])),
+        (Some(colon), None) => Some((&opt[..colon], &opt[colon + 1..])),
+        (None, Some(equal)) => Some((&opt[..equal], &opt[equal + 1..])),
+        (None, None) => None,
     }
 }
 
@@ -102,24 +102,13 @@ pub(super) fn parse_signed_number(s: &str) -> Result<i64, ParseArgError> {
 
 pub(super) fn parse_merge_param(s: &str) -> Result<MergeParam, ParseArgError> {
     let s = strip_quotes(s);
-    let (file_and_offset, range_str) = if let Some((left, right)) = s.split_once(':') {
-        (left, Some(right))
-    } else {
-        (s, None)
-    };
+    let (file_and_offset, range) = split_merge_range(s)?;
 
     let (file, offset) = if let Some((file, offset_str)) = file_and_offset.split_once(';') {
         let offset = parse_signed_number(offset_str)?;
         (file, Some(offset))
     } else {
         (file_and_offset, None)
-    };
-
-    let range = if let Some(range_str) = range_str {
-        let ranges = parse_hexview_ranges(range_str)?;
-        ranges.into_iter().next()
-    } else {
-        None
     };
 
     Ok(MergeParam {
@@ -160,6 +149,24 @@ pub(super) fn parse_merge_params(value: &str) -> Result<Vec<MergeParam>, ParseAr
     }
 
     Ok(params)
+}
+
+fn split_merge_range(s: &str) -> Result<(&str, Option<AddressRange>), ParseArgError> {
+    let Some((left, right)) = s.rsplit_once(':') else {
+        return Ok((s, None));
+    };
+
+    match parse_single_hexview_range(right, "merge range") {
+        Ok(range) => Ok((left, Some(range))),
+        Err(err) if looks_like_merge_range_suffix(right) || left.contains(';') => Err(err),
+        Err(_) => Ok((s, None)),
+    }
+}
+
+fn looks_like_merge_range_suffix(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty()
+        && (parse_number(s).is_ok() || s.contains('-') || s.contains(',') || s.contains(':'))
 }
 
 pub(super) fn parse_import_param(value: &str) -> Result<ImportParam, ParseArgError> {
@@ -476,6 +483,36 @@ mod tests {
         assert_eq!(params[0].offset, Some(-0x10));
         assert!(params[0].range.is_some());
         assert_eq!(params[1].offset, Some(128));
+    }
+
+    #[test]
+    fn test_split_option_prefers_earliest_separator() {
+        let (key, value) = split_option(r"II2=C:\temp\input.hex").unwrap();
+        assert_eq!(key, "II2");
+        assert_eq!(value, r"C:\temp\input.hex");
+    }
+
+    #[test]
+    fn test_parse_merge_params_windows_path_with_range() {
+        let params = parse_merge_params(r"C:\temp\merge.hex:0x1000-0x10FF").unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].file, PathBuf::from(r"C:\temp\merge.hex"));
+        assert_eq!(
+            params[0].range,
+            Some(AddressRange::from_start_end(0x1000, 0x10FF).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_merge_params_windows_path_with_offset_and_range() {
+        let params = parse_merge_params(r"C:\temp\merge.hex;0x1000:0x0,0x4").unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].file, PathBuf::from(r"C:\temp\merge.hex"));
+        assert_eq!(params[0].offset, Some(0x1000));
+        assert_eq!(
+            params[0].range,
+            Some(AddressRange::from_start_length(0x0, 0x4).unwrap())
+        );
     }
 
     #[test]

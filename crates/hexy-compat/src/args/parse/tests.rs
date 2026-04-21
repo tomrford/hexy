@@ -52,6 +52,13 @@ fn test_parse_dp_signature_subset_option() {
 }
 
 #[test]
+fn test_parse_i16_option_with_windows_absolute_path() {
+    let mut args = Args::default();
+    parse_option(&mut args, r"II2=C:\temp\input.hex").unwrap();
+    assert_eq!(args.import_i16, Some(PathBuf::from(r"C:\temp\input.hex")));
+}
+
+#[test]
 fn test_parse_sv_option() {
     let mut args = Args::default();
     parse_option(&mut args, "SV4:pub.pem!sig.bin").unwrap();
