@@ -19,11 +19,8 @@ nix develop -c cargo run -p hexy-compat -- [args]     # Run compat CLI
 - `crates/hexy-core/src/` - Core library modules
 - `crates/hexy-compat/src/args/` - Compat CLI parser/executor modules
 
-### TODOs (current)
-- Review segment overflow policy (saturating `end_address` vs strict error) once validation suite runs.
-- Finish CLI parsing cleanup (table-driven for remaining non-output options).
-- Consider deeper ops error context inside core ops and CLI option wrappers.
-- Crate reuse decision: keep hand-rolled Intel-HEX/S-Record/HEX-ASCII writers/parsers for parity; `bin_file` (used in mint) remains a candidate once validation suite proves equivalence.
+### Backlog
+Backlog lives in the Linear `hexy` project.
 
 ### Project philosophy
 - CLI must be a drop-in HexView replacement for non-proprietary formats: binary-equivalent outputs for Intel HEX, S-Record, HEX ASCII, and raw binary.
