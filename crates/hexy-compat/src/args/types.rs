@@ -135,6 +135,7 @@ pub struct ForcedRange {
 
 #[derive(Debug, Clone)]
 pub enum ChecksumTarget {
+    None,
     Address(u32),
     Append,
     Begin,

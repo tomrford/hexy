@@ -23,22 +23,22 @@ fn test_parse_af_no_separator_hex() {
 }
 
 #[test]
-fn test_parse_checksum_without_target_defaults_append() {
+fn test_parse_checksum_without_target_defaults_none() {
     let mut args = Args::default();
     parse_option(&mut args, "CS0").unwrap();
     let checksum = args.checksum.expect("checksum parsed");
     assert_eq!(checksum.algorithm, 0);
-    assert!(matches!(checksum.target, ChecksumTarget::Append));
+    assert!(matches!(checksum.target, ChecksumTarget::None));
 }
 
 #[test]
-fn test_parse_checksum_reverse_without_target_defaults_append() {
+fn test_parse_checksum_reverse_without_target_defaults_none() {
     let mut args = Args::default();
     parse_option(&mut args, "CSR9").unwrap();
     let checksum = args.checksum.expect("checksum parsed");
     assert_eq!(checksum.algorithm, 9);
     assert!(checksum.little_endian);
-    assert!(matches!(checksum.target, ChecksumTarget::Append));
+    assert!(matches!(checksum.target, ChecksumTarget::None));
 }
 
 #[test]
@@ -189,14 +189,14 @@ fn test_parse_checksum_multi_repeated() {
 }
 
 #[test]
-fn test_parse_checksum_multi_without_target_defaults_append() {
+fn test_parse_checksum_multi_without_target_defaults_none() {
     let mut args = Args::default();
     parse_option(&mut args, "CSM9").unwrap();
     assert_eq!(args.checksum_multi.len(), 1);
     assert_eq!(args.checksum_multi[0].algorithm, 9);
     assert!(matches!(
         args.checksum_multi[0].target,
-        ChecksumTarget::Append
+        ChecksumTarget::None
     ));
 }
 

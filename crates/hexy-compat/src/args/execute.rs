@@ -328,6 +328,7 @@ impl Args {
         target: &ChecksumTarget,
     ) -> crate::ChecksumTarget {
         match target {
+            ChecksumTarget::None => crate::ChecksumTarget::None,
             ChecksumTarget::Address(addr) => crate::ChecksumTarget::Address(*addr),
             ChecksumTarget::Append => crate::ChecksumTarget::Append,
             ChecksumTarget::Begin => {

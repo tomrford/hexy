@@ -34,6 +34,8 @@ use crate::{AddressRange, HexFile, OpsError, Segment, merge_ranges};
 /// Target for checksum output.
 #[derive(Debug, Clone)]
 pub enum ChecksumTarget {
+    /// Calculate without writing checksum bytes.
+    None,
     /// Write to address in hex file
     Address(u32),
     /// Append after last data
@@ -360,8 +362,8 @@ impl HexFile {
                     self.write_bytes(write_addr, &result);
                 }
             }
-            ChecksumTarget::File(_) => {
-                // File output is handled by caller
+            ChecksumTarget::None | ChecksumTarget::File(_) => {
+                // File output is handled by caller; None is calculation only.
             }
         }
 

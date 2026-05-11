@@ -229,6 +229,7 @@ pub(super) fn apply_signature_verification(
 
 fn map_checksum_target(target: &ChecksumTarget) -> Result<SignaturePlacement, String> {
     match target {
+        ChecksumTarget::None => Err("missing /DP placement target".to_owned()),
         ChecksumTarget::Address(addr) => Ok(SignaturePlacement::Address(*addr)),
         ChecksumTarget::Append => Ok(SignaturePlacement::Append),
         ChecksumTarget::Begin => Ok(SignaturePlacement::Begin),

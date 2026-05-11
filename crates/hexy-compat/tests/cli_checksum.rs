@@ -35,13 +35,14 @@ fn test_cli_checksum_append() {
 }
 
 #[test]
-fn test_cli_checksum_default_append_without_target() {
+fn test_cli_checksum_without_target_leaves_data_unchanged() {
     let hexfile = run_checksum_hex(&[0x01, 0x02, 0x03, 0x04], "/CS0");
     let norm = hexfile.normalized();
     assert_eq!(
-        norm.read_bytes_contiguous(0x1000, 6).unwrap(),
-        vec![0x01, 0x02, 0x03, 0x04, 0x00, 0x0A]
+        norm.read_bytes_contiguous(0x1000, 4).unwrap(),
+        vec![0x01, 0x02, 0x03, 0x04]
     );
+    assert!(norm.read_bytes_contiguous(0x1004, 1).is_none());
 }
 
 #[test]

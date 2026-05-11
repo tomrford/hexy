@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "hexy-compat"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ed25519-dalek",
  "hexy-core",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "hexy-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "crc",
  "ed25519-dalek",

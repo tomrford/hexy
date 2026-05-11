@@ -259,8 +259,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
                 "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
-        args.checksum_multi
-            .push(parse_checksum(algo, "@append", true)?);
+        args.checksum_multi.push(parse_checksum(algo, "", true)?);
         return Ok(true);
     }
     if let Some(algo) = opt_upper.strip_prefix("CSM")
@@ -271,8 +270,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
                 "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
-        args.checksum_multi
-            .push(parse_checksum(algo, "@append", false)?);
+        args.checksum_multi.push(parse_checksum(algo, "", false)?);
         return Ok(true);
     }
     if let Some(algo) = opt_upper.strip_prefix("CSR")
@@ -283,7 +281,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
                 "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
-        args.checksum = Some(parse_checksum(algo, "@append", true)?);
+        args.checksum = Some(parse_checksum(algo, "", true)?);
         return Ok(true);
     }
     if let Some(algo) = opt_upper.strip_prefix("CS")
@@ -294,7 +292,7 @@ fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, 
                 "cannot combine /CS* with /CSM*".to_owned(),
             ));
         }
-        args.checksum = Some(parse_checksum(algo, "@append", false)?);
+        args.checksum = Some(parse_checksum(algo, "", false)?);
         return Ok(true);
     }
     Ok(false)
