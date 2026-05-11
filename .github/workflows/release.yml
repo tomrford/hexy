@@ -181,7 +181,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.metadata.outputs.version }}"
-          if curl -fsSL "https://crates.io/api/v1/crates/hexy-core/${VERSION}" >/dev/null; then
+          if curl -fsSL -H "User-Agent: hexy-release-workflow" "https://crates.io/api/v1/crates/hexy-core/${VERSION}" >/dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "hexy-core ${VERSION} is already published."
           else
@@ -193,7 +193,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.metadata.outputs.version }}"
-          if curl -fsSL "https://crates.io/api/v1/crates/hexy-compat/${VERSION}" >/dev/null; then
+          if curl -fsSL -H "User-Agent: hexy-release-workflow" "https://crates.io/api/v1/crates/hexy-compat/${VERSION}" >/dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
             echo "hexy-compat ${VERSION} is already published."
           else
@@ -221,7 +221,7 @@ jobs:
         run: |
           VERSION="${{ steps.metadata.outputs.version }}"
           for attempt in {1..30}; do
-            if curl -fsSL "https://crates.io/api/v1/crates/hexy-core/${VERSION}" >/dev/null; then
+            if curl -fsSL -H "User-Agent: hexy-release-workflow" "https://crates.io/api/v1/crates/hexy-core/${VERSION}" >/dev/null; then
               exit 0
             fi
             echo "Waiting for hexy-core ${VERSION} to appear on crates.io (${attempt}/30)."
