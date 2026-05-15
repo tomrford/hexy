@@ -21,12 +21,12 @@ pub(super) fn strip_quotes(s: &str) -> &str {
     s.trim_matches(|c| c == '"' || c == '\'')
 }
 
-pub(super) fn parse_hexview_ranges(s: &str) -> Result<Vec<AddressRange>, ParseArgError> {
-    crate::parse_hexview_ranges(s).map_err(|e| ParseArgError::InvalidRange(e.to_string()))
+pub(super) fn parse_compat_ranges(s: &str) -> Result<Vec<AddressRange>, ParseArgError> {
+    crate::parse_compat_ranges(s).map_err(|e| ParseArgError::InvalidRange(e.to_string()))
 }
 
-fn parse_single_hexview_range(s: &str, context: &str) -> Result<AddressRange, ParseArgError> {
-    let ranges = parse_hexview_ranges(s)?;
+fn parse_single_compat_range(s: &str, context: &str) -> Result<AddressRange, ParseArgError> {
+    let ranges = parse_compat_ranges(s)?;
     match ranges.as_slice() {
         [range] => Ok(*range),
         [] => Err(ParseArgError::InvalidRange(s.to_owned())),
@@ -158,7 +158,7 @@ fn split_merge_range(s: &str) -> Result<(&str, Option<AddressRange>), ParseArgEr
     let left = &s[..colon_pos];
     let right = &s[colon_pos + 1..];
 
-    match parse_single_hexview_range(right, "merge range") {
+    match parse_single_compat_range(right, "merge range") {
         Ok(range) => Ok((left, Some(range))),
         Err(err) if merge_range_delimiter_is_unambiguous(s, colon_pos) => Err(err),
         Err(_) => Ok((s, None)),
@@ -245,7 +245,7 @@ pub(super) fn parse_checksum(
             } else {
                 (forced, None)
             };
-            let range = parse_single_hexview_range(range_str, "forced checksum range")?;
+            let range = parse_single_compat_range(range_str, "forced checksum range")?;
             let pattern = if let Some(pattern_str) = pattern_str {
                 let pattern_str = pattern_str.trim();
                 let pattern_str = pattern_str
@@ -273,13 +273,13 @@ pub(super) fn parse_checksum(
         let mut pieces = part.split('/');
         let range_part = pieces.next().unwrap_or_default();
         if !range_part.is_empty() {
-            range = Some(parse_single_hexview_range(range_part, "checksum range")?);
+            range = Some(parse_single_compat_range(range_part, "checksum range")?);
         }
         for exclude in pieces {
             if exclude.is_empty() {
                 continue;
             }
-            let ranges = parse_hexview_ranges(exclude)?;
+            let ranges = parse_compat_ranges(exclude)?;
             exclude_ranges.extend(ranges);
         }
     }
@@ -385,12 +385,12 @@ pub(super) fn parse_dspic_op(s: &str) -> Result<DspicOp, ParseArgError> {
     if let Some((range_str, target_str)) = s.split_once(';') {
         let target = parse_number(target_str)?;
         Ok(DspicOp {
-            range: parse_single_hexview_range(range_str, "dsPIC range")?,
+            range: parse_single_compat_range(range_str, "dsPIC range")?,
             target: Some(target),
         })
     } else {
         Ok(DspicOp {
-            range: parse_single_hexview_range(s, "dsPIC range")?,
+            range: parse_single_compat_range(s, "dsPIC range")?,
             target: None,
         })
     }

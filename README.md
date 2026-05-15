@@ -1,10 +1,10 @@
 # hexy
 
-Workspace for a reusable hex-file library plus a HexView-compatible CLI.
+Workspace for a reusable hex-file library plus a cleanroom slash-compatible CLI.
 
 Current packages:
 - `hexy-core` - library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations
-- `hexy-compat` - slash-flag HexView-compatible CLI package; installs the `hexy` binary
+- `hexy-compat` - slash-flag cleanroom compatibility CLI package; installs the `hexy` binary
 - `hexy-python` - PyO3 bindings for in-memory Python use of `hexy-core`
 
 ## Install
@@ -68,7 +68,7 @@ let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 
 ## Scope
 
-`hexy-compat` targets non-proprietary HexView workflows. Proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats remain out of scope.
+`hexy-compat` targets non-proprietary cleanroom-compatible slash workflows. Proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats remain out of scope.
 
 The repo is structured so additional frontends can consume `hexy-core` without forcing their release surface or UX into the compat CLI.
 

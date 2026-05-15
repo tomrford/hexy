@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use crate::AddressRange;
 
 use super::parse_util::{
-    parse_checksum, parse_data_processing_params, parse_dspic_op, parse_hex_ascii_params,
-    parse_hex_bytes, parse_hexview_ranges, parse_import_param, parse_merge_params, parse_number,
+    parse_checksum, parse_compat_ranges, parse_data_processing_params, parse_dspic_op,
+    parse_hex_ascii_params, parse_hex_bytes, parse_import_param, parse_merge_params, parse_number,
     parse_output_params, parse_remap, parse_signature_verify_params, split_option, strip_quotes,
 };
 use super::types::{Args, MergeParam, OutputFormat, ParseArgError};
@@ -12,7 +12,7 @@ use super::types::{Args, MergeParam, OutputFormat, ParseArgError};
 type ValueParser = fn(&mut Args, &str, &str) -> Result<bool, ParseArgError>;
 
 fn extend_ranges(target: &mut Vec<AddressRange>, value: &str) -> Result<(), ParseArgError> {
-    let ranges = parse_hexview_ranges(value)?;
+    let ranges = parse_compat_ranges(value)?;
     target.extend(ranges);
     Ok(())
 }
@@ -171,7 +171,7 @@ fn parse_numeric_option(
     value: &str,
 ) -> Result<bool, ParseArgError> {
     match key_upper {
-        // HexView performance-tuning flags; accepted for compat, values ignored.
+        // Compatibility performance-tuning flags; accepted for compat, values ignored.
         "BHFCT" | "BTFST" | "BTBS" => {
             let _ = parse_number(value)?;
             Ok(true)

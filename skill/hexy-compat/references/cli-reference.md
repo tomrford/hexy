@@ -1,10 +1,10 @@
-# hexy / HexView CLI reference
+# hexy CLI reference
 
-Compact reference for the shared non-proprietary `hexy` and HexView command-line surface. Organize commands by execution order, because order controls behavior.
+Compact reference for the cleanroom `hexy` command-line surface for non-proprietary slash-style workflows. Organize commands by execution order, because order controls behavior.
 
 Use binary-form commands such as `hexy input.hex ... -o output.hex`. Keep one output format per command.
 
-HexView also supports additional proprietary or OEM-specific formats and DLL-backed features that are not covered here.
+The external compatibility target also supports additional proprietary or OEM-specific formats and DLL-backed features that are not covered here.
 
 ## Command model
 
@@ -58,7 +58,7 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 - Use it with `/E`; by itself it has nowhere to write.
 
 `/BHFCT`, `/BTFST`, `/BTBS`
-- Accept HexView threshold flags for compatibility.
+- Accept compatibility threshold flags for compatibility.
 - Parse the values, but treat them as no-op tuning hints in `hexy`.
 
 ## Explicit imports
@@ -105,7 +105,7 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 
 `/CDSPG:range`
 - Clear every fourth byte over the given range for dsPIC ghost-byte cleanup.
-- Use multiple ranges with the normal HexView range syntax.
+- Use multiple ranges with the normal compatibility range syntax.
 
 ## Range edits and merges
 
@@ -134,7 +134,7 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 - Use it late when you want upstream operations to see the full image first.
 
 `/L:logfile`
-- Replay HexView-style log commands from a file.
+- Replay slash-style log commands from a file.
 - Use it when a workflow is already captured as `FileOpen`, `FileClose`, or `FileNew` steps.
 
 `/FA`
@@ -194,7 +194,7 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 
 `/DPn[:@placement]:keyinfo[;outfilename]`
 - Run the supported signing subset after checksum operations.
-- Pass the signing key as `keyinfo`; HexView-style trailing metadata fields are not needed for normal `hexy` use.
+- Pass the signing key as `keyinfo`; compatibility-target trailing metadata fields are not needed for normal `hexy` use.
 - Supported methods are `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`, `/DP47`, `/DP48`, `/DP49`.
 
 `placement`
@@ -251,6 +251,6 @@ HexView also supports additional proprietary or OEM-specific formats and DLL-bac
 
 ## Unsupported or out-of-scope
 
-- Treat `/PB`, `/expdat`, OEM containers, GM/VBF/FIAT-specific exports, and other proprietary HexView extensions as out of scope here.
+- Treat `/PB`, `/expdat`, OEM containers, GM/VBF/FIAT-specific exports, and other proprietary external-tool extensions as out of scope here.
 - Output formats `/XG*` (GCC), `/XK` (Keil), `/XV`, `/XVBF`, and `/XB` are recognized by the parser but not yet implemented; using them produces an error.
 - Treat this reference as the shared CLI surface that `hexy` implements for non-proprietary workflows.

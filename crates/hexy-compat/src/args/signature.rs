@@ -146,7 +146,7 @@ fn looks_like_inline_pem(raw: &str) -> bool {
     raw.starts_with("-----BEGIN ") || raw.contains(['\n', '\r'])
 }
 
-fn looks_like_hexview_asn_key(raw: &str) -> bool {
+fn looks_like_asn_key_bytes(raw: &str) -> bool {
     let raw = raw.trim();
     let upper = raw.to_ascii_uppercase();
     let known_prefix = ["FF49", "FF4B", "FF59", "FF5B"]
@@ -159,7 +159,7 @@ fn resolve_key_source(raw: &str) -> Result<ResolvedKeySource<'_>, CliError> {
     if looks_like_inline_pem(raw) {
         return Ok(ResolvedKeySource::Text(raw));
     }
-    if looks_like_hexview_asn_key(raw) {
+    if looks_like_asn_key_bytes(raw) {
         let bytes = decode_hex_bytes(raw.trim())
             .map_err(|e| CliError::Other(format!("signature key info: {e}")))?;
         return Ok(ResolvedKeySource::Bytes(bytes));
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_key_source_hexview_asn_bytes_are_inline() {
+    fn test_resolve_key_source_compat_asn_bytes_are_inline() {
         let source = resolve_key_source("FF490001").unwrap();
         assert!(
             matches!(source, ResolvedKeySource::Bytes(bytes) if bytes == vec![0xFF, 0x49, 0x00, 0x01])

@@ -1,6 +1,6 @@
 # hexy
 
-Hex-file workspace: `hexy-core` library plus `hexy-compat`, a HexView-compatible CLI package that installs the `hexy` binary.
+Hex-file workspace: `hexy-core` library plus `hexy-compat`, a cleanroom slash-compatible CLI package that installs the `hexy` binary.
 
 ## Commands
 
@@ -23,7 +23,7 @@ nix develop -c cargo run -p hexy-compat -- [args]     # Run compat CLI
 Backlog lives in the Linear `hexy` project.
 
 ### Project philosophy
-- CLI must be a drop-in HexView replacement for non-proprietary formats: binary-equivalent outputs for Intel HEX, S-Record, HEX ASCII, and raw binary.
-- Library API should center on `HexFile`, `Segment`, and `AddressRange`, with typed per-operation methods and format parse/write helpers that preserve HexView semantics.
-- CLI execution model should be explicit and linear: “for flag in flags, if present, call the corresponding `HexFile` operation”, preserving HexView’s operation order and behavior.
+- CLI must be a cleanroom replacement for the supported slash-style workflows for non-proprietary formats: binary-equivalent outputs for Intel HEX, S-Record, HEX ASCII, and raw binary.
+- Library API should center on `HexFile`, `Segment`, and `AddressRange`, with typed per-operation methods and format parse/write helpers that preserve compatibility semantics.
+- CLI execution model should be explicit and linear: “for flag in flags, if present, call the corresponding `HexFile` operation”, preserving the cleanroom compatibility target operation order and behavior.
 - The library should enable consumers to reproduce CLI behavior by composing those typed operations in the same order.

@@ -1,6 +1,6 @@
-//! HexView-compatible CLI argument parsing and execution.
+//! Cleanroom slash-compatible CLI argument parsing and execution.
 //!
-//! Processing order matches HexView (implemented subset):
+//! Processing order matches the cleanroom compatibility target (implemented subset):
 //! 1. Read input file
 //! 2. Open error log (/E)
 //! 3. Set silent mode (/S)
@@ -68,7 +68,7 @@ pub fn run() -> ExitCode {
             .append(true)
             .open(path);
         if let Ok(ref mut file) = file {
-            let _ = write!(file, "Hexview V{}", env!("CARGO_PKG_VERSION"));
+            let _ = write!(file, "hexy V{}", env!("CARGO_PKG_VERSION"));
         }
     }
 
