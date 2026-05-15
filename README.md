@@ -5,6 +5,7 @@ Workspace for a reusable hex-file library plus a HexView-compatible CLI.
 Current packages:
 - `hexy-core` - library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations
 - `hexy-compat` - slash-flag HexView-compatible CLI package; installs the `hexy` binary
+- `hexy-python` - PyO3 bindings for in-memory Python use of `hexy-core`
 
 ## Install
 
@@ -35,6 +36,8 @@ nix develop -c cargo build
 nix develop -c cargo test
 nix develop -c cargo clippy --all-targets --all-features -- -D warnings
 nix develop -c cargo run -p hexy-compat -- /XI input.hex -o output.hex
+nix develop -c uv run --with maturin --with pytest --project crates/hexy-python maturin develop --manifest-path crates/hexy-python/Cargo.toml
+nix develop -c uv run --with pytest --project crates/hexy-python pytest crates/hexy-python/tests
 ```
 
 ## Operation order
@@ -68,3 +71,18 @@ let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 `hexy-compat` targets non-proprietary HexView workflows. Proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats remain out of scope.
 
 The repo is structured so additional frontends can consume `hexy-core` without forcing their release surface or UX into the compat CLI.
+
+## Python bindings
+
+The Python package is an in-memory API over `hexy-core`. It exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, and the main memory operations used by the compat CLI.
+
+```python
+import hexy
+
+hf = hexy.HexFile.from_intel_hex(data)
+hf.fill("0x1000-0x10ff", pattern=b"\xff")
+hf.cut("0x1080-0x108f")
+out = hf.to_srec()
+```
+
+Use `Pipeline` when operations should run in the order they are added. Use `HexViewPipeline` when operations should be collected and then applied in HexView-compatible order.

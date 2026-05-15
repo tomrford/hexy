@@ -1,0 +1,25 @@
+[package]
+name = "hexy-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python bindings for hexy-core."
+keywords = ["hex", "intel-hex", "srec", "firmware", "python"]
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[features]
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+hexy-core = { path = "../hexy-core", version = "0.1.3" }
+pyo3 = { workspace = true, features = ["abi3-py39"] }
+
+[lints]
+workspace = true
