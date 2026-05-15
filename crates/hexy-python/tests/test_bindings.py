@@ -50,7 +50,7 @@ def test_memory_operations_cover_filter_cut_fill_merge_align_split_swap():
     assert hf.read(0x1004, 4) == b"\xFF\xFF\xFF\xFF"
 
 
-def test_pipeline_applies_in_user_order():
+def test_pipeline_uses_compat_operation_order():
     hf = hexy.HexFile.from_binary(b"\x00\x01\x02\x03", 0x1000)
     pipeline = hexy.Pipeline()
     pipeline.swap("word")
@@ -58,19 +58,21 @@ def test_pipeline_applies_in_user_order():
 
     out = pipeline.apply(hf)
 
-    assert hf.read(0x1000, 4) == b"\x00\x01\x02\x03"
-    assert out.read(0x1000, 4) == b"\x01\xFF\xFF\x02"
-
-
-def test_hexview_pipeline_uses_compat_operation_order():
-    hf = hexy.HexFile.from_binary(b"\x00\x01\x02\x03", 0x1000)
-    pipeline = hexy.HexViewPipeline()
-    pipeline.swap("word")
-    pipeline.fill("0x1001-0x1002", pattern=b"\xFF", overwrite=True)
-
-    out = pipeline.apply(hf)
-
     assert out.read(0x1000, 4) == b"\x00\xFF\xFF\x03"
+
+
+def test_compat_pipeline_rejects_mixed_merge_modes():
+    first = hexy.HexFile.from_binary(b"\xAA", 0x1000)
+    second = hexy.HexFile.from_binary(b"\xBB", 0x1001)
+    pipeline = hexy.Pipeline()
+    pipeline.merge(first, mode="preserve")
+
+    try:
+        pipeline.merge(second, mode="overwrite")
+    except ValueError as error:
+        assert "cannot combine preserve and overwrite merges" in str(error)
+    else:
+        raise AssertionError("expected mixed merge modes to be rejected")
 
 
 def test_dspic_and_mapping_surfaces_are_available():

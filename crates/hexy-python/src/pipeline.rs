@@ -1,5 +1,6 @@
 use hexy_core::{
-    AddressRange, AlignOptions, FillOptions, HexFile, MergeOptions, RemapOptions, SwapMode,
+    AddressRange, AlignOptions, FillOptions, HexFile, MergeMode, MergeOptions, RemapOptions,
+    SwapMode,
 };
 use pyo3::prelude::*;
 
@@ -91,156 +92,18 @@ fn apply_ops(source: &PyHexFile, ops: &[PipelineOp]) -> PyResult<PyHexFile> {
 #[pyclass(name = "Pipeline", skip_from_py_object)]
 #[derive(Clone, Default)]
 pub(crate) struct PyPipeline {
-    ops: Vec<PipelineOp>,
-}
-
-#[pymethods]
-impl PyPipeline {
-    #[new]
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn __len__(&self) -> usize {
-        self.ops.len()
-    }
-
-    fn clear(&mut self) {
-        self.ops.clear();
-    }
-
-    fn apply(&self, source: PyRef<'_, PyHexFile>) -> PyResult<PyHexFile> {
-        apply_ops(&source, &self.ops)
-    }
-
-    #[pyo3(signature = (ranges, *, pattern=None, overwrite=false))]
-    fn fill(
-        &mut self,
-        ranges: &Bound<'_, PyAny>,
-        pattern: Option<&[u8]>,
-        overwrite: bool,
-    ) -> PyResult<()> {
-        self.ops.push(PipelineOp::Fill {
-            ranges: parse_ranges_arg(ranges)?,
-            options: FillOptions {
-                pattern: pattern.unwrap_or(&[0xFF]).to_vec(),
-                overwrite,
-            },
-        });
-        Ok(())
-    }
-
-    fn cut(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.ops.push(PipelineOp::Cut(parse_ranges_arg(ranges)?));
-        Ok(())
-    }
-
-    fn filter(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.ops.push(PipelineOp::Filter(parse_ranges_arg(ranges)?));
-        Ok(())
-    }
-
-    #[pyo3(signature = (other, *, mode=None, offset=0, range=None))]
-    fn merge(
-        &mut self,
-        other: PyRef<'_, PyHexFile>,
-        mode: Option<&str>,
-        offset: i64,
-        range: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        self.ops.push(PipelineOp::Merge {
-            other: other.inner.clone(),
-            options: MergeOptions {
-                mode: parse_merge_mode(mode)?,
-                offset,
-                range: range.map(parse_range_arg).transpose()?,
-            },
-        });
-        Ok(())
-    }
-
-    #[pyo3(signature = (*, fill=0xFF))]
-    fn fill_gaps(&mut self, fill: u8) {
-        self.ops.push(PipelineOp::FillGaps(fill));
-    }
-
-    #[pyo3(signature = (alignment, *, fill=0xFF, length=false))]
-    fn align(&mut self, alignment: u32, fill: u8, length: bool) {
-        self.ops.push(PipelineOp::Align(AlignOptions {
-            alignment,
-            fill_byte: fill,
-            align_length: length,
-        }));
-    }
-
-    fn split(&mut self, max_size: u32) {
-        self.ops.push(PipelineOp::Split(max_size));
-    }
-
-    fn swap(&mut self, mode: &str) -> PyResult<()> {
-        self.ops.push(PipelineOp::Swap(parse_swap_mode(mode)?));
-        Ok(())
-    }
-
-    fn map_star12(&mut self) {
-        self.ops.push(PipelineOp::MapStar12);
-    }
-
-    fn map_star12x(&mut self) {
-        self.ops.push(PipelineOp::MapStar12x);
-    }
-
-    fn map_star08(&mut self) {
-        self.ops.push(PipelineOp::MapStar08);
-    }
-
-    fn remap(&mut self, start: u32, end: u32, linear: u32, size: u32, inc: u32) {
-        self.ops.push(PipelineOp::Remap(RemapOptions {
-            start,
-            end,
-            linear,
-            size,
-            inc,
-        }));
-    }
-
-    fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        self.ops.push(PipelineOp::DspicExpand {
-            range: parse_range_arg(range)?,
-            target,
-        });
-        Ok(())
-    }
-
-    fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        self.ops.push(PipelineOp::DspicShrink {
-            range: parse_range_arg(range)?,
-            target,
-        });
-        Ok(())
-    }
-
-    fn dspic_clear_ghost(&mut self, range: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.ops
-            .push(PipelineOp::DspicClearGhost(parse_range_arg(range)?));
-        Ok(())
-    }
-}
-
-#[pyclass(name = "HexViewPipeline", skip_from_py_object)]
-#[derive(Clone, Default)]
-pub(crate) struct PyHexViewPipeline {
     map_ops: Vec<PipelineOp>,
     dspic_ops: Vec<PipelineOp>,
     fill_ops: Vec<PipelineOp>,
     cut_ops: Vec<PipelineOp>,
+    merge_mode: Option<MergeMode>,
     merge_ops: Vec<PipelineOp>,
     filter_ops: Vec<PipelineOp>,
     finish_ops: Vec<PipelineOp>,
 }
 
 #[pymethods]
-impl PyHexViewPipeline {
+impl PyPipeline {
     #[new]
     fn new() -> Self {
         Self::default()
@@ -347,10 +210,19 @@ impl PyHexViewPipeline {
         offset: i64,
         range: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
+        let merge_mode = parse_merge_mode(mode)?;
+        if let Some(existing) = self.merge_mode
+            && existing != merge_mode
+        {
+            return Err(value_error(
+                "cannot combine preserve and overwrite merges in Pipeline",
+            ));
+        }
+        self.merge_mode = Some(merge_mode);
         self.merge_ops.push(PipelineOp::Merge {
             other: other.inner.clone(),
             options: MergeOptions {
-                mode: parse_merge_mode(mode)?,
+                mode: merge_mode,
                 offset,
                 range: range.map(parse_range_arg).transpose()?,
             },

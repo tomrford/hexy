@@ -85,4 +85,4 @@ hf.cut("0x1080-0x108f")
 out = hf.to_srec()
 ```
 
-Use `Pipeline` when operations should run in the order they are added. Use `HexViewPipeline` when operations should be collected and then applied in HexView-compatible order.
+Use `Pipeline` for reusable recipes. It applies operations in hexy CLI compatibility order, not in the order methods are called. For custom operation ordering, call methods directly on `HexFile`.
