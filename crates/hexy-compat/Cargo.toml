@@ -8,7 +8,7 @@ description = "cleanroom-compatible slash-flag CLI built on hexy-core."
 keywords = ["hex", "firmware", "intel-hex", "srec"]
 
 [dependencies]
-hexy-core = { path = "../hexy-core", version = "0.1.3" }
+hexy-core = { path = "../hexy-core", version = "0.2.0" }
 thiserror.workspace = true
 
 [dev-dependencies]
