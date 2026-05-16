@@ -97,6 +97,8 @@ jobs:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
     needs: create-release
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
