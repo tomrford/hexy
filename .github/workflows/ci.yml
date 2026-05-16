@@ -28,6 +28,9 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --all-features --locked
 
+      - name: Check clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked
+
       - name: Test workspace
         run: cargo test --workspace --locked
 
