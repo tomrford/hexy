@@ -1,4 +1,4 @@
-# hexy-hexfile
+# hexy-py
 
 Python bindings for the `hexy-core` Rust crate.
 

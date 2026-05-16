@@ -5,12 +5,13 @@ Workspace for a reusable hex-file library plus a cleanroom slash-compatible CLI.
 Current packages:
 - `hexy-core` - library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations
 - `hexy-compat` - slash-flag cleanroom compatibility CLI package; installs the `hexy` binary
-- `hexy-python` - PyO3 bindings for in-memory Python use of `hexy-core`
+- `hexy-py` - PyO3 bindings for in-memory Python use of `hexy-core`
 
 ## Install
 
 ```bash
 cargo install hexy-compat
+pip install hexy-py
 ```
 
 ## Quick examples
@@ -36,8 +37,8 @@ nix develop -c cargo build
 nix develop -c cargo test
 nix develop -c cargo clippy --all-targets --all-features -- -D warnings
 nix develop -c cargo run -p hexy-compat -- /XI input.hex -o output.hex
-nix develop -c uv run --with maturin --with pytest --project crates/hexy-python maturin develop --manifest-path crates/hexy-python/Cargo.toml
-nix develop -c uv run --with pytest --project crates/hexy-python pytest crates/hexy-python/tests
+nix develop -c uv run --directory crates/hexy-py --group dev maturin develop
+nix develop -c uv run --directory crates/hexy-py --group dev pytest tests
 ```
 
 ## Operation order
