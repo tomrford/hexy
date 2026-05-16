@@ -1,15 +1,19 @@
 # hexy
 
-Workspace for a reusable hex-file library plus a cleanroom slash-compatible CLI.
+Hexy is a reusable binary file modification library based on a cleanroom implementation of Vector HexView.
 
-Current packages:
-- `hexy-core` - library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations
-- `hexy-compat` - slash-flag cleanroom compatibility CLI package; installs the `hexy` binary
-- `hexy-py` - PyO3 bindings for in-memory Python use of `hexy-core`
+Hexy is available as:
+
+- `hexy-core` - Rust library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations.
+- `hexy-py` - Python bindings for `hexy-core`.
+- `hexy-compat` - Implements `hexy`, a drop-in replacement for the CLI functionality of HexView with slash-flag syntax, based on `hexy-core`.
+
+I have not yet achieved feature parity with hexview; the [known divergences doc](docs/known-divergences.md) details where the core library stands. There is still differing amounts of coverage between lib/binary/python that I am working to rectify. I plan on eventually adding additional features to -core/-py and implementing a 4th crate under -cli to provide these additional features.
 
 ## Install
 
 ```bash
+cargo add hexy-core
 cargo install hexy-compat
 pip install hexy-py
 ```
@@ -87,5 +91,21 @@ hf.write_srec("output.s19")
 ```
 
 Use `Pipeline` for reusable recipes. It applies operations in hexy CLI compatibility order, not in the order methods are called. For custom operation ordering, call methods directly on `HexFile`.
+
+```python
+import hexy
+
+source = hexy.HexFile.from_file("app.hex")
+calibration = hexy.HexFile.from_file("calibration.hex")
+
+pipeline = hexy.Pipeline()
+pipeline.merge(calibration, mode="overwrite")
+pipeline.fill(["0x1000-0x10ff"], pattern=b"\xff")
+pipeline.filter(["0x0000-0x1fff"])
+pipeline.align(16, fill=0xff, length=True)
+
+patched = pipeline.apply(source)
+patched.write_intel_hex("patched.hex")
+```
 
 Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span.

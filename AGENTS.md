@@ -1,6 +1,6 @@
 # hexy
 
-Hex-file workspace: `hexy-core` library plus `hexy-compat`, a cleanroom slash-compatible CLI package that installs the `hexy` binary.
+Hex-file workspace: `hexy-core` reusable binary file modification library, `hexy-compat` cleanroom slash-compatible CLI package, and `hexy-py` Python bindings.
 
 ## Commands
 
@@ -18,6 +18,7 @@ nix develop -c cargo run -p hexy-compat -- [args]     # Run compat CLI
 - `crates/hexy-compat/src/main.rs` - Compat CLI entry point
 - `crates/hexy-core/src/` - Core library modules
 - `crates/hexy-compat/src/args/` - Compat CLI parser/executor modules
+- `crates/hexy-py/src/` - PyO3 bindings over `hexy-core`
 
 ### Backlog
 Backlog lives in the Linear `hexy` project.
