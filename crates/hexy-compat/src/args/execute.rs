@@ -92,7 +92,7 @@ impl Args {
         Ok(())
     }
 
-    /// Execute the parsed arguments in HexView processing order.
+    /// Execute the parsed arguments in compatibility processing order.
     pub fn execute(&self) -> Result<ExecuteOutput, CliError> {
         let provider = FsProvider;
         self.execute_with_provider(&provider)

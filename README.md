@@ -1,10 +1,11 @@
 # hexy
 
-Workspace for a reusable hex-file library plus a HexView-compatible CLI.
+Workspace for a reusable hex-file library plus a cleanroom slash-compatible CLI.
 
 Current packages:
 - `hexy-core` - library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations
-- `hexy-compat` - slash-flag HexView-compatible CLI package; installs the `hexy` binary
+- `hexy-compat` - slash-flag cleanroom compatibility CLI package; installs the `hexy` binary
+- `hexy-python` - PyO3 bindings for in-memory Python use of `hexy-core`
 
 ## Install
 
@@ -35,6 +36,8 @@ nix develop -c cargo build
 nix develop -c cargo test
 nix develop -c cargo clippy --all-targets --all-features -- -D warnings
 nix develop -c cargo run -p hexy-compat -- /XI input.hex -o output.hex
+nix develop -c uv run --with maturin --with pytest --project crates/hexy-python maturin develop --manifest-path crates/hexy-python/Cargo.toml
+nix develop -c uv run --with pytest --project crates/hexy-python pytest crates/hexy-python/tests
 ```
 
 ## Operation order
@@ -65,6 +68,23 @@ let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 
 ## Scope
 
-`hexy-compat` targets non-proprietary HexView workflows. Proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats remain out of scope.
+`hexy-compat` targets non-proprietary cleanroom-compatible slash workflows. Proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats remain out of scope.
 
 The repo is structured so additional frontends can consume `hexy-core` without forcing their release surface or UX into the compat CLI.
+
+## Python bindings
+
+The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, and the main memory operations used by the compat CLI.
+
+```python
+import hexy
+
+hf = hexy.HexFile.from_file("input.hex")
+hf.fill(["0x1000-0x10ff"], pattern=b"\xff")
+hf.cut(["0x1080-0x108f"])
+hf.write_srec("output.s19")
+```
+
+Use `Pipeline` for reusable recipes. It applies operations in hexy CLI compatibility order, not in the order methods are called. For custom operation ordering, call methods directly on `HexFile`.
+
+Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span.

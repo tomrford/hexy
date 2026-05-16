@@ -1,6 +1,6 @@
-//! Checksum algorithms compatible with HexView.
+//! Checksum algorithms for the cleanroom compatibility target.
 //!
-//! HexView algorithm indices:
+//! Cleanroom compatibility algorithm indices:
 //! - 0: ByteSum 16-bit BE
 //! - 1: ByteSum 16-bit LE
 //! - 2: WordSum BE 16-bit (sum 16-bit BE words)
@@ -55,7 +55,7 @@ pub struct ForcedRange {
     pub pattern: Vec<u8>,
 }
 
-/// Checksum algorithm identifier (HexView-compatible).
+/// Checksum algorithm identifier (cleanroom-compatible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ChecksumAlgorithm {
@@ -237,7 +237,7 @@ impl HexFile {
                 u16_bytes(twos, use_le)
             }
             ChecksumAlgorithm::ModularSum => {
-                // HexView method 12: same arithmetic as method 6, but BE output by default.
+                // Compatibility method 12: same arithmetic as method 6, but BE output by default.
                 let sum = word_sum_le(&data)?;
                 let twos = (!sum).wrapping_add(1);
                 u16_bytes(twos, use_le)
@@ -304,7 +304,7 @@ impl HexFile {
         target: &ChecksumTarget,
     ) -> Result<Vec<u8>, OpsError> {
         // When target overwrites existing data, exclude that range from checksum.
-        // This matches HexView behavior where the checksum target is not included.
+        // This matches compatibility behavior where the checksum target is not included.
         let mut effective_options = options.clone();
         let size = options.algorithm.result_size() as u32;
         match target {
@@ -705,7 +705,7 @@ fn crc16_arc(data: &[u8]) -> u16 {
     CRC.checksum(data)
 }
 
-/// CRC-16 non-standard variant from HexView expdatproc method 8.
+/// CRC-16 non-standard variant from compatibility-target expdatproc method 8.
 fn crc16_non_standard(data: &[u8]) -> u16 {
     let mut crc = 0xFFFFu16;
     for &byte in data {
@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn test_crc16_non_standard() {
-        // HexView algorithm 8 pseudocode reference vector.
+        // Compatibility algorithm 8 pseudocode reference vector.
         assert_eq!(crc16_non_standard(b"123456789"), 0xD64E);
     }
 

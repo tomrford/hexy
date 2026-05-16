@@ -2,7 +2,7 @@
 
 Current compatibility notes for the `hexy-compat` CLI.
 
-This file tracks behavior that should not be claimed drop-in compatible yet, plus cases where the current implementation intentionally or observably differs from HexView.
+This file tracks behavior that should not be claimed drop-in compatible yet. This is a cleanroom implementation of HexView-style non-proprietary workflows, so remaining references here name the external compatibility target only.
 
 ## Known Gaps
 
@@ -11,7 +11,7 @@ This file tracks behavior that should not be claimed drop-in compatible yet, plu
 Status: implemented, not drop-in compatible yet.
 
 Observed divergence:
-- current behavior accepts some cases that HexView appears to reject
+- current behavior accepts some cases that the compatibility target appears to reject
 
 Current conclusion:
 - rejection parity is wrong or `/XP` preconditions are narrower than `hexy` currently assumes
@@ -21,8 +21,8 @@ Current conclusion:
 Status: implemented, not drop-in compatible yet.
 
 Observed divergence:
-- generated `.c/.h` output shape is structurally different from HexView
-- HexView emits its legacy flash-driver style wrapper/header/macros
+- generated `.c/.h` output shape is structurally different from the compatibility target
+- The compatibility target emits its legacy flash-driver style wrapper/header/macros
 - `hexy` emits a smaller modern `stdint.h`-based array/header pair
 
 This is not a cosmetic whitespace issue; the exported contract differs.

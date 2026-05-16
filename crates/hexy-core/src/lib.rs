@@ -21,9 +21,10 @@ pub mod signature;
 
 pub use hexfile::HexFile;
 pub use io::{
-    BinaryWriteOptions, CCodeOutput, CCodeWordType, CCodeWriteOptions, HexAsciiWriteOptions,
-    SRecordType, SRecordWriteOptions, parse_binary, parse_hex_ascii, parse_srec, write_binary,
-    write_c_code, write_hex_ascii, write_srec,
+    AutoFormat, BinaryWriteOptions, CCodeOutput, CCodeWordType, CCodeWriteOptions, FileIoError,
+    HexAsciiWriteOptions, SRecordType, SRecordWriteOptions, detect_format, parse_auto,
+    parse_binary, parse_hex_ascii, parse_srec, write_binary, write_c_code, write_hex_ascii,
+    write_srec,
 };
 pub use io::{
     IntelHexMode, IntelHexWriteOptions, ParseError, parse_intel_hex, parse_intel_hex_16bit,
@@ -34,9 +35,7 @@ pub use ops::{
     ChecksumTarget, FillOptions, ForcedRange, MergeMode, MergeOptions, OpsError, RemapOptions,
     SwapMode,
 };
-pub use range::{
-    AddressRange, AddressRangeError, merge_ranges, parse_hexview_ranges, parse_ranges,
-};
+pub use range::{AddressRange, AddressRangeError, merge_ranges, parse_compat_ranges, parse_ranges};
 pub use segment::Segment;
 pub use signature::{
     SignatureBytesSource, SignatureError, SignatureKeySource, SignatureMethod, SignaturePlacement,

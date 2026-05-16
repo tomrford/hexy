@@ -214,7 +214,7 @@ fn test_cli_version_string_written_to_error_log() {
     let output = run_hexy(&args);
     assert_success(&output);
     let log = std::fs::read_to_string(&err).unwrap();
-    assert_eq!(log, format!("Hexview V{}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(log, format!("hexy V{}", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]

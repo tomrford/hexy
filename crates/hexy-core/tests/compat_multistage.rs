@@ -1,4 +1,4 @@
-//! Integration tests based on HexView command-line documentation.
+//! Integration tests based on cleanroom compatibility documentation.
 //!
 //! Focus: multi-stage operations and command semantics.
 
@@ -79,7 +79,7 @@ fn test_merge_range_then_offset_opaque() {
 }
 
 #[test]
-fn test_hexview_multistage_order() {
+fn test_compat_multistage_order() {
     // /FR -> /CR -> /MO -> /AR -> /AD /AL -> /CS
     let mut hf = HexFile::with_segments(vec![Segment::new(
         0x1000,

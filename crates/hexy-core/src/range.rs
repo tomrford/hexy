@@ -173,7 +173,7 @@ pub fn parse_ranges(s: &str) -> Result<Vec<AddressRange>, AddressRangeError> {
 }
 
 /// Parse multiple ranges, trimming optional surrounding quotes.
-pub fn parse_hexview_ranges(s: &str) -> Result<Vec<AddressRange>, AddressRangeError> {
+pub fn parse_compat_ranges(s: &str) -> Result<Vec<AddressRange>, AddressRangeError> {
     let trimmed = s.trim_matches(|c| c == '"' || c == '\'');
     parse_ranges(trimmed)
 }
@@ -297,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_hexview_ranges_quotes() {
-        let ranges = parse_hexview_ranges("'0x1000,0x100:0x2000-0x2FFF'").unwrap();
+    fn test_parse_compat_ranges_quotes() {
+        let ranges = parse_compat_ranges("'0x1000,0x100:0x2000-0x2FFF'").unwrap();
         assert_eq!(ranges.len(), 2);
         assert_eq!(ranges[0].start(), 0x1000);
         assert_eq!(ranges[1].start(), 0x2000);

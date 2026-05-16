@@ -140,7 +140,7 @@ impl HexFile {
     }
 
     /// Swap bytes within all segments (operates on raw segments).
-    /// HexView parity:
+    /// Compatibility parity:
     /// - SWAPWORD: no-op if any segment starts on an odd address or total byte count is odd.
     /// - SWAPLONG: no-op if span start or span length is not a multiple of 4.
     pub fn swap_bytes(&mut self, mode: SwapMode) -> Result<(), OpsError> {
@@ -161,7 +161,7 @@ impl HexFile {
                 }
             }
             SwapMode::DWord => {
-                const HEXVIEW_SWAPLONG_LIMIT: usize = 0x1000000;
+                const SWAPLONG_LARGE_SPAN_LIMIT: usize = 0x1000000;
                 let Some(span_start) = self.segments().iter().map(|s| s.start_address).min() else {
                     return Ok(());
                 };
@@ -181,8 +181,8 @@ impl HexFile {
                 if self.segments().len() == 1 {
                     let segment = &mut self.segments_mut()[0];
                     if segment.start_address == span_start && segment.len() == span_len as usize {
-                        // HexView quirk: large single spans repeat the first swapped word.
-                        if segment.len() >= HEXVIEW_SWAPLONG_LIMIT {
+                        // Compatibility quirk: large single spans repeat the first swapped word.
+                        if segment.len() >= SWAPLONG_LARGE_SPAN_LIMIT {
                             if segment.data.len() < 4 {
                                 return Ok(());
                             }
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_swap_odd_length_leaves_trailing() {
-        // HexView: odd total length => no-op
+        // Compatibility target: odd total length => no-op
         let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC])]);
         hf.swap_bytes(SwapMode::Word).unwrap();
 
@@ -969,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_dword_hexview_gap_fill() {
+    fn test_swap_dword_compat_gap_fill() {
         let mut hf = HexFile::with_segments(vec![
             Segment::new(0x0000, vec![0x10, 0x11, 0x12, 0x13]),
             Segment::new(0x0004, vec![0x20, 0x21]),

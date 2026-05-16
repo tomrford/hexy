@@ -28,56 +28,7 @@ impl ReadProvider for FsProvider {
 
 pub(super) fn load_input(provider: &impl ReadProvider, path: &Path) -> Result<HexFile, CliError> {
     let content = provider.read_bytes(path)?;
-
-    let mut ascii_only = true;
-    let mut first_nonempty_line: Option<Vec<u8>> = None;
-    let mut ascii_lines_checked = 0usize;
-    let mut current_line: Vec<u8> = Vec::new();
-
-    for &b in &content {
-        if b == b'\n' || b == b'\r' {
-            if !current_line.is_empty() {
-                if ascii_lines_checked < 25 {
-                    if !current_line.is_ascii() {
-                        ascii_only = false;
-                    }
-                    ascii_lines_checked += 1;
-                }
-                if first_nonempty_line.is_none() {
-                    first_nonempty_line = Some(current_line.clone());
-                }
-                if ascii_lines_checked >= 25 {
-                    break;
-                }
-            }
-            current_line.clear();
-            continue;
-        }
-        current_line.push(b);
-    }
-    if !current_line.is_empty() && first_nonempty_line.is_none() {
-        first_nonempty_line = Some(current_line.clone());
-    }
-
-    if ascii_lines_checked == 0 && !content.is_empty() {
-        ascii_only = content.is_ascii();
-    }
-
-    if !ascii_only {
-        return Ok(crate::parse_binary(&content, 0)?);
-    }
-
-    let first_line = first_nonempty_line.unwrap_or_default();
-    if first_line.first() == Some(&b':') {
-        let hexfile = crate::parse_intel_hex(&content)?;
-        Ok(hexfile)
-    } else if matches!(first_line.first(), Some(b'S') | Some(b's')) {
-        let hexfile = crate::parse_srec(&content)?;
-        Ok(hexfile)
-    } else {
-        let hexfile = crate::parse_binary(&content, 0)?;
-        Ok(hexfile)
-    }
+    Ok(crate::parse_auto(&content)?)
 }
 
 pub(super) fn load_binary_input(
@@ -154,8 +105,7 @@ pub(super) fn write_output(
                 bytes_per_line: bytes_per_line.unwrap_or(32),
                 mode,
             };
-            let output = crate::write_intel_hex(hexfile, &options);
-            std::fs::write(path, output)?;
+            hexfile.write_intel_hex_file(path, &options)?;
         }
         OutputFormat::SRecord { record_type } => {
             let record_type = match record_type {
@@ -173,13 +123,11 @@ pub(super) fn write_output(
                 bytes_per_line: bytes_per_line.unwrap_or(16),
                 record_type,
             };
-            let output = crate::write_srec(hexfile, &options)?;
-            std::fs::write(path, output)?;
+            hexfile.write_srec_file(path, &options)?;
         }
         OutputFormat::Binary => {
             let options = crate::BinaryWriteOptions::default();
-            let output = crate::write_binary(hexfile, &options);
-            std::fs::write(path, output)?;
+            hexfile.write_binary_file(path, &options)?;
         }
         OutputFormat::HexAscii {
             line_length,
@@ -189,8 +137,7 @@ pub(super) fn write_output(
                 line_length: line_length.unwrap_or(16) as usize,
                 separator: separator.clone(),
             };
-            let output = crate::write_hex_ascii(hexfile, &options);
-            std::fs::write(path, output)?;
+            hexfile.write_hex_ascii_file(path, &options)?;
         }
         OutputFormat::SeparateBinary => write_separate_binary(hexfile, path)?,
         OutputFormat::CCode => {

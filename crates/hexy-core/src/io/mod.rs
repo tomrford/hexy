@@ -1,6 +1,7 @@
 mod binary;
 mod c_code;
 mod error;
+mod file;
 mod hex_ascii;
 mod intel_hex;
 mod srec;
@@ -8,6 +9,7 @@ mod srec;
 pub use binary::{BinaryWriteOptions, parse_binary, write_binary};
 pub use c_code::{CCodeOutput, CCodeWordType, CCodeWriteOptions, write_c_code};
 pub use error::ParseError;
+pub use file::{AutoFormat, FileIoError, detect_format, parse_auto};
 pub use hex_ascii::{HexAsciiWriteOptions, parse_hex_ascii, write_hex_ascii};
 pub use intel_hex::{
     IntelHexMode, IntelHexWriteOptions, parse_intel_hex, parse_intel_hex_16bit, write_intel_hex,

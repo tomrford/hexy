@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.13,<2"]
+build-backend = "maturin"
+
+[project]
+name = "hexy-hexfile"
+version = "0.1.3"
+description = "Python bindings for hexy-core."
+requires-python = ">=3.9"
+license = "MIT"
+readme = "README.md"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Embedded Systems",
+]
+
+[tool.maturin]
+module-name = "hexy._native"
+python-source = "python"
+features = ["extension-module"]
