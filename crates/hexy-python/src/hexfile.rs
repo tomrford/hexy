@@ -37,6 +37,7 @@ impl PyHexFile {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (data, base_address=None))]
     fn from_binary(data: &[u8], base_address: Option<u32>) -> PyResult<Self> {
         Ok(Self {
             inner: parse_binary(data, base_address.unwrap_or(0)).map_err(parse_error)?,
@@ -44,6 +45,7 @@ impl PyHexFile {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (data, base_address=None))]
     fn from_hex_ascii(data: &[u8], base_address: Option<u32>) -> PyResult<Self> {
         Ok(Self {
             inner: parse_hex_ascii(data, base_address.unwrap_or(0)).map_err(parse_error)?,

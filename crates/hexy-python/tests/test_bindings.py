@@ -58,6 +58,14 @@ def test_binary_hex_ascii_intel_hex_and_srec_roundtrip_in_memory():
     assert hf.to_binary() == b"\xDE\xAD\xBE\xEF"
 
 
+def test_binary_and_hex_ascii_default_to_zero_base_address():
+    binary = hexy.HexFile.from_binary(b"\xDE\xAD")
+    assert binary.read(0, 2) == b"\xDE\xAD"
+
+    ascii_hex = hexy.HexFile.from_hex_ascii(b"DE AD")
+    assert ascii_hex.read(0, 2) == b"\xDE\xAD"
+
+
 def test_memory_operations_cover_filter_cut_fill_merge_align_split_swap():
     hf = hexy.HexFile.from_binary(bytes(range(16)), 0x1000)
     hf.cut(["0x1004-0x1007"])
