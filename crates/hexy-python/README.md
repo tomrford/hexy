@@ -16,6 +16,10 @@ File writers mirror the in-memory serializers:
 CLI compatibility order, not in the order methods are called. For ad-hoc custom
 ordering, call methods directly on `HexFile`.
 
+Range-taking Python APIs use one range string for single-range operations and a
+list of range strings for operations that accept multiple ranges. Each string
+uses the same range syntax as the compat CLI.
+
 Sparse files stay sparse for inspection and in-memory operations. Dense exports
 such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered
 address span, so sparse inputs with far-apart segments can intentionally produce

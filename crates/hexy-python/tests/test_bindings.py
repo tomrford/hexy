@@ -60,8 +60,8 @@ def test_binary_hex_ascii_intel_hex_and_srec_roundtrip_in_memory():
 
 def test_memory_operations_cover_filter_cut_fill_merge_align_split_swap():
     hf = hexy.HexFile.from_binary(bytes(range(16)), 0x1000)
-    hf.cut("0x1004-0x1007")
-    hf.fill("0x1004-0x1007", pattern=b"\xFF", overwrite=False)
+    hf.cut(["0x1004-0x1007"])
+    hf.fill(["0x1004-0x1007"], pattern=b"\xFF", overwrite=False)
     hf.filter(["0x1000-0x100B"])
 
     overlay = hexy.HexFile.from_binary(b"\xAA\xBB", 0x1002)
@@ -79,7 +79,7 @@ def test_empty_fill_pattern_is_rejected():
     hf = hexy.HexFile.from_binary(b"\x00", 0x1000)
 
     try:
-        hf.fill("0x1000-0x1000", pattern=b"")
+        hf.fill(["0x1000-0x1000"], pattern=b"")
     except ValueError as error:
         assert "fill pattern cannot be empty" in str(error)
     else:
@@ -87,26 +87,61 @@ def test_empty_fill_pattern_is_rejected():
 
     pipeline = hexy.Pipeline()
     try:
-        pipeline.fill("0x1000-0x1000", pattern=b"")
+        pipeline.fill(["0x1000-0x1000"], pattern=b"")
     except ValueError as error:
         assert "fill pattern cannot be empty" in str(error)
     else:
         raise AssertionError("expected empty pipeline fill pattern to be rejected")
 
 
-def test_range_list_strings_use_compat_range_parser():
+def test_range_lists_parse_each_compat_range_string():
     hf = hexy.HexFile.from_binary(bytes(range(8)), 0x1000)
 
-    hf.cut("'0x1001-0x1002:0x1005-0x1006'")
+    hf.cut(["'0x1001-0x1002'", "0x1005-0x1006"])
 
     assert hf.read_sparse(0x1000, 8) == [0, None, None, 3, 4, None, None, 7]
+
+
+def test_range_list_apis_reject_packed_range_strings():
+    hf = hexy.HexFile.from_binary(bytes(range(8)), 0x1000)
+
+    try:
+        hf.cut("'0x1001-0x1002:0x1005-0x1006'")
+    except TypeError as error:
+        assert "expected a list of range strings" in str(error)
+    else:
+        raise AssertionError("expected packed range string to be rejected")
+
+
+def test_single_range_apis_accept_quoted_range_strings():
+    base = hexy.HexFile.from_binary(b"\x00\x00", 0x1000)
+    overlay = hexy.HexFile.from_binary(b"\xAA\xBB", 0x2000)
+
+    base.merge(overlay, mode="overwrite", range="'0x2001-0x2001'")
+    assert base.read_sparse(0x1000, 2) == [0, 0]
+    assert base.read(0x2001, 1) == b"\xBB"
+
+    hf = hexy.HexFile.from_binary(b"\x01\x02", 0x3000)
+    hf.dspic_expand("'0x3000-0x3001'", 0x4000)
+    assert hf.read(0x4000, 4) == b"\x01\x02\x00\x00"
+
+
+def test_single_range_apis_reject_multiple_ranges_in_one_string():
+    hf = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
+
+    try:
+        hf.dspic_expand("'0x1000-0x1000:0x1001-0x1001'")
+    except ValueError as error:
+        assert "expected a single range, got 2 ranges" in str(error)
+    else:
+        raise AssertionError("expected multiple ranges to be rejected")
 
 
 def test_pipeline_uses_compat_operation_order():
     hf = hexy.HexFile.from_binary(b"\x00\x01\x02\x03", 0x1000)
     pipeline = hexy.Pipeline()
     pipeline.swap("word")
-    pipeline.fill("0x1001-0x1002", pattern=b"\xFF", overwrite=True)
+    pipeline.fill(["0x1001-0x1002"], pattern=b"\xFF", overwrite=True)
 
     out = pipeline.apply(hf)
 

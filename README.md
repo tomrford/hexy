@@ -80,8 +80,8 @@ The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic p
 import hexy
 
 hf = hexy.HexFile.from_file("input.hex")
-hf.fill("0x1000-0x10ff", pattern=b"\xff")
-hf.cut("0x1080-0x108f")
+hf.fill(["0x1000-0x10ff"], pattern=b"\xff")
+hf.cut(["0x1080-0x108f"])
 hf.write_srec("output.s19")
 ```
 

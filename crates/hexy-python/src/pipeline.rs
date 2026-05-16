@@ -185,6 +185,7 @@ impl PyPipeline {
         }));
     }
 
+    #[pyo3(signature = (range, target=None))]
     fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
         self.dspic_expand_ops.push(PipelineOp::DspicExpand {
             range: parse_range_arg(range)?,
@@ -193,6 +194,7 @@ impl PyPipeline {
         Ok(())
     }
 
+    #[pyo3(signature = (range, target=None))]
     fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
         self.dspic_shrink_ops.push(PipelineOp::DspicShrink {
             range: parse_range_arg(range)?,

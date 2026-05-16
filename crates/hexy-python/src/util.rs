@@ -5,8 +5,6 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use crate::types::PyAddressRange;
-
 pub(crate) fn value_error(err: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
@@ -16,31 +14,39 @@ pub(crate) fn parse_error(err: ParseError) -> PyErr {
 }
 
 pub(crate) fn parse_range_arg(obj: &Bound<'_, PyAny>) -> PyResult<AddressRange> {
-    if let Ok(range) = obj.extract::<PyRef<'_, PyAddressRange>>() {
-        return Ok(range.inner);
-    }
     if let Ok(text) = obj.extract::<String>() {
-        return text.parse::<AddressRange>().map_err(value_error);
+        return parse_single_range_text(&text);
     }
-    Err(PyTypeError::new_err(
-        "expected AddressRange or range string",
-    ))
+    Err(PyTypeError::new_err("expected range string"))
 }
 
 pub(crate) fn parse_ranges_arg(obj: &Bound<'_, PyAny>) -> PyResult<Vec<AddressRange>> {
-    if let Ok(text) = obj.extract::<String>() {
-        return parse_compat_ranges(&text).map_err(value_error);
+    if obj.extract::<String>().is_ok() {
+        return Err(PyTypeError::new_err(
+            "expected a list of range strings, not a single range string",
+        ));
     }
-    if let Ok(range) = parse_range_arg(obj) {
-        return Ok(vec![range]);
-    }
-    let items = obj.try_iter()?;
+    let items = obj
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("expected a list of range strings"))?;
     items
         .map(|item| {
             let item = item?;
             parse_range_arg(&item)
         })
         .collect()
+}
+
+fn parse_single_range_text(text: &str) -> PyResult<AddressRange> {
+    let ranges = parse_compat_ranges(text).map_err(value_error)?;
+    let count = ranges.len();
+    if count == 1 {
+        Ok(ranges[0])
+    } else {
+        Err(PyValueError::new_err(format!(
+            "expected a single range, got {count} ranges"
+        )))
+    }
 }
 
 pub(crate) fn parse_fill_pattern(pattern: Option<&[u8]>) -> PyResult<Vec<u8>> {

@@ -361,12 +361,14 @@ impl PyHexFile {
             .map_err(value_error)
     }
 
+    #[pyo3(signature = (range, target=None))]
     fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
         self.inner
             .dspic_expand(parse_range_arg(range)?, target)
             .map_err(value_error)
     }
 
+    #[pyo3(signature = (range, target=None))]
     fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
         self.inner
             .dspic_shrink(parse_range_arg(range)?, target)

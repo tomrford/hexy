@@ -1,10 +1,9 @@
-from collections.abc import Iterable
 from os import PathLike
 from typing import Literal
 
 Pathish = str | bytes | PathLike[str] | PathLike[bytes]
-RangeLike = "AddressRange | str"
-RangesLike = RangeLike | Iterable[RangeLike]
+RangeLike = str
+RangesLike = list[str]
 MergeMode = Literal["overwrite", "opaque", "preserve", "transparent"]
 SwapMode = Literal["word", "swapword", "dword", "long", "swaplong"]
 IntelHexMode = Literal["auto", "linear", "extended_linear", "segment", "extended_segment"]
