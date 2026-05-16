@@ -240,6 +240,10 @@ jobs:
           working-directory: crates/hexy-py
           args: --release --out ../../dist
 
+      - name: Fix Linux dist permissions
+        if: runner.os == 'Linux'
+        run: sudo chown -R "$USER":"$USER" dist
+
       - name: Build native wheel
         if: runner.os != 'Linux'
         shell: bash
