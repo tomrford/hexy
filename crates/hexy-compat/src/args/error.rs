@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use super::types::ParseArgError;
-use hexy_core::SignatureError;
 use hexy_core::ops::LogError;
+use hexy_core::{FileIoError, SignatureError};
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -18,6 +18,8 @@ pub enum CliError {
     Signature(#[from] SignatureError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    FileIo(#[from] FileIoError),
     #[error("{0}")]
     Unsupported(String),
     #[error("{0}")]

@@ -6,6 +6,7 @@ use hexy_core::{
 };
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::path::PathBuf;
 
 use crate::types::PySegment;
 use crate::util::{
@@ -67,6 +68,20 @@ impl PyHexFile {
     fn from_srec(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
             inner: parse_srec(data).map_err(parse_error)?,
+        })
+    }
+
+    #[staticmethod]
+    fn from_file(path: PathBuf) -> PyResult<Self> {
+        Ok(Self {
+            inner: HexFile::from_file(path).map_err(value_error)?,
+        })
+    }
+
+    #[staticmethod]
+    fn from_file_bytes(data: &[u8]) -> PyResult<Self> {
+        Ok(Self {
+            inner: HexFile::from_file_bytes(data).map_err(parse_error)?,
         })
     }
 
@@ -208,6 +223,67 @@ impl PyHexFile {
             },
         );
         py_bytes(py, &data)
+    }
+
+    #[pyo3(signature = (path, *, fill_gaps=None))]
+    fn write_binary(&self, path: PathBuf, fill_gaps: Option<u8>) -> PyResult<()> {
+        self.inner
+            .write_binary_file(&path, &BinaryWriteOptions { fill_gaps })
+            .map_err(value_error)
+    }
+
+    #[pyo3(signature = (path, *, bytes_per_line=32, mode=None))]
+    fn write_intel_hex(
+        &self,
+        path: PathBuf,
+        bytes_per_line: u8,
+        mode: Option<&str>,
+    ) -> PyResult<()> {
+        self.inner
+            .write_intel_hex_file(
+                &path,
+                &IntelHexWriteOptions {
+                    bytes_per_line,
+                    mode: parse_intel_mode(mode)?,
+                },
+            )
+            .map_err(value_error)
+    }
+
+    #[pyo3(signature = (path, *, bytes_per_line=16, record_type=None))]
+    fn write_srec(
+        &self,
+        path: PathBuf,
+        bytes_per_line: u8,
+        record_type: Option<&str>,
+    ) -> PyResult<()> {
+        self.inner
+            .write_srec_file(
+                &path,
+                &SRecordWriteOptions {
+                    bytes_per_line,
+                    record_type: parse_srec_type(record_type)?,
+                },
+            )
+            .map_err(value_error)
+    }
+
+    #[pyo3(signature = (path, *, line_length=16, separator=None))]
+    fn write_hex_ascii(
+        &self,
+        path: PathBuf,
+        line_length: usize,
+        separator: Option<String>,
+    ) -> PyResult<()> {
+        self.inner
+            .write_hex_ascii_file(
+                &path,
+                &HexAsciiWriteOptions {
+                    line_length,
+                    separator,
+                },
+            )
+            .map_err(value_error)
     }
 
     fn filter(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {

@@ -74,15 +74,15 @@ The repo is structured so additional frontends can consume `hexy-core` without f
 
 ## Python bindings
 
-The Python package is an in-memory API over `hexy-core`. It exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, and the main memory operations used by the compat CLI.
+The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, and the main memory operations used by the compat CLI.
 
 ```python
 import hexy
 
-hf = hexy.HexFile.from_intel_hex(data)
+hf = hexy.HexFile.from_file("input.hex")
 hf.fill("0x1000-0x10ff", pattern=b"\xff")
 hf.cut("0x1080-0x108f")
-out = hf.to_srec()
+hf.write_srec("output.s19")
 ```
 
 Use `Pipeline` for reusable recipes. It applies operations in hexy CLI compatibility order, not in the order methods are called. For custom operation ordering, call methods directly on `HexFile`.

@@ -1,6 +1,31 @@
 import hexy
 
 
+def test_file_autodetect_and_write_helpers(tmp_path):
+    source = hexy.HexFile.from_binary(b"\xDE\xAD\xBE\xEF", 0x1000)
+    intel_path = tmp_path / "firmware.hex"
+    source.write_intel_hex(intel_path)
+
+    from_path = hexy.HexFile.from_file(intel_path)
+    assert from_path.read(0x1000, 4) == b"\xDE\xAD\xBE\xEF"
+
+    from_bytes = hexy.HexFile.from_file_bytes(intel_path.read_bytes())
+    assert from_bytes.read(0x1000, 4) == b"\xDE\xAD\xBE\xEF"
+
+    srec_path = tmp_path / "firmware.s19"
+    binary_path = tmp_path / "firmware.bin"
+    ascii_path = tmp_path / "firmware.txt"
+    from_path.write_srec(srec_path)
+    from_path.write_binary(binary_path)
+    from_path.write_hex_ascii(ascii_path, separator=", ")
+
+    assert hexy.HexFile.from_file(srec_path).read(0x1000, 4) == b"\xDE\xAD\xBE\xEF"
+    assert binary_path.read_bytes() == b"\xDE\xAD\xBE\xEF"
+    assert hexy.HexFile.from_hex_ascii(ascii_path.read_bytes(), 0x1000).read(
+        0x1000, 4
+    ) == b"\xDE\xAD\xBE\xEF"
+
+
 def test_segments_preserve_raw_order_and_normalize_last_wins():
     hf = hexy.HexFile.from_segments(
         [
