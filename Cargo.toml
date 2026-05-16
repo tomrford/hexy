@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/hexy-core", "crates/hexy-compat", "crates/hexy-python"]
+members = ["crates/hexy-core", "crates/hexy-compat", "crates/hexy-py"]
 resolver = "2"
 
 [workspace.package]

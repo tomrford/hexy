@@ -8,4 +8,6 @@
 reference
 scratchpad
 **/__pycache__
+.venv
+**/.venv
 validation/
