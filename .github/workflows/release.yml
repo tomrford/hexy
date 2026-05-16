@@ -4,15 +4,9 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to build (e.g., v1.0.0)"
-        required: true
-        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
@@ -21,17 +15,71 @@ jobs:
   create-release:
     name: Create release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       GH_REPO: ${{ github.repository }}
     outputs:
       tag_name: ${{ steps.tag.outputs.tag_name }}
+      version: ${{ steps.metadata.outputs.version }}
     steps:
+      - name: Checkout source code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Install Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag is on main
+        shell: bash
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
       - name: Resolve tag
         id: tag
         shell: bash
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must match vX.Y.Z, got $TAG." >&2
+            exit 1
+          fi
           echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version metadata
+        id: metadata
+        shell: bash
+        run: |
+          TAG="${{ steps.tag.outputs.tag_name }}"
+          VERSION="${TAG#v}"
+          WORKSPACE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-core") | .version')"
+          COMPAT_CORE_REQ="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .dependencies[] | select(.name == "hexy-core") | .req')"
+          PY_CORE_REQ="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-py") | .dependencies[] | select(.name == "hexy-core") | .req')"
+          PY_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("crates/hexy-py/pyproject.toml", "rb"))["project"]["version"])')"
+
+          if [[ "$WORKSPACE_VERSION" != "$VERSION" ]]; then
+            echo "Tag $TAG does not match workspace version $WORKSPACE_VERSION." >&2
+            exit 1
+          fi
+          if [[ "$COMPAT_CORE_REQ" != "^$VERSION" || "$PY_CORE_REQ" != "^$VERSION" ]]; then
+            echo "Internal hexy-core dependency versions must match ^$VERSION." >&2
+            echo "hexy-compat requires $COMPAT_CORE_REQ; hexy-py requires $PY_CORE_REQ." >&2
+            exit 1
+          fi
+          if [[ "$PY_VERSION" != "$VERSION" ]]; then
+            echo "Python project version $PY_VERSION does not match tag $TAG." >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Ensure release exists
         shell: bash
@@ -49,6 +97,8 @@ jobs:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
     needs: create-release
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -72,9 +122,9 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v5
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ needs.create-release.outputs.tag_name }}
 
       - name: Extract crate metadata
         shell: bash
@@ -83,13 +133,13 @@ jobs:
           echo "PROJECT_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .version')" >> $GITHUB_ENV
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: ${{ matrix.job.target }}
 
       - name: Install cross
         if: matrix.job.use-cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@3771e22aa892e03fd35585fae288baad1755695c
         with:
           tool: cross
 
@@ -167,15 +217,15 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v5
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ needs.create-release.outputs.tag_name }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.10"
 
@@ -183,17 +233,56 @@ jobs:
         shell: bash
         run: python -m pip install --upgrade uv
 
-      - name: Build Python distributions
+      - name: Build Linux wheel
+        if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@12dee64e4a21f3a4a4fd4d34e05cc55f0eda098a
+        with:
+          command: build
+          manylinux: "2014"
+          working-directory: crates/hexy-py
+          args: --release --out ../../dist
+
+      - name: Fix Linux dist permissions
+        if: runner.os == 'Linux'
+        run: sudo chown -R "$USER":"$USER" dist
+
+      - name: Build native wheel
+        if: runner.os != 'Linux'
+        shell: bash
+        run: uv run --directory crates/hexy-py --group dev maturin build --release --compatibility pypi --out ../../dist
+
+      - name: Build source distribution
+        if: matrix.job.sdist
+        shell: bash
+        run: uv run --directory crates/hexy-py --group dev maturin sdist --out ../../dist
+
+      - name: Test built wheel
         shell: bash
         run: |
-          BUILD_ARGS=(--release --compatibility pypi --out ../../dist)
-          if [[ "${{ matrix.job.sdist }}" == "true" ]]; then
-            BUILD_ARGS+=(--sdist)
+          WHEEL="$(find dist -maxdepth 1 -name '*.whl' | head -n 1)"
+          uv venv .venv-wheel
+          PYTHON=.venv-wheel/bin/python
+          if [[ ! -x "$PYTHON" ]]; then
+            PYTHON=.venv-wheel/Scripts/python.exe
           fi
-          uv run --directory crates/hexy-py --group dev maturin build "${BUILD_ARGS[@]}"
+          uv pip install --python "$PYTHON" "$WHEEL" pytest
+          "$PYTHON" -m pytest crates/hexy-py/tests
+
+      - name: Test source distribution
+        if: matrix.job.sdist
+        shell: bash
+        run: |
+          SDIST="$(find dist -maxdepth 1 -name '*.tar.gz' | head -n 1)"
+          uv venv .venv-sdist
+          PYTHON=.venv-sdist/bin/python
+          if [[ ! -x "$PYTHON" ]]; then
+            PYTHON=.venv-sdist/Scripts/python.exe
+          fi
+          uv pip install --python "$PYTHON" "$SDIST" pytest
+          "$PYTHON" -m pytest crates/hexy-py/tests
 
       - name: Upload Python distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: python-dist-${{ matrix.job.name }}
           path: dist/*
@@ -202,7 +291,7 @@ jobs:
   publish-crates:
     name: Publish crates
     runs-on: ubuntu-latest
-    needs: build-release
+    needs: [create-release, build-release]
     environment: crates
     permissions:
       contents: read
@@ -210,18 +299,18 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v5
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ needs.create-release.outputs.tag_name }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Extract workspace version
         id: metadata
         shell: bash
         run: |
-          echo "version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-core") | .version')" >> "$GITHUB_OUTPUT"
+          echo "version=${{ needs.create-release.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Check hexy-core publish status
         id: core_status
@@ -250,7 +339,7 @@ jobs:
       - name: Authenticate with crates.io
         if: steps.core_status.outputs.published != 'true' || steps.compat_status.outputs.published != 'true'
         id: auth
-        uses: rust-lang/crates-io-auth-action@v1.0.4
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe
 
       - name: Check hexy-core package
         if: steps.core_status.outputs.published != 'true'
@@ -298,14 +387,14 @@ jobs:
 
     steps:
       - name: Download Python distributions
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
           pattern: python-dist-*
           path: dist
           merge-multiple: true
 
       - name: Publish Python distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
         with:
           packages-dir: dist/
           skip-existing: true
