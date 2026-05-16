@@ -11,6 +11,7 @@ Current packages:
 
 ```bash
 cargo install hexy-compat
+pip install hexy-py
 ```
 
 ## Quick examples

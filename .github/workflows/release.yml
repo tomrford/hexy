@@ -152,6 +152,53 @@ jobs:
           TAG="${{ needs.create-release.outputs.tag_name }}"
           gh release upload "$TAG" "${{ env.PKG_PATH }}" "${{ env.PKG_CHECKSUM }}" --clobber
 
+  build-python:
+    name: Python ${{ matrix.job.name }}
+    runs-on: ${{ matrix.job.os }}
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { name: linux-x86_64, os: ubuntu-latest, sdist: true }
+          - { name: macos-x86_64, os: macos-15-intel, sdist: false }
+          - { name: macos-aarch64, os: macos-latest, sdist: false }
+          - { name: windows-x86_64, os: windows-latest, sdist: false }
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        shell: bash
+        run: python -m pip install --upgrade uv
+
+      - name: Build Python distributions
+        shell: bash
+        run: |
+          BUILD_ARGS=(--release --compatibility pypi --out ../../dist)
+          if [[ "${{ matrix.job.sdist }}" == "true" ]]; then
+            BUILD_ARGS+=(--sdist)
+          fi
+          uv run --directory crates/hexy-py --group dev maturin build "${BUILD_ARGS[@]}"
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist-${{ matrix.job.name }}
+          path: dist/*
+          if-no-files-found: error
+
   publish-crates:
     name: Publish crates
     runs-on: ubuntu-latest
@@ -239,3 +286,26 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --locked -p hexy-compat
+
+  publish-pypi:
+    name: Publish PyPI package
+    runs-on: ubuntu-latest
+    needs: [build-python, publish-crates]
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download Python distributions
+        uses: actions/download-artifact@v5
+        with:
+          pattern: python-dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish Python distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
