@@ -9,8 +9,8 @@ use pyo3::types::PyBytes;
 
 use crate::types::PySegment;
 use crate::util::{
-    parse_error, parse_intel_mode, parse_merge_mode, parse_range_arg, parse_ranges_arg,
-    parse_srec_type, parse_swap_mode, py_bytes, value_error,
+    parse_error, parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_range_arg,
+    parse_ranges_arg, parse_srec_type, parse_swap_mode, py_bytes, value_error,
 };
 
 #[pyclass(name = "HexFile", skip_from_py_object)]
@@ -230,7 +230,7 @@ impl PyHexFile {
         self.inner.fill_ranges(
             &parse_ranges_arg(ranges)?,
             &FillOptions {
-                pattern: pattern.unwrap_or(&[0xFF]).to_vec(),
+                pattern: parse_fill_pattern(pattern)?,
                 overwrite,
             },
         );

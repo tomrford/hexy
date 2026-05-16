@@ -1,4 +1,6 @@
-use hexy_core::{AddressRange, IntelHexMode, MergeMode, ParseError, SRecordType, SwapMode};
+use hexy_core::{
+    AddressRange, IntelHexMode, MergeMode, ParseError, SRecordType, SwapMode, parse_compat_ranges,
+};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -26,6 +28,9 @@ pub(crate) fn parse_range_arg(obj: &Bound<'_, PyAny>) -> PyResult<AddressRange> 
 }
 
 pub(crate) fn parse_ranges_arg(obj: &Bound<'_, PyAny>) -> PyResult<Vec<AddressRange>> {
+    if let Ok(text) = obj.extract::<String>() {
+        return parse_compat_ranges(&text).map_err(value_error);
+    }
     if let Ok(range) = parse_range_arg(obj) {
         return Ok(vec![range]);
     }
@@ -36,6 +41,14 @@ pub(crate) fn parse_ranges_arg(obj: &Bound<'_, PyAny>) -> PyResult<Vec<AddressRa
             parse_range_arg(&item)
         })
         .collect()
+}
+
+pub(crate) fn parse_fill_pattern(pattern: Option<&[u8]>) -> PyResult<Vec<u8>> {
+    let pattern = pattern.unwrap_or(&[0xFF]);
+    if pattern.is_empty() {
+        return Err(PyValueError::new_err("fill pattern cannot be empty"));
+    }
+    Ok(pattern.to_vec())
 }
 
 pub(crate) fn parse_merge_mode(mode: Option<&str>) -> PyResult<MergeMode> {

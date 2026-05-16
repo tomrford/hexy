@@ -6,7 +6,8 @@ use pyo3::prelude::*;
 
 use crate::hexfile::PyHexFile;
 use crate::util::{
-    parse_merge_mode, parse_range_arg, parse_ranges_arg, parse_swap_mode, value_error,
+    parse_fill_pattern, parse_merge_mode, parse_range_arg, parse_ranges_arg, parse_swap_mode,
+    value_error,
 };
 
 #[derive(Clone)]
@@ -92,14 +93,23 @@ fn apply_ops(source: &PyHexFile, ops: &[PipelineOp]) -> PyResult<PyHexFile> {
 #[pyclass(name = "Pipeline", skip_from_py_object)]
 #[derive(Clone, Default)]
 pub(crate) struct PyPipeline {
-    map_ops: Vec<PipelineOp>,
-    dspic_ops: Vec<PipelineOp>,
+    map_star12_ops: Vec<PipelineOp>,
+    map_star12x_ops: Vec<PipelineOp>,
+    map_star08_ops: Vec<PipelineOp>,
+    remap_ops: Vec<PipelineOp>,
+    dspic_expand_ops: Vec<PipelineOp>,
+    dspic_shrink_ops: Vec<PipelineOp>,
+    dspic_clear_ghost_ops: Vec<PipelineOp>,
     fill_ops: Vec<PipelineOp>,
     cut_ops: Vec<PipelineOp>,
     merge_mode: Option<MergeMode>,
     merge_ops: Vec<PipelineOp>,
     filter_ops: Vec<PipelineOp>,
-    finish_ops: Vec<PipelineOp>,
+    fill_gap_ops: Vec<PipelineOp>,
+    align_ops: Vec<PipelineOp>,
+    split_ops: Vec<PipelineOp>,
+    swap_word_ops: Vec<PipelineOp>,
+    swap_dword_ops: Vec<PipelineOp>,
 }
 
 #[pymethods]
@@ -110,13 +120,22 @@ impl PyPipeline {
     }
 
     fn __len__(&self) -> usize {
-        self.map_ops.len()
-            + self.dspic_ops.len()
+        self.map_star12_ops.len()
+            + self.map_star12x_ops.len()
+            + self.map_star08_ops.len()
+            + self.remap_ops.len()
+            + self.dspic_expand_ops.len()
+            + self.dspic_shrink_ops.len()
+            + self.dspic_clear_ghost_ops.len()
             + self.fill_ops.len()
             + self.cut_ops.len()
             + self.merge_ops.len()
             + self.filter_ops.len()
-            + self.finish_ops.len()
+            + self.fill_gap_ops.len()
+            + self.align_ops.len()
+            + self.split_ops.len()
+            + self.swap_word_ops.len()
+            + self.swap_dword_ops.len()
     }
 
     fn clear(&mut self) {
@@ -125,30 +144,39 @@ impl PyPipeline {
 
     fn apply(&self, source: PyRef<'_, PyHexFile>) -> PyResult<PyHexFile> {
         let mut ordered = Vec::with_capacity(self.__len__());
-        ordered.extend_from_slice(&self.map_ops);
-        ordered.extend_from_slice(&self.dspic_ops);
+        ordered.extend_from_slice(&self.map_star12_ops);
+        ordered.extend_from_slice(&self.map_star12x_ops);
+        ordered.extend_from_slice(&self.map_star08_ops);
+        ordered.extend_from_slice(&self.remap_ops);
+        ordered.extend_from_slice(&self.dspic_expand_ops);
+        ordered.extend_from_slice(&self.dspic_shrink_ops);
+        ordered.extend_from_slice(&self.dspic_clear_ghost_ops);
         ordered.extend_from_slice(&self.fill_ops);
         ordered.extend_from_slice(&self.cut_ops);
         ordered.extend_from_slice(&self.merge_ops);
         ordered.extend_from_slice(&self.filter_ops);
-        ordered.extend_from_slice(&self.finish_ops);
+        ordered.extend_from_slice(&self.fill_gap_ops);
+        ordered.extend_from_slice(&self.align_ops);
+        ordered.extend_from_slice(&self.split_ops);
+        ordered.extend_from_slice(&self.swap_word_ops);
+        ordered.extend_from_slice(&self.swap_dword_ops);
         apply_ops(&source, &ordered)
     }
 
     fn map_star12(&mut self) {
-        self.map_ops.push(PipelineOp::MapStar12);
+        self.map_star12_ops.push(PipelineOp::MapStar12);
     }
 
     fn map_star12x(&mut self) {
-        self.map_ops.push(PipelineOp::MapStar12x);
+        self.map_star12x_ops.push(PipelineOp::MapStar12x);
     }
 
     fn map_star08(&mut self) {
-        self.map_ops.push(PipelineOp::MapStar08);
+        self.map_star08_ops.push(PipelineOp::MapStar08);
     }
 
     fn remap(&mut self, start: u32, end: u32, linear: u32, size: u32, inc: u32) {
-        self.map_ops.push(PipelineOp::Remap(RemapOptions {
+        self.remap_ops.push(PipelineOp::Remap(RemapOptions {
             start,
             end,
             linear,
@@ -158,7 +186,7 @@ impl PyPipeline {
     }
 
     fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        self.dspic_ops.push(PipelineOp::DspicExpand {
+        self.dspic_expand_ops.push(PipelineOp::DspicExpand {
             range: parse_range_arg(range)?,
             target,
         });
@@ -166,7 +194,7 @@ impl PyPipeline {
     }
 
     fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        self.dspic_ops.push(PipelineOp::DspicShrink {
+        self.dspic_shrink_ops.push(PipelineOp::DspicShrink {
             range: parse_range_arg(range)?,
             target,
         });
@@ -174,7 +202,7 @@ impl PyPipeline {
     }
 
     fn dspic_clear_ghost(&mut self, range: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.dspic_ops
+        self.dspic_clear_ghost_ops
             .push(PipelineOp::DspicClearGhost(parse_range_arg(range)?));
         Ok(())
     }
@@ -189,7 +217,7 @@ impl PyPipeline {
         self.fill_ops.push(PipelineOp::Fill {
             ranges: parse_ranges_arg(ranges)?,
             options: FillOptions {
-                pattern: pattern.unwrap_or(&[0xFF]).to_vec(),
+                pattern: parse_fill_pattern(pattern)?,
                 overwrite,
             },
         });
@@ -238,12 +266,12 @@ impl PyPipeline {
 
     #[pyo3(signature = (*, fill=0xFF))]
     fn fill_gaps(&mut self, fill: u8) {
-        self.finish_ops.push(PipelineOp::FillGaps(fill));
+        self.fill_gap_ops.push(PipelineOp::FillGaps(fill));
     }
 
     #[pyo3(signature = (alignment, *, fill=0xFF, length=false))]
     fn align(&mut self, alignment: u32, fill: u8, length: bool) {
-        self.finish_ops.push(PipelineOp::Align(AlignOptions {
+        self.align_ops.push(PipelineOp::Align(AlignOptions {
             alignment,
             fill_byte: fill,
             align_length: length,
@@ -251,12 +279,14 @@ impl PyPipeline {
     }
 
     fn split(&mut self, max_size: u32) {
-        self.finish_ops.push(PipelineOp::Split(max_size));
+        self.split_ops.push(PipelineOp::Split(max_size));
     }
 
     fn swap(&mut self, mode: &str) -> PyResult<()> {
-        self.finish_ops
-            .push(PipelineOp::Swap(parse_swap_mode(mode)?));
+        match parse_swap_mode(mode)? {
+            SwapMode::Word => self.swap_word_ops.push(PipelineOp::Swap(SwapMode::Word)),
+            SwapMode::DWord => self.swap_dword_ops.push(PipelineOp::Swap(SwapMode::DWord)),
+        }
         Ok(())
     }
 }

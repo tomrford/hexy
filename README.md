@@ -86,3 +86,5 @@ out = hf.to_srec()
 ```
 
 Use `Pipeline` for reusable recipes. It applies operations in hexy CLI compatibility order, not in the order methods are called. For custom operation ordering, call methods directly on `HexFile`.
+
+Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span.

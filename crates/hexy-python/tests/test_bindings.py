@@ -50,6 +50,33 @@ def test_memory_operations_cover_filter_cut_fill_merge_align_split_swap():
     assert hf.read(0x1004, 4) == b"\xFF\xFF\xFF\xFF"
 
 
+def test_empty_fill_pattern_is_rejected():
+    hf = hexy.HexFile.from_binary(b"\x00", 0x1000)
+
+    try:
+        hf.fill("0x1000-0x1000", pattern=b"")
+    except ValueError as error:
+        assert "fill pattern cannot be empty" in str(error)
+    else:
+        raise AssertionError("expected empty fill pattern to be rejected")
+
+    pipeline = hexy.Pipeline()
+    try:
+        pipeline.fill("0x1000-0x1000", pattern=b"")
+    except ValueError as error:
+        assert "fill pattern cannot be empty" in str(error)
+    else:
+        raise AssertionError("expected empty pipeline fill pattern to be rejected")
+
+
+def test_range_list_strings_use_compat_range_parser():
+    hf = hexy.HexFile.from_binary(bytes(range(8)), 0x1000)
+
+    hf.cut("'0x1001-0x1002:0x1005-0x1006'")
+
+    assert hf.read_sparse(0x1000, 8) == [0, None, None, 3, 4, None, None, 7]
+
+
 def test_pipeline_uses_compat_operation_order():
     hf = hexy.HexFile.from_binary(b"\x00\x01\x02\x03", 0x1000)
     pipeline = hexy.Pipeline()
@@ -59,6 +86,39 @@ def test_pipeline_uses_compat_operation_order():
     out = pipeline.apply(hf)
 
     assert out.read(0x1000, 4) == b"\x00\xFF\xFF\x03"
+
+
+def test_pipeline_orders_align_before_swap_even_when_called_late():
+    hf = hexy.HexFile.from_binary(b"\x01\x02\x03", 0x1001)
+    pipeline = hexy.Pipeline()
+    pipeline.swap("word")
+    pipeline.align(4, fill=0x00, length=True)
+
+    out = pipeline.apply(hf)
+
+    assert out.read(0x1000, 4) == b"\x01\x00\x03\x02"
+
+
+def test_pipeline_orders_mapping_variants_before_remap():
+    hf = hexy.HexFile.from_binary(b"\xAA", 0x4000)
+    pipeline = hexy.Pipeline()
+    pipeline.remap(0x104000, 0x104000, 0x200000, 0x1000, 0x1000)
+    pipeline.map_star08()
+
+    out = pipeline.apply(hf)
+
+    assert out.read(0x200000, 1) == b"\xAA"
+
+
+def test_pipeline_orders_dspic_expand_before_shrink():
+    hf = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
+    pipeline = hexy.Pipeline()
+    pipeline.dspic_shrink("0x2000-0x2003", 0x3000)
+    pipeline.dspic_expand("0x1000-0x1001", 0x2000)
+
+    out = pipeline.apply(hf)
+
+    assert out.read(0x3000, 2) == b"\x01\x02"
 
 
 def test_compat_pipeline_rejects_mixed_merge_modes():
