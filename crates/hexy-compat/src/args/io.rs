@@ -292,7 +292,11 @@ pub(super) fn write_ford_ihex_output(
         hexfile.clone()
     };
 
-    let header = build_ford_header(args, hexfile, output_path, &ini)?;
+    let header = if ini.is_empty() {
+        build_minimal_ford_header(output_path)
+    } else {
+        build_ford_header(args, hexfile, output_path, &ini)?
+    };
     let options = crate::IntelHexWriteOptions {
         bytes_per_line: args.bytes_per_line.unwrap_or(32),
         mode: crate::IntelHexMode::Auto,
@@ -458,6 +462,15 @@ fn build_ford_header(
 
     lines.push("$".to_owned());
     Ok(lines.join("\n") + "\n")
+}
+
+fn build_minimal_ford_header(output_path: &Path) -> String {
+    let file_name = output_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output.hex");
+    let release_date = current_date_mmddyyyy().unwrap_or_else(|| "01/01/1970".to_owned());
+    format!("FILE NAME>{file_name}\nRELEASE DATE>{release_date}\n")
 }
 
 fn normalize_crlf(text: &str) -> String {
@@ -677,8 +690,13 @@ mod tests {
         let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
         assert!(result.is_ok(), "{result:?}");
         let text = fs::read_to_string(&output).unwrap();
-        assert!(text.contains("FILE NAME>ford.hex"));
-        assert!(text.contains(":00000001FF"));
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "FILE NAME>ford.hex");
+        assert!(lines[1].starts_with("RELEASE DATE>"));
+        assert_eq!(lines[2], ":00000001FF");
+        assert!(!text.contains("APPLICATION>"));
+        assert!(!text.contains("FILE CHECKSUM>"));
         assert!(!text.contains(":0110000001EE"));
 
         let _ = fs::remove_dir_all(dir);
