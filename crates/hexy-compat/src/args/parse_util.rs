@@ -308,6 +308,7 @@ fn parse_placement_target(target: &str) -> Result<ChecksumTarget, ParseArgError>
         "APPEND" => Ok(ChecksumTarget::Append),
         "BEGIN" => Ok(ChecksumTarget::Begin),
         "UPFRONT" => Ok(ChecksumTarget::Prepend),
+        "PREPEND" => Ok(ChecksumTarget::Address(0)),
         "END" => Ok(ChecksumTarget::OverwriteEnd),
         _ => Ok(ChecksumTarget::Address(parse_number(target)?)),
     }
@@ -389,8 +390,9 @@ pub(super) fn parse_dspic_op(s: &str) -> Result<DspicOp, ParseArgError> {
             target: Some(target),
         })
     } else {
+        let range_str = s.split_once(':').map_or(s, |(range, _)| range);
         Ok(DspicOp {
-            range: parse_single_compat_range(s, "dsPIC range")?,
+            range: parse_single_compat_range(range_str, "dsPIC range")?,
             target: None,
         })
     }

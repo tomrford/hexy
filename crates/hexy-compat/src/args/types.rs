@@ -50,6 +50,7 @@ pub struct Args {
 
     // Address range filter: /AR:'range'
     pub address_range: Vec<AddressRange>,
+    pub address_range_empty_output: bool,
 
     // Log file: /L:file
     pub log_file: Option<PathBuf>,

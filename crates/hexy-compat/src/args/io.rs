@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::{collections::HashMap, io};
 
-use crate::HexFile;
+use crate::{DEFAULT_SREC_BYTES_PER_LINE, HexFile};
 
 use super::error::CliError;
 use super::ini::load_ini;
@@ -29,6 +30,17 @@ impl ReadProvider for FsProvider {
 pub(super) fn load_input(provider: &impl ReadProvider, path: &Path) -> Result<HexFile, CliError> {
     let content = provider.read_bytes(path)?;
     Ok(crate::parse_auto(&content)?)
+}
+
+fn load_ini_or_empty(
+    path: &Path,
+    provider: &impl ReadProvider,
+) -> Result<HashMap<String, String>, CliError> {
+    match load_ini(path, provider) {
+        Ok(ini) => Ok(ini),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub(super) fn load_binary_input(
@@ -112,7 +124,7 @@ pub(super) fn write_output(
                 None => None,
                 Some(0) => Some(crate::SRecordType::S1),
                 Some(1) => Some(crate::SRecordType::S2),
-                Some(2) => Some(crate::SRecordType::S3),
+                Some(2 | 3) => Some(crate::SRecordType::S3),
                 Some(other) => {
                     return Err(CliError::Other(format!(
                         "unsupported S-Record type {other}"
@@ -120,7 +132,7 @@ pub(super) fn write_output(
                 }
             };
             let options = crate::SRecordWriteOptions {
-                bytes_per_line: bytes_per_line.unwrap_or(16),
+                bytes_per_line: bytes_per_line.unwrap_or(DEFAULT_SREC_BYTES_PER_LINE),
                 record_type,
             };
             hexfile.write_srec_file(path, &options)?;
@@ -198,7 +210,7 @@ pub(super) fn write_c_code_output(
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let ini_path = resolve_ini_path(args)?;
-    let ini = load_ini(&ini_path, provider)?;
+    let ini = load_ini_or_empty(&ini_path, provider)?;
 
     let prefix = ini
         .get("prefix")
@@ -276,14 +288,22 @@ pub(super) fn write_ford_ihex_output(
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let ini_path = resolve_ini_path(args)?;
-    let ini = load_ini(&ini_path, provider)?;
-
-    let header = build_ford_header(args, hexfile, output_path, &ini)?;
+    let ini = load_ini_or_empty(&ini_path, provider)?;
+    let has_complete_header = has_complete_ford_header(&ini);
+    let header = if has_complete_header {
+        build_ford_header(args, hexfile, output_path, &ini)?
+    } else {
+        build_minimal_ford_header(output_path)
+    };
     let options = crate::IntelHexWriteOptions {
         bytes_per_line: args.bytes_per_line.unwrap_or(32),
         mode: crate::IntelHexMode::Auto,
     };
-    let data = crate::write_intel_hex(hexfile, &options);
+    let data = if has_complete_header {
+        crate::write_intel_hex(hexfile, &options)
+    } else {
+        crate::write_intel_hex(&HexFile::new(), &options)
+    };
     let data = String::from_utf8(data)
         .map_err(|e| CliError::Other(format!("invalid Intel HEX output: {e}")))?;
 
@@ -390,7 +410,7 @@ fn build_ford_header(
 ) -> Result<String, CliError> {
     let mut lines = Vec::new();
 
-    let required = [
+    let header_fields = [
         "application",
         "mask number",
         "module type",
@@ -401,10 +421,8 @@ fn build_ford_header(
         "module name",
         "module id",
     ];
-    for key in required {
-        let value = ini
-            .get(key)
-            .ok_or_else(|| CliError::Other(format!("missing [FORDHEADER] {key}")))?;
+    for key in header_fields {
+        let value = ini.get(key).cloned().unwrap_or_default();
         lines.push(format!("{}>{}", key.to_ascii_uppercase(), value));
     }
 
@@ -446,6 +464,31 @@ fn build_ford_header(
 
     lines.push("$".to_owned());
     Ok(lines.join("\n") + "\n")
+}
+
+fn has_complete_ford_header(ini: &std::collections::HashMap<String, String>) -> bool {
+    [
+        "application",
+        "mask number",
+        "module type",
+        "production module part number",
+        "wers notice",
+        "comments",
+        "released by",
+        "module name",
+        "module id",
+    ]
+    .iter()
+    .all(|key| ini.contains_key(*key))
+}
+
+fn build_minimal_ford_header(output_path: &Path) -> String {
+    let file_name = output_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output.hex");
+    let release_date = current_date_mmddyyyy().unwrap_or_else(|| "01/01/1970".to_owned());
+    format!("FILE NAME>{file_name}\nRELEASE DATE>{release_date}\n")
 }
 
 fn normalize_crlf(text: &str) -> String {
@@ -500,12 +543,27 @@ fn byte_sum_u16(data: &[u8]) -> u16 {
 }
 
 fn current_date_mmddyyyy() -> Option<String> {
-    let output = std::process::Command::new("date")
-        .arg("+%m/%d/%Y")
-        .output()
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
-    let date = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if date.is_empty() { None } else { Some(date) }
+    let days = i64::try_from(duration.as_secs() / 86_400).ok()?;
+    let (year, month, day) = civil_from_days(days);
+    Some(format!("{month:02}/{day:02}/{year:04}"))
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    // Howard Hinnant's civil-from-days conversion, relative to the Unix epoch.
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year as i32, m as u32, d as u32)
 }
 
 fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
@@ -606,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_ford_ihex_missing_required() {
+    fn test_write_ford_ihex_allows_minimal_header() {
         let dir = unique_temp_dir();
         let ini_path = dir.join("ford.ini");
         let output = dir.join("ford.hex");
@@ -619,7 +677,50 @@ mod tests {
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
         let provider = FsProvider;
         let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
-        assert!(result.is_err());
+        assert!(result.is_ok(), "{result:?}");
+        let text = fs::read_to_string(&output).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(text.contains("FILE NAME>ford.hex"));
+        assert!(text.contains(":00000001FF"));
+        assert!(!text.contains("APPLICATION>"));
+        assert!(!text.contains("FILE CHECKSUM>"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_current_date_mmddyyyy_uses_system_time() {
+        let date = current_date_mmddyyyy().unwrap();
+        assert_eq!(date.len(), 10);
+        assert_eq!(&date[2..3], "/");
+        assert_eq!(&date[5..6], "/");
+        assert_ne!(date, "01/01/1970");
+    }
+
+    #[test]
+    fn test_write_ford_ihex_allows_missing_ini() {
+        let dir = unique_temp_dir();
+        let output = dir.join("ford.hex");
+        let missing_ini = dir.join("missing.ini");
+
+        let args = Args {
+            ini_file: Some(missing_ini),
+            ..Args::default()
+        };
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+        let provider = FsProvider;
+        let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
+        assert!(result.is_ok(), "{result:?}");
+        let text = fs::read_to_string(&output).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "FILE NAME>ford.hex");
+        assert!(lines[1].starts_with("RELEASE DATE>"));
+        assert_eq!(lines[2], ":00000001FF");
+        assert!(!text.contains("APPLICATION>"));
+        assert!(!text.contains("FILE CHECKSUM>"));
+        assert!(!text.contains(":0110000001EE"));
 
         let _ = fs::remove_dir_all(dir);
     }

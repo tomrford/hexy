@@ -184,7 +184,9 @@ impl Args {
             self.wrap_error("/MO", hexfile.merge(&other, &options))?;
         }
 
-        if !self.address_range.is_empty() {
+        if self.address_range_empty_output {
+            hexfile.filter_ranges(&[]);
+        } else if !self.address_range.is_empty() {
             hexfile.filter_ranges(&self.address_range);
         }
 
@@ -201,16 +203,24 @@ impl Args {
         }
 
         if self.fill_all {
-            hexfile.fill_gaps(self.align_fill);
+            hexfile.fill_gaps(0x00);
         }
 
         if let Some(alignment) = self.align_address {
             let options = AlignOptions {
                 alignment,
                 fill_byte: self.align_fill,
-                align_length: self.align_length,
+                align_length: false,
             };
             self.wrap_error("/AD/AL", hexfile.align(&options))?;
+            if self.align_length {
+                let options = AlignOptions {
+                    alignment,
+                    fill_byte: if self.fill_all { 0x00 } else { self.align_fill },
+                    align_length: true,
+                };
+                self.wrap_error("/AD/AL", hexfile.align(&options))?;
+            }
         }
 
         if let Some(size) = self.split_block_size {
@@ -314,9 +324,9 @@ impl Args {
         if let ChecksumTarget::File(path) = &cs_params.target {
             let formatted = result
                 .iter()
-                .map(|b| format!("{:02X}", b))
+                .map(|b| format!("0x{:02X}", b))
                 .collect::<Vec<_>>()
-                .join(",");
+                .join(", ");
             self.wrap_error(&opt, std::fs::write(path, formatted))?;
         }
         Ok(result)

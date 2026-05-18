@@ -188,9 +188,9 @@ fn test_cli_checksum_parity_little_endian_file() {
         .unwrap();
     let lib_sum = bytes
         .iter()
-        .map(|b| format!("{:02X}", b))
+        .map(|b| format!("0x{:02X}", b))
         .collect::<Vec<_>>()
-        .join(",");
+        .join(", ");
 
     assert_eq!(cli_sum, lib_sum);
 }

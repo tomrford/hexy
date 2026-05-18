@@ -267,14 +267,16 @@ fn test_cli_srec_auto_and_forced() {
     let line = read_nonempty_lines(&out_large)[0].clone();
     assert!(line.starts_with("S3"));
 
-    let bad = vec![
-        format!("/IN:{};0x10000", input_mid.display()),
+    let forced_s1 = vec![
+        format!("/IN:{};0x0100", input_small.display()),
         "/XS:16:0".to_string(),
         "-o".to_string(),
         out_mid.display().to_string(),
     ];
-    let output = run_hexy(&bad);
-    assert!(!output.status.success());
+    let output = run_hexy(&forced_s1);
+    assert_success(&output);
+    let line = read_nonempty_lines(&out_mid)[0].clone();
+    assert!(line.starts_with("S1"));
 }
 
 #[test]
@@ -314,20 +316,35 @@ fn test_cli_srec_reclen() {
 }
 
 #[test]
-fn test_cli_srec_rectype_requires_reclen() {
+fn test_cli_srec_rectype_without_reclen_uses_default_length() {
     let dir = temp_dir("cli_xs_rectype_reclen");
     let input = dir.join("input.bin");
     let out = dir.join("out.s19");
-    write_file(&input, &[0xAA, 0xBB]);
+    let data: Vec<u8> = (0u8..32).collect();
+    write_file(&input, &data);
 
     let args = vec![
-        format!("/IN:{};0x0100", input.display()),
-        "/XS::2".to_string(),
+        format!("/IN:{};0x01000000", input.display()),
+        "/XS:16:2".to_string(),
         "-o".to_string(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
-    assert!(!output.status.success());
+    assert_success(&output);
+    let lines = read_nonempty_lines(&out);
+    assert_eq!(lines[0], "S31501000000000102030405060708090A0B0C0D0E0F71");
+    assert_eq!(lines[1], "S31501000010101112131415161718191A1B1C1D1E1F61");
+
+    let args_alias = vec![
+        format!("/IN:{};0x01000000", input.display()),
+        "/XS:16:3".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args_alias);
+    assert_success(&output);
+    let lines = read_nonempty_lines(&out);
+    assert_eq!(lines[0], "S31501000000000102030405060708090A0B0C0D0E0F71");
 }
 
 #[test]
@@ -374,7 +391,7 @@ fn test_cli_srec_reclen_zero_defaults() {
     let line = data_lines[0];
     let count = u8::from_str_radix(&line[2..4], 16).unwrap() as usize;
     let data_len = count - 2 - 1; // S1 address length
-    assert_eq!(data_len, 16);
+    assert_eq!(data_len, 20);
 }
 
 #[test]

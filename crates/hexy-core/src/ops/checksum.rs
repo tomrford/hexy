@@ -327,6 +327,32 @@ impl HexFile {
                     }
                 }
             }
+            ChecksumTarget::Append => {
+                if let Some(end) = self.max_address() {
+                    let write_addr = end.checked_add(1).ok_or_else(|| {
+                        OpsError::AddressOverflow("checksum append overflows u32".into())
+                    })?;
+                    let target_range = AddressRange::from_start_length(write_addr, size).map_err(|_| {
+                        OpsError::AddressOverflow(format!(
+                            "checksum append target at {write_addr:#X} with size {size} overflows u32"
+                        ))
+                    })?;
+                    effective_options.target_exclude = Some(target_range);
+                }
+            }
+            ChecksumTarget::Prepend => {
+                if let Some(start) = self.min_address() {
+                    let write_addr = start.checked_sub(size).ok_or_else(|| {
+                        OpsError::AddressOverflow("checksum prepend underflows u32".into())
+                    })?;
+                    let target_range = AddressRange::from_start_length(write_addr, size).map_err(|_| {
+                        OpsError::AddressOverflow(format!(
+                            "checksum prepend target at {write_addr:#X} with size {size} overflows u32"
+                        ))
+                    })?;
+                    effective_options.target_exclude = Some(target_range);
+                }
+            }
             _ => {}
         }
         let result = self.calculate_checksum(&effective_options)?;
@@ -506,18 +532,18 @@ impl HexFile {
                 while addr <= r.end() {
                     let Some(seg) = segments.get(seg_idx) else {
                         let len = (r.end() - addr + 1) as usize;
-                        data.resize(data.len() + len, 0xFF);
+                        data.resize(data.len() + len, 0x00);
                         break;
                     };
                     if seg.start_address > r.end() {
                         let len = (r.end() - addr + 1) as usize;
-                        data.resize(data.len() + len, 0xFF);
+                        data.resize(data.len() + len, 0x00);
                         break;
                     }
                     if seg.start_address > addr {
                         let gap_end = seg.start_address.saturating_sub(1).min(r.end());
                         let len = (gap_end - addr + 1) as usize;
-                        data.resize(data.len() + len, 0xFF);
+                        data.resize(data.len() + len, 0x00);
                         addr = gap_end.saturating_add(1);
                         continue;
                     }
@@ -1180,7 +1206,7 @@ mod tests {
             target_exclude: None,
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        // 0x01 + 0x02 + 0xFF + 0xFF = 0x0201
+        // Compatibility: forced range gaps are filled by the requested pattern.
         assert_eq!(result, vec![0x02, 0x01]);
     }
 

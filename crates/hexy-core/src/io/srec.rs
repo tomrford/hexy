@@ -1,6 +1,8 @@
 use crate::io::{ParseError, push_crlf, push_hex_byte};
 use crate::{HexFile, Segment};
 
+pub const DEFAULT_SREC_BYTES_PER_LINE: u8 = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SRecordType {
     S1,
@@ -17,7 +19,7 @@ pub struct SRecordWriteOptions {
 impl Default for SRecordWriteOptions {
     fn default() -> Self {
         Self {
-            bytes_per_line: 16,
+            bytes_per_line: DEFAULT_SREC_BYTES_PER_LINE,
             record_type: None,
         }
     }
@@ -161,7 +163,7 @@ pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Ve
     };
 
     let bytes_per_line = if options.bytes_per_line == 0 {
-        16
+        DEFAULT_SREC_BYTES_PER_LINE
     } else {
         options.bytes_per_line
     } as usize;
