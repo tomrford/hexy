@@ -216,7 +216,7 @@ impl Args {
             if self.align_length {
                 let options = AlignOptions {
                     alignment,
-                    fill_byte: 0x00,
+                    fill_byte: if self.fill_all { 0x00 } else { self.align_fill },
                     align_length: true,
                 };
                 self.wrap_error("/AD/AL", hexfile.align(&options))?;
