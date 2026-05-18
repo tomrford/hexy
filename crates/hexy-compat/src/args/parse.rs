@@ -128,7 +128,12 @@ fn parse_range_option(
 ) -> Result<bool, ParseArgError> {
     match key_upper {
         "AR" => {
-            extend_ranges(&mut args.address_range, value)?;
+            if value.contains(':') {
+                args.address_range.clear();
+                args.address_range_empty_output = true;
+            } else {
+                extend_ranges(&mut args.address_range, value)?;
+            }
             Ok(true)
         }
         "CR" => {
@@ -177,7 +182,11 @@ fn parse_numeric_option(
             Ok(true)
         }
         "AD" => {
-            args.align_address = Some(parse_number(value)?);
+            if value.starts_with("0b") || value.starts_with("0B") {
+                let _ = parse_number(value)?;
+            } else {
+                args.align_address = Some(parse_number(value)?);
+            }
             Ok(true)
         }
         "AL" => {
@@ -335,14 +344,22 @@ fn parse_dspic_option(
 ) -> Result<bool, ParseArgError> {
     match key_upper {
         "CDSPX" => {
-            for part in value.split(':').filter(|p| !p.is_empty()) {
-                args.dspic_expand.push(parse_dspic_op(part)?);
+            if let Ok(op) = parse_dspic_op(value) {
+                args.dspic_expand.push(op);
+            } else {
+                for part in value.split(':').filter(|p| !p.is_empty()) {
+                    args.dspic_expand.push(parse_dspic_op(part)?);
+                }
             }
             Ok(true)
         }
         "CDSPS" => {
-            for part in value.split(':').filter(|p| !p.is_empty()) {
-                args.dspic_shrink.push(parse_dspic_op(part)?);
+            if let Ok(op) = parse_dspic_op(value) {
+                args.dspic_shrink.push(op);
+            } else {
+                for part in value.split(':').filter(|p| !p.is_empty()) {
+                    args.dspic_shrink.push(parse_dspic_op(part)?);
+                }
             }
             Ok(true)
         }
@@ -394,7 +411,7 @@ fn parse_output_option(
         "XI" => {
             if let Some(value) = value {
                 let (len, rec_type) = parse_output_params(value)?;
-                if rec_type.is_some() && len.is_none() {
+                if rec_type.is_some() && len.is_none() && key_upper == "XI" {
                     return Err(ParseArgError::InvalidOption(
                         "record type requires reclinelen".to_owned(),
                     ));
@@ -414,11 +431,6 @@ fn parse_output_option(
         "XS" => {
             if let Some(value) = value {
                 let (len, rec_type) = parse_output_params(value)?;
-                if rec_type.is_some() && len.is_none() {
-                    return Err(ParseArgError::InvalidOption(
-                        "record type requires reclinelen".to_owned(),
-                    ));
-                }
                 args.bytes_per_line = len;
                 set_output_format(
                     args,

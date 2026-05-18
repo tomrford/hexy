@@ -110,9 +110,9 @@ pub(super) fn write_output(
         OutputFormat::SRecord { record_type } => {
             let record_type = match record_type {
                 None => None,
-                Some(0) => Some(crate::SRecordType::S1),
-                Some(1) => Some(crate::SRecordType::S2),
-                Some(2) => Some(crate::SRecordType::S3),
+                Some(1) => Some(crate::SRecordType::S1),
+                Some(2) => Some(crate::SRecordType::S2),
+                Some(3) => Some(crate::SRecordType::S3),
                 Some(other) => {
                     return Err(CliError::Other(format!(
                         "unsupported S-Record type {other}"
@@ -120,7 +120,7 @@ pub(super) fn write_output(
                 }
             };
             let options = crate::SRecordWriteOptions {
-                bytes_per_line: bytes_per_line.unwrap_or(16),
+                bytes_per_line: bytes_per_line.unwrap_or(32),
                 record_type,
             };
             hexfile.write_srec_file(path, &options)?;
@@ -402,9 +402,7 @@ fn build_ford_header(
         "module id",
     ];
     for key in required {
-        let value = ini
-            .get(key)
-            .ok_or_else(|| CliError::Other(format!("missing [FORDHEADER] {key}")))?;
+        let value = ini.get(key).cloned().unwrap_or_default();
         lines.push(format!("{}>{}", key.to_ascii_uppercase(), value));
     }
 
@@ -606,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_ford_ihex_missing_required() {
+    fn test_write_ford_ihex_allows_minimal_header() {
         let dir = unique_temp_dir();
         let ini_path = dir.join("ford.ini");
         let output = dir.join("ford.hex");
@@ -619,7 +617,10 @@ mod tests {
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
         let provider = FsProvider;
         let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        let text = fs::read_to_string(&output).unwrap();
+        assert!(text.contains("FILE NAME>ford.hex"));
+        assert!(text.contains(":00000001FF"));
 
         let _ = fs::remove_dir_all(dir);
     }

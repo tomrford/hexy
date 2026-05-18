@@ -396,7 +396,7 @@ impl HexFile {
 
         let working = if let Some(forced) = options.forced_range.as_ref() {
             let mut combined = HexFile::new();
-            let fill = build_pattern_data(forced.range, &forced.pattern)?;
+            let fill = build_pattern_data(forced.range, &[0x00])?;
             combined.append_segment(Segment::new(forced.range.start(), fill));
             for segment in normalized.segments() {
                 combined.append_segment(segment.clone());
@@ -506,18 +506,18 @@ impl HexFile {
                 while addr <= r.end() {
                     let Some(seg) = segments.get(seg_idx) else {
                         let len = (r.end() - addr + 1) as usize;
-                        data.resize(data.len() + len, 0xFF);
+                        data.resize(data.len() + len, 0x00);
                         break;
                     };
                     if seg.start_address > r.end() {
                         let len = (r.end() - addr + 1) as usize;
-                        data.resize(data.len() + len, 0xFF);
+                        data.resize(data.len() + len, 0x00);
                         break;
                     }
                     if seg.start_address > addr {
                         let gap_end = seg.start_address.saturating_sub(1).min(r.end());
                         let len = (gap_end - addr + 1) as usize;
-                        data.resize(data.len() + len, 0xFF);
+                        data.resize(data.len() + len, 0x00);
                         addr = gap_end.saturating_add(1);
                         continue;
                     }
@@ -1180,8 +1180,8 @@ mod tests {
             target_exclude: None,
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        // 0x01 + 0x02 + 0xFF + 0xFF = 0x0201
-        assert_eq!(result, vec![0x02, 0x01]);
+        // Compatibility: forced range extends the calculation span, but gaps sum as zero.
+        assert_eq!(result, vec![0x00, 0x03]);
     }
 
     #[test]

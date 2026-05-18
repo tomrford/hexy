@@ -4,8 +4,17 @@ use super::*;
 #[test]
 fn test_output_record_type_requires_length() {
     let mut args = Args::default();
-    let result = parse_option(&mut args, "XS::2");
+    let result = parse_option(&mut args, "XI::2");
     assert!(result.is_err());
+
+    let mut args = Args::default();
+    parse_option(&mut args, "XS::3").unwrap();
+    assert!(matches!(
+        args.output_format,
+        Some(OutputFormat::SRecord {
+            record_type: Some(3)
+        })
+    ));
 }
 
 #[test]

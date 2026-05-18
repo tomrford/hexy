@@ -161,7 +161,7 @@ pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Ve
     };
 
     let bytes_per_line = if options.bytes_per_line == 0 {
-        16
+        32
     } else {
         options.bytes_per_line
     } as usize;

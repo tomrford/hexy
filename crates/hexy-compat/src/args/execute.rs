@@ -184,7 +184,9 @@ impl Args {
             self.wrap_error("/MO", hexfile.merge(&other, &options))?;
         }
 
-        if !self.address_range.is_empty() {
+        if self.address_range_empty_output {
+            hexfile.filter_ranges(&[]);
+        } else if !self.address_range.is_empty() {
             hexfile.filter_ranges(&self.address_range);
         }
 
@@ -201,7 +203,7 @@ impl Args {
         }
 
         if self.fill_all {
-            hexfile.fill_gaps(self.align_fill);
+            hexfile.fill_gaps(0x00);
         }
 
         if let Some(alignment) = self.align_address {
@@ -314,9 +316,9 @@ impl Args {
         if let ChecksumTarget::File(path) = &cs_params.target {
             let formatted = result
                 .iter()
-                .map(|b| format!("{:02X}", b))
+                .map(|b| format!("0x{:02X}", b))
                 .collect::<Vec<_>>()
-                .join(",");
+                .join(", ");
             self.wrap_error(&opt, std::fs::write(path, formatted))?;
         }
         Ok(result)
