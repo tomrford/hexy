@@ -113,7 +113,7 @@ pub(super) fn write_output(
                 None => None,
                 Some(0) => Some(crate::SRecordType::S1),
                 Some(1) => Some(crate::SRecordType::S2),
-                Some(2) => Some(crate::SRecordType::S3),
+                Some(2 | 3) => Some(crate::SRecordType::S3),
                 Some(other) => {
                     return Err(CliError::Other(format!(
                         "unsupported S-Record type {other}"
@@ -286,13 +286,18 @@ pub(super) fn write_ford_ihex_output(
         Err(err) if err.kind() == io::ErrorKind::NotFound => HashMap::new(),
         Err(err) => return Err(err.into()),
     };
+    let data_hexfile = if ini.is_empty() {
+        HexFile::new()
+    } else {
+        hexfile.clone()
+    };
 
     let header = build_ford_header(args, hexfile, output_path, &ini)?;
     let options = crate::IntelHexWriteOptions {
         bytes_per_line: args.bytes_per_line.unwrap_or(32),
         mode: crate::IntelHexMode::Auto,
     };
-    let data = crate::write_intel_hex(hexfile, &options);
+    let data = crate::write_intel_hex(&data_hexfile, &options);
     let data = String::from_utf8(data)
         .map_err(|e| CliError::Other(format!("invalid Intel HEX output: {e}")))?;
 
@@ -507,12 +512,26 @@ fn byte_sum_u16(data: &[u8]) -> u16 {
 }
 
 fn current_date_mmddyyyy() -> Option<String> {
-    let output = std::process::Command::new("date")
-        .arg("+%m/%d/%Y")
-        .output()
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
-    let date = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if date.is_empty() { None } else { Some(date) }
+    let days = i64::try_from(duration.as_secs() / 86_400).ok()?;
+    let (year, month, day) = civil_from_days(days);
+    Some(format!("{month:02}/{day:02}/{year:04}"))
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year as i32, m as u32, d as u32)
 }
 
 fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
@@ -635,6 +654,15 @@ mod tests {
     }
 
     #[test]
+    fn test_current_date_mmddyyyy_uses_system_time() {
+        let date = current_date_mmddyyyy().unwrap();
+        assert_eq!(date.len(), 10);
+        assert_eq!(&date[2..3], "/");
+        assert_eq!(&date[5..6], "/");
+        assert_ne!(date, "01/01/1970");
+    }
+
+    #[test]
     fn test_write_ford_ihex_allows_missing_ini() {
         let dir = unique_temp_dir();
         let output = dir.join("ford.hex");
@@ -651,6 +679,7 @@ mod tests {
         let text = fs::read_to_string(&output).unwrap();
         assert!(text.contains("FILE NAME>ford.hex"));
         assert!(text.contains(":00000001FF"));
+        assert!(!text.contains(":0110000001EE"));
 
         let _ = fs::remove_dir_all(dir);
     }

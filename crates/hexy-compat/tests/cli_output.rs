@@ -334,6 +334,17 @@ fn test_cli_srec_rectype_without_reclen_uses_default_length() {
     let lines = read_nonempty_lines(&out);
     assert_eq!(lines[0], "S31501000000000102030405060708090A0B0C0D0E0F71");
     assert_eq!(lines[1], "S31501000010101112131415161718191A1B1C1D1E1F61");
+
+    let args_alias = vec![
+        format!("/IN:{};0x01000000", input.display()),
+        "/XS:16:3".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args_alias);
+    assert_success(&output);
+    let lines = read_nonempty_lines(&out);
+    assert_eq!(lines[0], "S31501000000000102030405060708090A0B0C0D0E0F71");
 }
 
 #[test]
