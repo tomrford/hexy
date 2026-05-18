@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::{collections::HashMap, io};
 
 use crate::HexFile;
 
@@ -110,9 +111,9 @@ pub(super) fn write_output(
         OutputFormat::SRecord { record_type } => {
             let record_type = match record_type {
                 None => None,
-                Some(1) => Some(crate::SRecordType::S1),
-                Some(2) => Some(crate::SRecordType::S2),
-                Some(3) => Some(crate::SRecordType::S3),
+                Some(0) => Some(crate::SRecordType::S1),
+                Some(1) => Some(crate::SRecordType::S2),
+                Some(2) => Some(crate::SRecordType::S3),
                 Some(other) => {
                     return Err(CliError::Other(format!(
                         "unsupported S-Record type {other}"
@@ -198,7 +199,11 @@ pub(super) fn write_c_code_output(
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let ini_path = resolve_ini_path(args)?;
-    let ini = load_ini(&ini_path, provider)?;
+    let ini = match load_ini(&ini_path, provider) {
+        Ok(ini) => ini,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => HashMap::new(),
+        Err(err) => return Err(err.into()),
+    };
 
     let prefix = ini
         .get("prefix")
@@ -276,7 +281,11 @@ pub(super) fn write_ford_ihex_output(
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let ini_path = resolve_ini_path(args)?;
-    let ini = load_ini(&ini_path, provider)?;
+    let ini = match load_ini(&ini_path, provider) {
+        Ok(ini) => ini,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => HashMap::new(),
+        Err(err) => return Err(err.into()),
+    };
 
     let header = build_ford_header(args, hexfile, output_path, &ini)?;
     let options = crate::IntelHexWriteOptions {
@@ -617,7 +626,28 @@ mod tests {
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
         let provider = FsProvider;
         let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{result:?}");
+        let text = fs::read_to_string(&output).unwrap();
+        assert!(text.contains("FILE NAME>ford.hex"));
+        assert!(text.contains(":00000001FF"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_ford_ihex_allows_missing_ini() {
+        let dir = unique_temp_dir();
+        let output = dir.join("ford.hex");
+        let missing_ini = dir.join("missing.ini");
+
+        let args = Args {
+            ini_file: Some(missing_ini),
+            ..Args::default()
+        };
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+        let provider = FsProvider;
+        let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
+        assert!(result.is_ok(), "{result:?}");
         let text = fs::read_to_string(&output).unwrap();
         assert!(text.contains("FILE NAME>ford.hex"));
         assert!(text.contains(":00000001FF"));

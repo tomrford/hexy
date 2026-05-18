@@ -267,14 +267,16 @@ fn test_cli_srec_auto_and_forced() {
     let line = read_nonempty_lines(&out_large)[0].clone();
     assert!(line.starts_with("S3"));
 
-    let bad = vec![
-        format!("/IN:{};0x10000", input_mid.display()),
+    let forced_s1 = vec![
+        format!("/IN:{};0x0100", input_small.display()),
         "/XS:16:0".to_string(),
         "-o".to_string(),
         out_mid.display().to_string(),
     ];
-    let output = run_hexy(&bad);
-    assert!(!output.status.success());
+    let output = run_hexy(&forced_s1);
+    assert_success(&output);
+    let line = read_nonempty_lines(&out_mid)[0].clone();
+    assert!(line.starts_with("S1"));
 }
 
 #[test]
@@ -323,7 +325,7 @@ fn test_cli_srec_rectype_without_reclen_uses_default_length() {
 
     let args = vec![
         format!("/IN:{};0x01000000", input.display()),
-        "/XS:16:3".to_string(),
+        "/XS:16:2".to_string(),
         "-o".to_string(),
         out.display().to_string(),
     ];
