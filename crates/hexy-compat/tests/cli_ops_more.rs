@@ -320,7 +320,7 @@ fn test_cli_dspic_expand_explicit_target_colon() {
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
-        "/CDSPX:0x1000,0x4:0x2000".to_string(),
+        "/CDSPX:0x1000,0x4:0x4000".to_string(),
         "/XI".to_string(),
         "-o".to_string(),
         out.display().to_string(),

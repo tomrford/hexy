@@ -326,7 +326,7 @@ impl HexFile {
         }
 
         let target = match target {
-            Some(addr) => addr,
+            Some(addr) => addr / 2,
             None => range
                 .start()
                 .checked_mul(2)

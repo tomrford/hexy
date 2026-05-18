@@ -8,11 +8,11 @@ fn test_output_record_type_requires_length() {
     assert!(result.is_err());
 
     let mut args = Args::default();
-    parse_option(&mut args, "XS::3").unwrap();
+    parse_option(&mut args, "XS::2").unwrap();
     assert!(matches!(
         args.output_format,
         Some(OutputFormat::SRecord {
-            record_type: Some(3)
+            record_type: Some(2)
         })
     ));
 }

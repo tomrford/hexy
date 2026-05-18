@@ -210,9 +210,17 @@ impl Args {
             let options = AlignOptions {
                 alignment,
                 fill_byte: self.align_fill,
-                align_length: self.align_length,
+                align_length: false,
             };
             self.wrap_error("/AD/AL", hexfile.align(&options))?;
+            if self.align_length {
+                let options = AlignOptions {
+                    alignment,
+                    fill_byte: 0x00,
+                    align_length: true,
+                };
+                self.wrap_error("/AD/AL", hexfile.align(&options))?;
+            }
         }
 
         if let Some(size) = self.split_block_size {
