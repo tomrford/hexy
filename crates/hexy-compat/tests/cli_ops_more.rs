@@ -338,6 +338,28 @@ fn test_cli_dspic_expand_explicit_target_colon() {
 }
 
 #[test]
+fn test_cli_dspic_expand_explicit_target_semicolon() {
+    let dir = temp_dir("cli_cdspx_target_semicolon");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xAA, 0xBB, 0xCC, 0xDD]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input.display()),
+        "/CDSPX:0x1000,0x4;0x4000".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    assert_eq!(
+        hexfile.read_bytes_contiguous(0x4000, 8).unwrap(),
+        vec![0xAA, 0xBB, 0x00, 0x00, 0xCC, 0xDD, 0x00, 0x00]
+    );
+}
+
+#[test]
 fn test_cli_dspic_shrink_default_target() {
     let dir = temp_dir("cli_cdsps");
     let input = dir.join("input.bin");

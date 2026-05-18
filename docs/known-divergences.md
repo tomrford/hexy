@@ -62,10 +62,15 @@ Do not claim these areas as drop-in compatible with HexView yet.
 
 This is not a cosmetic whitespace issue; the exported contract differs.
 
+### `/XF` Ford Intel HEX export
+
+- minimal-header Ford export formats `RELEASE DATE` from the system date using UTC day boundaries
+- HexView appears to use the Windows local date for this field, so output can differ around local midnight
+
 ### Other Limits
 
 - `/L` support beyond `FileOpen`, `FileClose`, and `FileNew`; `FileOpen` path resolution and path dialect assumptions may also differ
 - exact `/E` and `/V` text/file semantics
 - proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats
 
-The boundary here is compatibility claims, not implementation status. Some items are implemented with known divergence, some are narrow helpers, and some remain out of scope.
+The boundary here is compatibility claims, not implementation status. Resolved HexView parity findings are not kept as open divergences.

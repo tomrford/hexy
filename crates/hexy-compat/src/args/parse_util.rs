@@ -383,15 +383,16 @@ pub(super) fn parse_signature_verify_params(
 
 pub(super) fn parse_dspic_op(s: &str) -> Result<DspicOp, ParseArgError> {
     let s = strip_quotes(s);
-    if let Some((range_str, target_str)) = s.split_once(';').or_else(|| s.rsplit_once(':')) {
+    if let Some((range_str, target_str)) = s.split_once(';') {
         let target = parse_number(target_str)?;
         Ok(DspicOp {
             range: parse_single_compat_range(range_str, "dsPIC range")?,
             target: Some(target),
         })
     } else {
+        let range_str = s.split_once(':').map_or(s, |(range, _)| range);
         Ok(DspicOp {
-            range: parse_single_compat_range(s, "dsPIC range")?,
+            range: parse_single_compat_range(range_str, "dsPIC range")?,
             target: None,
         })
     }
