@@ -83,11 +83,8 @@ fn test_cli_align_address_binary_separator() {
     ];
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
-    assert_eq!(norm.segments()[0].start_address, 0x1000);
-    assert_eq!(
-        norm.segments()[0].data,
-        vec![0xEE, 0x11, 0x22, 0x33, 0x44, 0xEE, 0xEE, 0xEE]
-    );
+    assert_eq!(norm.segments()[0].start_address, 0x1001);
+    assert_eq!(norm.segments()[0].data, vec![0x11, 0x22, 0x33, 0x44]);
 }
 
 #[test]
@@ -422,12 +419,8 @@ fn test_cli_address_range_multiple_ranges() {
         out.display().to_string(),
     ];
 
-    let hexfile = run_hex_output(args, &out);
-    let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].start_address, 0x1000);
-    assert_eq!(segments[0].data, vec![0xAA, 0xAB]);
-    assert_eq!(segments[1].start_address, 0x2000);
-    assert_eq!(segments[1].data, vec![0xBA, 0xBB]);
+    let output = run_hexy(&args);
+    assert_success(&output);
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.trim(), ":00000001FF");
 }

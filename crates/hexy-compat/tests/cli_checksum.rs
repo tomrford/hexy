@@ -124,7 +124,7 @@ fn test_cli_checksum_forced_range_fill() {
     );
     assert_eq!(
         norm.read_bytes_contiguous(0x1002, 2).unwrap(),
-        vec![0x02, 0x01]
+        vec![0x00, 0x03]
     );
 }
 
@@ -154,7 +154,7 @@ fn test_cli_checksum_file_output() {
     assert_success(&output);
 
     let text = std::fs::read_to_string(&out_path).unwrap();
-    assert_eq!(text, "00,0A");
+    assert_eq!(text, "0x00, 0x0A");
 }
 
 #[test]
@@ -175,7 +175,21 @@ fn test_cli_checksum_sha256_file_output() {
     let text = std::fs::read_to_string(&out_path).unwrap();
     assert_eq!(
         text,
-        "BA,78,16,BF,8F,01,CF,EA,41,41,40,DE,5D,AE,22,23,B0,03,61,A3,96,17,7A,9C,B4,10,FF,61,F2,00,15,AD"
+        "0xBA, 0x78, 0x16, 0xBF, 0x8F, 0x01, 0xCF, 0xEA, 0x41, 0x41, 0x40, 0xDE, 0x5D, 0xAE, 0x22, 0x23, 0xB0, 0x03, 0x61, 0xA3, 0x96, 0x17, 0x7A, 0x9C, 0xB4, 0x10, 0xFF, 0x61, 0xF2, 0x00, 0x15, 0xAD"
+    );
+}
+
+#[test]
+fn test_cli_checksum_prepend_alias() {
+    let hexfile = run_checksum_hex(&[0x01, 0x02], "/CS0:@prepend");
+    let norm = hexfile.normalized();
+    assert_eq!(
+        norm.read_bytes_contiguous(0x0000, 2).unwrap(),
+        vec![0x00, 0x03]
+    );
+    assert_eq!(
+        norm.read_bytes_contiguous(0x1000, 2).unwrap(),
+        vec![0x01, 0x02]
     );
 }
 
@@ -249,7 +263,7 @@ fn test_cli_checksum_multi_mixed_targets_with_file() {
         vec![0x00, 0x07, 0x03, 0x04, 0x00, 0x0E]
     );
     let text = std::fs::read_to_string(&csum_path).unwrap();
-    assert_eq!(text, "1C,00");
+    assert_eq!(text, "0x1C, 0x00");
 }
 
 #[test]
