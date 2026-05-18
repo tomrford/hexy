@@ -411,7 +411,7 @@ fn parse_output_option(
         "XI" => {
             if let Some(value) = value {
                 let (len, rec_type) = parse_output_params(value)?;
-                if rec_type.is_some() && len.is_none() && key_upper == "XI" {
+                if rec_type.is_some() && len.is_none() {
                     return Err(ParseArgError::InvalidOption(
                         "record type requires reclinelen".to_owned(),
                     ));

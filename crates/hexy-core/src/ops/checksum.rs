@@ -327,6 +327,32 @@ impl HexFile {
                     }
                 }
             }
+            ChecksumTarget::Append => {
+                if let Some(end) = self.max_address() {
+                    let write_addr = end.checked_add(1).ok_or_else(|| {
+                        OpsError::AddressOverflow("checksum append overflows u32".into())
+                    })?;
+                    let target_range = AddressRange::from_start_length(write_addr, size).map_err(|_| {
+                        OpsError::AddressOverflow(format!(
+                            "checksum append target at {write_addr:#X} with size {size} overflows u32"
+                        ))
+                    })?;
+                    effective_options.target_exclude = Some(target_range);
+                }
+            }
+            ChecksumTarget::Prepend => {
+                if let Some(start) = self.min_address() {
+                    let write_addr = start.checked_sub(size).ok_or_else(|| {
+                        OpsError::AddressOverflow("checksum prepend underflows u32".into())
+                    })?;
+                    let target_range = AddressRange::from_start_length(write_addr, size).map_err(|_| {
+                        OpsError::AddressOverflow(format!(
+                            "checksum prepend target at {write_addr:#X} with size {size} overflows u32"
+                        ))
+                    })?;
+                    effective_options.target_exclude = Some(target_range);
+                }
+            }
             _ => {}
         }
         let result = self.calculate_checksum(&effective_options)?;
@@ -396,7 +422,7 @@ impl HexFile {
 
         let working = if let Some(forced) = options.forced_range.as_ref() {
             let mut combined = HexFile::new();
-            let fill = build_pattern_data(forced.range, &[0x00])?;
+            let fill = build_pattern_data(forced.range, &forced.pattern)?;
             combined.append_segment(Segment::new(forced.range.start(), fill));
             for segment in normalized.segments() {
                 combined.append_segment(segment.clone());
@@ -1180,8 +1206,8 @@ mod tests {
             target_exclude: None,
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        // Compatibility: forced range extends the calculation span, but gaps sum as zero.
-        assert_eq!(result, vec![0x00, 0x03]);
+        // Compatibility: forced range gaps are filled by the requested pattern.
+        assert_eq!(result, vec![0x02, 0x01]);
     }
 
     #[test]

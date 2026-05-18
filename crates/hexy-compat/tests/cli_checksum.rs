@@ -129,6 +129,16 @@ fn test_cli_checksum_forced_range_fill() {
 }
 
 #[test]
+fn test_cli_checksum_forced_range_uses_pattern_for_gaps() {
+    let hexfile = run_checksum_hex(&[0x01, 0x02], "/CS0:@append;!0x1000-0x100F#FF");
+    let norm = hexfile.normalized();
+    assert_eq!(
+        norm.read_bytes_contiguous(0x1002, 2).unwrap(),
+        vec![0x0B, 0xF7]
+    );
+}
+
+#[test]
 fn test_cli_checksum_little_endian_output() {
     let hexfile = run_checksum_hex(&[0x01, 0x02, 0x03, 0x04], "/CSR0:@append");
     let norm = hexfile.normalized();

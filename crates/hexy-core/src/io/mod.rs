@@ -14,7 +14,9 @@ pub use hex_ascii::{HexAsciiWriteOptions, parse_hex_ascii, write_hex_ascii};
 pub use intel_hex::{
     IntelHexMode, IntelHexWriteOptions, parse_intel_hex, parse_intel_hex_16bit, write_intel_hex,
 };
-pub use srec::{SRecordType, SRecordWriteOptions, parse_srec, write_srec};
+pub use srec::{
+    DEFAULT_SREC_BYTES_PER_LINE, SRecordType, SRecordWriteOptions, parse_srec, write_srec,
+};
 
 fn push_hex_byte(out: &mut Vec<u8>, byte: u8) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
