@@ -1,13 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, io};
 
-use crate::{DEFAULT_SREC_BYTES_PER_LINE, HexFile};
+use hexy_core::HexFile;
 
 use super::error::CliError;
 use super::ini::load_ini;
 use super::parse_util::parse_number;
 use super::types::Args;
 use super::types::OutputFormat;
+
+const DEFAULT_SREC_BYTES_PER_LINE: u8 = 32;
 
 pub(super) trait ReadProvider {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, std::io::Error>;

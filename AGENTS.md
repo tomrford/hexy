@@ -8,9 +8,11 @@ Hex-file workspace: `hexy-core` reusable binary file modification library, `hexy
 nix develop -c cargo build                             # Build workspace
 nix develop -c cargo check                             # Typecheck workspace
 nix develop -c cargo test                              # Run tests
-nix develop -c cargo clippy --all-targets --all-features -- -D warnings
+nix develop -c cargo clippy --workspace --all-targets --all-features --locked
 nix develop -c cargo run -p hexy-compat -- [args]     # Run compat CLI
 ```
+
+CI clippy is the release gate. Workspace warning lints are useful cleanup signals, but `-D warnings` is not a handoff or release blocker unless the policy changes.
 
 ## Structure
 
@@ -21,7 +23,7 @@ nix develop -c cargo run -p hexy-compat -- [args]     # Run compat CLI
 - `crates/hexy-py/src/` - PyO3 bindings over `hexy-core`
 
 ### Backlog
-Backlog lives in the Linear `hexy` project.
+Backlog lives in GitHub Issues.
 
 ### Project philosophy
 - CLI must be a cleanroom replacement for the supported slash-style workflows for non-proprietary formats: binary-equivalent outputs for Intel HEX, S-Record, HEX ASCII, and raw binary.
