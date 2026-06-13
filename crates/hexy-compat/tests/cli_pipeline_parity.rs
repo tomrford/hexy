@@ -75,7 +75,7 @@ fn test_cli_pipeline_parity_basic_chain() {
     hexfile.split(4);
     hexfile.swap_bytes(SwapMode::Word).unwrap();
 
-    let lib_bytes = write_intel_hex(&hexfile, &IntelHexWriteOptions::default());
+    let lib_bytes = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
     assert_eq!(cli_bytes, lib_bytes);
 }
 
@@ -150,7 +150,7 @@ fn test_cli_checksum_parity_begin() {
             &ChecksumTarget::Address(start),
         )
         .unwrap();
-    let lib_bytes = write_intel_hex(&hexfile, &IntelHexWriteOptions::default());
+    let lib_bytes = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
 
     assert_eq!(cli_bytes, lib_bytes);
 }

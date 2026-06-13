@@ -189,6 +189,25 @@ fn test_cli_intel_hex_forced_modes() {
 }
 
 #[test]
+fn test_cli_intel_hex_forced_extended_segment_rejects_high_address() {
+    let dir = temp_dir("cli_xi_segment_high_address");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xAA]);
+
+    let args = vec![
+        format!("/IN:{};0x100000", input.display()),
+        "/XI:16:2".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("extended segment mode"));
+}
+
+#[test]
 fn test_cli_intel_hex_auto_modes() {
     let dir = temp_dir("cli_xi_auto");
     let input_seg = dir.join("input_seg.bin");

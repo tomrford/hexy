@@ -189,7 +189,8 @@ impl PyHexFile {
                 bytes_per_line,
                 mode: parse_intel_mode(mode)?,
             },
-        );
+        )
+        .map_err(parse_error)?;
         Ok(py_bytes(py, &data))
     }
 

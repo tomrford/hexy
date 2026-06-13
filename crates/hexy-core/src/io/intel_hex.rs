@@ -197,7 +197,10 @@ pub fn parse_intel_hex_16bit(input: &[u8]) -> Result<HexFile, ParseError> {
 }
 
 /// Write Intel-HEX output. CLI: /XI.
-pub fn write_intel_hex(hexfile: &HexFile, options: &IntelHexWriteOptions) -> Vec<u8> {
+pub fn write_intel_hex(
+    hexfile: &HexFile,
+    options: &IntelHexWriteOptions,
+) -> Result<Vec<u8>, ParseError> {
     let segments = hexfile.normalized().into_segments();
     let mut output = Vec::new();
     let bytes_per_line = if options.bytes_per_line == 0 {
@@ -238,6 +241,11 @@ pub fn write_intel_hex(hexfile: &HexFile, options: &IntelHexWriteOptions) -> Vec
             } else {
                 IntelHexMode::ExtendedSegment
             };
+            if line_mode == IntelHexMode::ExtendedSegment && addr > 0xFFFFF {
+                return Err(ParseError::InvalidOutput(format!(
+                    "address {addr:#X} cannot be encoded in Intel HEX extended segment mode"
+                )));
+            }
             let needed_extended = match line_mode {
                 IntelHexMode::ExtendedLinear => (addr >> 16) as u16,
                 IntelHexMode::ExtendedSegment => ((addr >> 4) & 0xF000) as u16,
@@ -299,7 +307,7 @@ pub fn write_intel_hex(hexfile: &HexFile, options: &IntelHexWriteOptions) -> Vec
     }
 
     write_record(&mut output, RECORD_EOF, 0, &[]);
-    output
+    Ok(output)
 }
 
 fn write_record(output: &mut Vec<u8>, record_type: u8, address: u16, data: &[u8]) {
@@ -456,7 +464,7 @@ mod tests {
                       :10001000101112131415161718191A1B1C1D1E1F68\n\
                       :00000001FF\n";
         let hf = parse_intel_hex(input).unwrap();
-        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let hf2 = parse_intel_hex(&output).unwrap();
         assert_eq!(hf, hf2);
     }
@@ -464,7 +472,7 @@ mod tests {
     #[test]
     fn test_write_simple() {
         let hf = HexFile::with_segments(vec![Segment::new(0x0100, vec![0x00, 0x01, 0x02, 0x03])]);
-        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(text.contains(":0401000000010203F5"));
         assert!(text.contains(":00000001FF"));
@@ -477,7 +485,7 @@ mod tests {
             vec![0xFC, 0xFD, 0xFE, 0xFF],
         )]);
 
-        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let parsed = parse_intel_hex(&output).unwrap();
 
         assert_eq!(parsed.normalized(), hf.normalized());
@@ -489,17 +497,31 @@ mod tests {
             Segment::new(0x12000, vec![0xAA]),
             Segment::new(0x120000, vec![0xBB]),
         ]);
-        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(!text.contains(":02000002")); // extended segment suppressed when > 0xFFFFF
         assert!(text.contains(":02000004")); // extended linear only
     }
 
     #[test]
+    fn test_write_forced_extended_segment_rejects_high_address() {
+        let hf = HexFile::with_segments(vec![Segment::new(0x100000, vec![0xAA])]);
+        let result = write_intel_hex(
+            &hf,
+            &IntelHexWriteOptions {
+                bytes_per_line: 16,
+                mode: IntelHexMode::ExtendedSegment,
+            },
+        );
+
+        assert!(matches!(result, Err(ParseError::InvalidOutput(_))));
+    }
+
+    #[test]
     fn test_write_extended_segment_first_line_respects_bytes_per_line() {
         let data: Vec<u8> = (0u8..64u8).collect();
         let hf = HexFile::with_segments(vec![Segment::new(0x10000, data)]);
-        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         let ext_idx = lines
@@ -516,7 +538,7 @@ mod tests {
     fn test_write_extended_segment_boundary_alignment() {
         let data: Vec<u8> = (0u8..0x30u8).collect();
         let hf = HexFile::with_segments(vec![Segment::new(0xFFF0, data)]);
-        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         let ext_idx = lines

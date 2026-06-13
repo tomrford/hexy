@@ -53,6 +53,24 @@ def test_segment_constructor_rejects_overflow():
         raise AssertionError("expected overflowing segment to be rejected")
 
 
+def test_read_single_byte_at_u32_max():
+    hf = hexy.HexFile.from_binary(b"\xaa", 0xFFFFFFFF)
+
+    assert hf.read(0xFFFFFFFF, 1) == b"\xaa"
+    assert hf.read(0xFFFFFFFE, 2) is None
+
+
+def test_forced_intel_hex_segment_mode_rejects_high_address():
+    hf = hexy.HexFile.from_binary(b"\xaa", 0x100000)
+
+    try:
+        hf.to_intel_hex(mode="segment")
+    except ValueError as error:
+        assert "extended segment mode" in str(error)
+    else:
+        raise AssertionError("expected high address to be rejected for segment mode")
+
+
 def test_binary_hex_ascii_intel_hex_and_srec_roundtrip_in_memory():
     hf = hexy.HexFile.from_binary(b"\xde\xad\xbe\xef", 0x1000)
 

@@ -189,7 +189,7 @@ impl HexFile {
             return Some(Vec::new());
         }
         let len_u32 = u32::try_from(len).ok()?;
-        let end = addr.checked_add(len_u32).and_then(|v| v.checked_sub(1))?;
+        let end = addr.checked_add(len_u32.checked_sub(1)?)?;
         let normalized = self.normalized();
         for segment in normalized.segments() {
             if end < segment.start_address {
@@ -399,6 +399,14 @@ mod tests {
             Some(vec![0xAA, 0xBB, 0xCC])
         );
         assert_eq!(hf.read_bytes_contiguous(0x100, 4), None);
+    }
+
+    #[test]
+    fn test_read_bytes_contiguous_single_byte_at_u32_max() {
+        let hf = HexFile::with_segments(vec![Segment::new(u32::MAX, vec![0xAA])]);
+
+        assert_eq!(hf.read_bytes_contiguous(u32::MAX, 1), Some(vec![0xAA]));
+        assert_eq!(hf.read_bytes_contiguous(u32::MAX - 1, 2), None);
     }
 
     #[test]

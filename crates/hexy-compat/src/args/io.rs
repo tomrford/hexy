@@ -305,7 +305,7 @@ pub(super) fn write_ford_ihex_output(
         crate::write_intel_hex(hexfile, &options)
     } else {
         crate::write_intel_hex(&HexFile::new(), &options)
-    };
+    }?;
     let data = String::from_utf8(data)
         .map_err(|e| CliError::Other(format!("invalid Intel HEX output: {e}")))?;
 

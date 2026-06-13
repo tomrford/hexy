@@ -108,7 +108,7 @@ impl HexFile {
         path: impl AsRef<Path>,
         options: &IntelHexWriteOptions,
     ) -> Result<(), FileIoError> {
-        std::fs::write(path, write_intel_hex(self, options))?;
+        std::fs::write(path, write_intel_hex(self, options)?)?;
         Ok(())
     }
 

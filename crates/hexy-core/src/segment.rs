@@ -100,14 +100,13 @@ impl Segment {
         Ok(())
     }
 
-    pub(crate) fn set_start_address(&mut self, start_address: u32) -> Result<(), SegmentError> {
+    pub(crate) fn validate_start_address(&self, start_address: u32) -> Result<(), SegmentError> {
         if Self::checked_end_address_for(start_address, self.data.len()).is_none() {
             return Err(SegmentError::AddressOverflow {
                 start: start_address,
                 length: self.data.len(),
             });
         }
-        self.start_address = start_address;
         Ok(())
     }
 

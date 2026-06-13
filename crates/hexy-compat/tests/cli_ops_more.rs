@@ -270,7 +270,7 @@ fn test_cli_s08map_examples() {
         Segment::new(0x4000, vec![0xAA]),
         Segment::new(0x028000, vec![0xBB]),
     ]);
-    let data = write_intel_hex(&hexfile, &IntelHexWriteOptions::default());
+    let data = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
     write_file(&input, &data);
 
     let args = vec![
@@ -606,7 +606,8 @@ fn test_cli_remap_basic() {
             bytes_per_line: 16,
             mode: IntelHexMode::ExtendedLinear,
         },
-    );
+    )
+    .unwrap();
     write_file(&input, &data);
 
     let args = vec![
@@ -662,7 +663,8 @@ fn test_cli_s12map_basic() {
             bytes_per_line: 16,
             mode: IntelHexMode::ExtendedLinear,
         },
-    );
+    )
+    .unwrap();
     write_file(&input, &data);
 
     let args = vec![
@@ -700,7 +702,8 @@ fn test_cli_s12xmap_basic() {
             bytes_per_line: 16,
             mode: IntelHexMode::ExtendedLinear,
         },
-    );
+    )
+    .unwrap();
     write_file(&input, &data);
 
     let args = vec![
