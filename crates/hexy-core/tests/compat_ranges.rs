@@ -34,8 +34,10 @@ fn test_compat_ranges_binary_and_suffix() {
 }
 
 #[test]
-fn test_compat_ranges_reject_full_space() {
-    let err = parse_compat_ranges("0x0-0xFFFFFFFF").unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("entire 4GiB"));
+fn test_compat_ranges_accept_full_space() {
+    let ranges = parse_compat_ranges("0x0-0xFFFFFFFF").unwrap();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].start(), 0);
+    assert_eq!(ranges[0].end(), u32::MAX);
+    assert_eq!(ranges[0].length(), 0x1_0000_0000);
 }

@@ -77,7 +77,7 @@ impl HexFile {
         path: impl AsRef<Path>,
         options: &BinaryWriteOptions,
     ) -> Result<(), FileIoError> {
-        std::fs::write(path, write_binary(self, options))?;
+        std::fs::write(path, write_binary(self, options)?)?;
         Ok(())
     }
 
@@ -86,7 +86,7 @@ impl HexFile {
         path: impl AsRef<Path>,
         options: &IntelHexWriteOptions,
     ) -> Result<(), FileIoError> {
-        std::fs::write(path, write_intel_hex(self, options))?;
+        std::fs::write(path, write_intel_hex(self, options)?)?;
         Ok(())
     }
 

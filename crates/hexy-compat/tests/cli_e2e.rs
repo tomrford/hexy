@@ -33,9 +33,9 @@ fn test_cli_multistage_bin_merge_align_output() {
     let norm = hexfile.normalized();
 
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x0FFF);
+    assert_eq!(norm.segments()[0].start_address(), 0x0FFF);
     assert_eq!(
-        norm.segments()[0].data,
+        norm.segments()[0].data(),
         vec![0xEE, 0x10, 0x11, 0xAA, 0xBB, 0x14]
     );
 }

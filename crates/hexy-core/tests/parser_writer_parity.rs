@@ -47,7 +47,7 @@ fn intel_hex_writer_formats_u32_ceiling_as_extended_linear()
 -> Result<(), std::string::FromUtf8Error> {
     let hexfile = HexFile::with_segments(vec![Segment::new(0xFFFF_FFFE, vec![0xAA, 0xBB])]);
 
-    let output = write_intel_hex(&hexfile, &IntelHexWriteOptions::default());
+    let output = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
 
     assert_eq!(
         String::from_utf8(output)?,
@@ -73,7 +73,7 @@ fn binary_writer_serializes_normalized_blocks_without_sparse_padding() {
         Segment::new(0x2000, vec![0xBB, 0xCC]),
     ]);
 
-    let output = write_binary(&hexfile, &BinaryWriteOptions::default());
+    let output = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
 
     assert_eq!(output, vec![0x01, 0xAA, 0x03, 0xBB, 0xCC]);
 }

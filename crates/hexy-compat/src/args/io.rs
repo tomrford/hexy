@@ -69,19 +69,19 @@ pub(super) fn load_hex_ascii_input(
 pub(super) fn hexfiles_overlap(a: &HexFile, b: &HexFile) -> bool {
     let mut a_segments = a.segments().to_vec();
     let mut b_segments = b.segments().to_vec();
-    a_segments.sort_by_key(|s| s.start_address);
-    b_segments.sort_by_key(|s| s.start_address);
+    a_segments.sort_by_key(Segment::start_address);
+    b_segments.sort_by_key(Segment::start_address);
 
     let mut i = 0usize;
     let mut j = 0usize;
     while i < a_segments.len() && j < b_segments.len() {
         let a_seg = &a_segments[i];
         let b_seg = &b_segments[j];
-        if a_seg.end_address() < b_seg.start_address {
+        if a_seg.end_address() < b_seg.start_address() {
             i += 1;
             continue;
         }
-        if b_seg.end_address() < a_seg.start_address {
+        if b_seg.end_address() < a_seg.start_address() {
             j += 1;
             continue;
         }
@@ -306,7 +306,7 @@ pub(super) fn write_ford_ihex_output(
         crate::write_intel_hex(hexfile, &options)
     } else {
         crate::write_intel_hex(&HexFile::new(), &options)
-    };
+    }?;
     let data = String::from_utf8(data)
         .map_err(|e| CliError::Other(format!("invalid Intel HEX output: {e}")))?;
 
@@ -352,7 +352,9 @@ pub(super) fn write_porsche_output(
     }
 
     let mut segments = normalized.into_segments();
-    let mut output = segments.pop().map_or_else(Vec::new, |segment| segment.data);
+    let mut output = segments
+        .pop()
+        .map_or_else(Vec::new, |segment| segment.into_parts().1);
     output.extend_from_slice(&checksum);
     std::fs::write(output_path, output)?;
     Ok(())
@@ -562,9 +564,9 @@ fn normalize_crlf(text: &str) -> String {
 fn compute_ford_checksum(hexfile: &HexFile) -> u16 {
     let mut sum: u16 = 0;
     let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(Segment::start_address);
     for segment in segments {
-        for byte in segment.data {
+        for &byte in segment.data() {
             sum = sum.wrapping_add(byte as u16);
         }
     }
@@ -573,11 +575,11 @@ fn compute_ford_checksum(hexfile: &HexFile) -> u16 {
 
 fn format_erase_sectors(hexfile: &HexFile, alignment: Option<u32>) -> String {
     let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(Segment::start_address);
     let mut parts = Vec::new();
 
     for segment in segments {
-        let start = segment.start_address;
+        let start = segment.start_address();
         let len = segment.len() as u32;
         let (aligned_start, aligned_len) = if let Some(align) = alignment.filter(|a| *a > 0) {
             let start64 = start as u64;
@@ -639,9 +641,10 @@ fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError>
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
 
     for segment in segments {
-        let filename = format!("{stem}_{:x}.{ext}", segment.start_address);
+        let (start_address, data) = segment.into_parts();
+        let filename = format!("{stem}_{start_address:x}.{ext}");
         let out_path = dir.join(filename);
-        std::fs::write(out_path, segment.data)?;
+        std::fs::write(out_path, data)?;
     }
 
     Ok(())
@@ -654,15 +657,15 @@ fn separate_binary_segments(hexfile: &HexFile) -> Vec<Segment> {
         .enumerate()
         .filter(|(_, segment)| !segment.is_empty())
         .collect();
-    indexed_segments.sort_by_key(|(_, segment)| segment.start_address);
+    indexed_segments.sort_by_key(|(_, segment)| segment.start_address());
 
     let mut output = Vec::new();
     let mut run_indices = Vec::new();
-    let mut run_end = None;
+    let mut run_end: Option<u32> = None;
 
     for (index, segment) in indexed_segments {
         match run_end {
-            Some(end) if segment.start_address <= end => {
+            Some(end) if segment.start_address() <= end => {
                 run_indices.push(index);
                 run_end = Some(end.max(segment.end_address()));
             }
@@ -683,7 +686,7 @@ fn separate_binary_segments(hexfile: &HexFile) -> Vec<Segment> {
         push_separate_binary_run(all_segments, &run_indices, &mut output);
     }
 
-    output.sort_by_key(|segment| segment.start_address);
+    output.sort_by_key(Segment::start_address);
     output
 }
 

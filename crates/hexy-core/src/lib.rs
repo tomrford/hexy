@@ -36,7 +36,7 @@ pub use ops::{
     OpsError, RemapOptions, SwapMode,
 };
 pub use range::{AddressRange, AddressRangeError, merge_ranges, parse_compat_ranges, parse_ranges};
-pub use segment::Segment;
+pub use segment::{Segment, SegmentError};
 pub use signature::{
     SignatureBytesSource, SignatureError, SignatureKeySource, SignatureMethod, SignaturePlacement,
     SignatureSignOptions, SignatureVerifyOptions,

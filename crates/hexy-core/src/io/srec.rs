@@ -120,7 +120,12 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
                             data.len()
                         )));
                     }
-                    hexfile.append_segment(Segment::new(addr, data));
+                    hexfile.append_segment(Segment::try_new(addr, data).map_err(|e| {
+                        ParseError::AddressOverflow(format!(
+                            "{:#X} + {} exceeds u32: {e}",
+                            addr, data_len
+                        ))
+                    })?);
                 }
             }
             other => {
@@ -179,7 +184,8 @@ pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Ve
 
     for segment in segments {
         let mut addr = segment.start_address;
-        for chunk in segment.data.chunks(bytes_per_line) {
+        let mut chunks = segment.data.chunks(bytes_per_line).peekable();
+        while let Some(chunk) = chunks.next() {
             let addr_bytes = addr.to_be_bytes();
             let addr_slice = &addr_bytes[4 - addr_len..];
             let count = (addr_len + chunk.len() + 1) as u8;
@@ -190,9 +196,11 @@ pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Ve
             let checksum = expected_checksum(&record);
 
             push_record_line(&mut out, record_digit, &record, checksum);
-            addr = addr
-                .checked_add(chunk.len() as u32)
-                .ok_or_else(|| ParseError::AddressOverflow("address overflow".to_owned()))?;
+            if chunks.peek().is_some() {
+                addr = addr
+                    .checked_add(chunk.len() as u32)
+                    .ok_or_else(|| ParseError::AddressOverflow("address overflow".to_owned()))?;
+            }
         }
     }
 
@@ -277,6 +285,34 @@ mod tests {
         let out = write_srec(&hexfile, &SRecordWriteOptions::default()).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("S2"));
+    }
+
+    #[test]
+    fn test_srec_roundtrip_at_u32_max_boundary() {
+        let hexfile = HexFile::with_segments(vec![Segment::new(
+            u32::MAX - 3,
+            vec![0xFC, 0xFD, 0xFE, 0xFF],
+        )]);
+
+        let out = write_srec(&hexfile, &SRecordWriteOptions::default()).unwrap();
+        let parsed = parse_srec(&out).unwrap();
+
+        assert_eq!(parsed.normalized(), hexfile.normalized());
+    }
+
+    #[test]
+    fn test_parse_record_crossing_u32_max_errors() {
+        let mut record = Vec::from([7, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 0xBB]);
+        let checksum = expected_checksum(&record);
+        let mut data = Vec::new();
+        push_record_line(&mut data, '3', &record, checksum);
+        record.clear();
+        record.extend_from_slice(&[5, 0, 0, 0, 0]);
+        let checksum = expected_checksum(&record);
+        push_record_line(&mut data, '7', &record, checksum);
+
+        let result = parse_srec(&data);
+        assert!(matches!(result, Err(ParseError::AddressOverflow(_))));
     }
 
     #[test]

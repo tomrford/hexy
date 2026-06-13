@@ -66,7 +66,12 @@ pub fn parse_hex_ascii(data: &[u8], base_address: u32) -> Result<HexFile, ParseE
         return Ok(HexFile::new());
     }
 
-    let len = bytes.len() as u32;
+    let len = u32::try_from(bytes.len()).map_err(|_| {
+        ParseError::AddressOverflow(format!(
+            "HEX ASCII length {} exceeds u32 address space",
+            bytes.len()
+        ))
+    })?;
     let end = base_address
         .checked_add(len.saturating_sub(1))
         .ok_or_else(|| {
@@ -79,10 +84,11 @@ pub fn parse_hex_ascii(data: &[u8], base_address: u32) -> Result<HexFile, ParseE
         )));
     }
 
-    Ok(HexFile::with_segments(vec![Segment::new(
-        base_address,
-        bytes,
-    )]))
+    let segment = Segment::try_new(base_address, bytes).map_err(|e| {
+        ParseError::AddressOverflow(format!("{:#X} + {} exceeds u32: {e}", base_address, len))
+    })?;
+
+    Ok(HexFile::with_segments(vec![segment]))
 }
 
 /// Write the HexFile to HEX ASCII bytes. CLI: /XA.

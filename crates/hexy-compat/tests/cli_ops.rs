@@ -24,9 +24,9 @@ fn test_cli_align_length_fill() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x1000);
+    assert_eq!(norm.segments()[0].start_address(), 0x1000);
     assert_eq!(
-        norm.segments()[0].data,
+        norm.segments()[0].data(),
         vec![0x00, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x00, 0x00]
     );
 }
@@ -60,8 +60,8 @@ fn test_cli_align_address_no_separator_semantics() {
     let hexfile_dec = run_hex_output(args_dec, &out_dec);
 
     assert_ne!(
-        hexfile_hex.normalized().segments()[0].data,
-        hexfile_dec.normalized().segments()[0].data
+        hexfile_hex.normalized().segments()[0].data(),
+        hexfile_dec.normalized().segments()[0].data()
     );
 }
 
@@ -83,8 +83,8 @@ fn test_cli_align_address_binary_separator() {
     ];
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
-    assert_eq!(norm.segments()[0].start_address, 0x1001);
-    assert_eq!(norm.segments()[0].data, vec![0x11, 0x22, 0x33, 0x44]);
+    assert_eq!(norm.segments()[0].start_address(), 0x1001);
+    assert_eq!(norm.segments()[0].data(), vec![0x11, 0x22, 0x33, 0x44]);
 }
 
 #[test]
@@ -106,8 +106,8 @@ fn test_cli_align_fill_separator_and_hex_forms() {
 
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
-    assert_eq!(norm.segments()[0].start_address, 0x1000);
-    assert_eq!(norm.segments()[0].data, vec![0xAA, 0x11, 0x22, 0x33]);
+    assert_eq!(norm.segments()[0].start_address(), 0x1000);
+    assert_eq!(norm.segments()[0].data(), vec![0xAA, 0x11, 0x22, 0x33]);
 }
 
 #[test]
@@ -141,8 +141,8 @@ fn test_cli_align_fill_no_separator_equivalence() {
     let hexfile_dec = run_hex_output(args_dec, &out_dec);
 
     assert_eq!(
-        hexfile_hex.normalized().segments()[0].data,
-        hexfile_dec.normalized().segments()[0].data
+        hexfile_hex.normalized().segments()[0].data(),
+        hexfile_dec.normalized().segments()[0].data()
     );
 }
 
@@ -177,8 +177,8 @@ fn test_cli_align_fill_equal_separator() {
     let hexfile_equal = run_hex_output(args_equal, &out_equal);
 
     assert_eq!(
-        hexfile_colon.normalized().segments()[0].data,
-        hexfile_equal.normalized().segments()[0].data
+        hexfile_colon.normalized().segments()[0].data(),
+        hexfile_equal.normalized().segments()[0].data()
     );
 }
 
@@ -199,12 +199,12 @@ fn test_cli_cut_splits_block() {
 
     let hexfile = run_hex_output(args, &out);
     let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(|s| s.start_address());
     assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].start_address, 0x2000);
-    assert_eq!(segments[0].data, vec![0, 1, 2]);
-    assert_eq!(segments[1].start_address, 0x2005);
-    assert_eq!(segments[1].data, vec![5, 6, 7]);
+    assert_eq!(segments[0].start_address(), 0x2000);
+    assert_eq!(segments[0].data(), vec![0, 1, 2]);
+    assert_eq!(segments[1].start_address(), 0x2005);
+    assert_eq!(segments[1].data(), vec![5, 6, 7]);
 }
 
 #[test]
@@ -372,8 +372,8 @@ fn test_cli_address_range_reduction() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x2000);
-    assert_eq!(norm.segments()[0].data, vec![0xBA, 0xBB, 0xBC, 0xBD]);
+    assert_eq!(norm.segments()[0].start_address(), 0x2000);
+    assert_eq!(norm.segments()[0].data(), vec![0xBA, 0xBB, 0xBC, 0xBD]);
 }
 
 #[test]
@@ -397,8 +397,96 @@ fn test_cli_address_range_reduction_start_end() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x2000);
-    assert_eq!(norm.segments()[0].data, vec![0xBA, 0xBB, 0xBC, 0xBD]);
+    assert_eq!(norm.segments()[0].start_address(), 0x2000);
+    assert_eq!(norm.segments()[0].data(), vec![0xBA, 0xBB, 0xBC, 0xBD]);
+}
+
+#[test]
+fn test_cli_address_range_full_span_keeps_u32_max_boundary() {
+    let dir = temp_dir("cli_ar_full_span");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
+
+    let args = vec![
+        format!("/IN:{};0xFFFFFFFC", input.display()),
+        "/AR:0x00000000-0xFFFFFFFF".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address(), 0xFFFF_FFFC);
+    assert_eq!(norm.segments()[0].data(), vec![0xFC, 0xFD, 0xFE, 0xFF]);
+}
+
+#[test]
+fn test_cli_address_range_length_form_keeps_u32_max_boundary() {
+    let dir = temp_dir("cli_ar_max_len");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
+
+    let args = vec![
+        format!("/IN:{};0xFFFFFFFC", input.display()),
+        "/AR:0xFFFFFFFC,0x4".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address(), 0xFFFF_FFFC);
+    assert_eq!(norm.segments()[0].data(), vec![0xFC, 0xFD, 0xFE, 0xFF]);
+}
+
+#[test]
+fn test_cli_address_range_overflowing_length_form_filters_to_u32_max() {
+    let dir = temp_dir("cli_ar_overflow_len");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
+
+    let args = vec![
+        format!("/IN:{};0xFFFFFFFC", input.display()),
+        "/AR:0xFFFFFFFC,0x8".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address(), 0xFFFF_FFFC);
+    assert_eq!(norm.segments()[0].data(), vec![0xFC, 0xFD, 0xFE, 0xFF]);
+}
+
+#[test]
+fn test_cli_fill_rejects_range_past_u32_max() {
+    let dir = temp_dir("cli_fr_overflow");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xAA]);
+
+    let args = vec![
+        format!("/IN:{};0x0", input.display()),
+        "/FR:0xFFFFFFFC,0x8".to_string(),
+        "/FP:FF".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("address overflow"));
 }
 
 #[test]
@@ -447,6 +535,6 @@ fn test_cli_address_range_repeated_last_wins() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x2000);
-    assert_eq!(norm.segments()[0].data, vec![0xBA, 0xBB]);
+    assert_eq!(norm.segments()[0].start_address(), 0x2000);
+    assert_eq!(norm.segments()[0].data(), vec![0xBA, 0xBB]);
 }

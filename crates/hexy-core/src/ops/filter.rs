@@ -134,38 +134,49 @@ impl HexFile {
 
     /// Fill a region with the specified pattern.
     /// By default (overwrite=false), only fills gaps - existing data is preserved.
-    pub fn fill(&mut self, range: AddressRange, options: &FillOptions) {
-        self.fill_ranges(&[range], options);
+    pub fn fill(&mut self, range: AddressRange, options: &FillOptions) -> Result<(), OpsError> {
+        self.fill_ranges(&[range], options)
     }
 
     /// Fill multiple regions with the specified pattern (operates on raw segments).
     /// By default, only fills gaps - existing data is preserved.
     /// When overwrite=true, removes existing data first then fills the entire range.
-    pub fn fill_ranges(&mut self, ranges: &[AddressRange], options: &FillOptions) {
+    pub fn fill_ranges(
+        &mut self,
+        ranges: &[AddressRange],
+        options: &FillOptions,
+    ) -> Result<(), OpsError> {
         if options.pattern.is_empty() {
-            return;
+            return Ok(());
         }
 
-        for range in ranges {
+        let materialized: Vec<(AddressRange, usize)> = ranges
+            .iter()
+            .map(|range| materialized_range_len(*range, "fill range").map(|len| (*range, len)))
+            .collect::<Result<_, _>>()?;
+
+        for (range, len) in materialized {
             if options.overwrite {
                 // Remove existing data in range, then fill entire range
-                self.cut(*range);
-                let len = range.length() as usize;
+                self.cut(range);
                 let mut data = Vec::with_capacity(len);
                 let pattern = &options.pattern;
                 for i in 0..len {
                     data.push(pattern[i % pattern.len()]);
                 }
-                self.append_segment(Segment::new(range.start(), data));
+                self.append_segment(Segment::try_new(range.start(), data).map_err(|e| {
+                    OpsError::AddressOverflow(format!("fill range exceeds u32 address space: {e}"))
+                })?);
             } else {
                 // Fill only gaps within the range - existing data preserved
-                self.fill_gaps_in_range(*range, &options.pattern);
+                self.fill_gaps_in_range(range, &options.pattern)?;
             }
         }
+        Ok(())
     }
 
     /// Fill gaps within a specific range with a pattern. Does not touch existing data.
-    fn fill_gaps_in_range(&mut self, range: AddressRange, pattern: &[u8]) {
+    fn fill_gaps_in_range(&mut self, range: AddressRange, pattern: &[u8]) -> Result<(), OpsError> {
         // Collect existing data segments that overlap with the range
         let mut occupied: Vec<(u32, u32)> = Vec::new();
         for segment in self.segments() {
@@ -212,9 +223,14 @@ impl HexFile {
                 for i in 0..len {
                     data.push(pattern[(offset + i) % pattern.len()]);
                 }
-                self.append_segment(Segment::new(gap_start, data));
+                self.append_segment(Segment::try_new(gap_start, data).map_err(|e| {
+                    OpsError::AddressOverflow(format!("fill gap exceeds u32 address space: {e}"))
+                })?);
             }
-            cursor = occ_end.saturating_add(1);
+            let Some(next_cursor) = occ_end.checked_add(1) else {
+                return Ok(());
+            };
+            cursor = next_cursor;
         }
 
         // Fill trailing gap if any
@@ -227,26 +243,30 @@ impl HexFile {
             for i in 0..len {
                 data.push(pattern[(offset + i) % pattern.len()]);
             }
-            self.append_segment(Segment::new(gap_start, data));
+            self.append_segment(Segment::try_new(gap_start, data).map_err(|e| {
+                OpsError::AddressOverflow(format!("fill gap exceeds u32 address space: {e}"))
+            })?);
         }
+        Ok(())
     }
 
     /// Fill all gaps between first and last segment with fill byte.
     /// Result: single contiguous segment (normalizes with last-wins).
-    /// Returns silently if the span is too large (>= 4GiB).
-    pub fn fill_gaps(&mut self, fill_byte: u8) {
+    pub fn fill_gaps(&mut self, fill_byte: u8) -> Result<(), OpsError> {
         let normalized = self.normalized();
         let Some(min_addr) = normalized.min_address() else {
-            return;
+            return Ok(());
         };
         let Some(max_addr) = normalized.max_address() else {
-            return;
+            return Ok(());
         };
 
         // Compute span in u64 to avoid overflow
         let span = (max_addr as u64) - (min_addr as u64) + 1;
-        if span > usize::MAX as u64 {
-            return;
+        if span > u32::MAX as u64 || span > usize::MAX as u64 {
+            return Err(OpsError::AddressOverflow(format!(
+                "fill gaps span {span} bytes cannot be materialized"
+            )));
         }
 
         let total_len = span as usize;
@@ -258,7 +278,10 @@ impl HexFile {
             data[offset..offset + segment.len()].copy_from_slice(&segment.data);
         }
 
-        self.set_segments(vec![Segment::new(min_addr, data)]);
+        self.set_segments(vec![Segment::try_new(min_addr, data).map_err(|e| {
+            OpsError::AddressOverflow(format!("fill gaps exceeds u32 address space: {e}"))
+        })?]);
+        Ok(())
     }
 
     /// Fill all gaps after checking the dense span against a caller-selected limit.
@@ -354,14 +377,23 @@ impl HexFile {
                     segment.len()
                 ))
             })?;
-            AddressRange::from_start_length(new_start, length).map_err(|_| {
-                OpsError::AddressOverflow(format!(
+            let range =
+                AddressRange::from_start_length(new_start, u64::from(length)).map_err(|_| {
+                    OpsError::AddressOverflow(format!(
+                        "{:#X} + {} with length {} exceeds u32 range",
+                        segment.start_address,
+                        offset,
+                        segment.len()
+                    ))
+                })?;
+            if range.extends_past_address_space() {
+                return Err(OpsError::AddressOverflow(format!(
                     "{:#X} + {} with length {} exceeds u32 range",
                     segment.start_address,
                     offset,
                     segment.len()
-                ))
-            })?;
+                )));
+            }
         }
 
         // Second pass: apply mutation
@@ -374,6 +406,29 @@ impl HexFile {
 
         Ok(())
     }
+}
+
+pub(crate) fn materialized_range_len(
+    range: AddressRange,
+    context: &str,
+) -> Result<usize, OpsError> {
+    if range.extends_past_address_space() {
+        return Err(OpsError::AddressOverflow(format!(
+            "{context} {:#X}-{:#X} requests end {:#X} beyond u32 address space",
+            range.start(),
+            range.end(),
+            range.requested_end()
+        )));
+    }
+    if range.length() > u32::MAX as u64 {
+        return Err(OpsError::AddressOverflow(format!(
+            "{context} length {} cannot be materialized",
+            range.length()
+        )));
+    }
+    usize::try_from(range.length()).map_err(|_| {
+        OpsError::AddressOverflow(format!("{context} length {} exceeds usize", range.length()))
+    })
 }
 
 #[cfg(test)]
@@ -452,7 +507,8 @@ mod tests {
         hf.fill(
             AddressRange::from_start_length(0x1000, 8).unwrap(),
             &FillOptions::default(),
-        );
+        )
+        .unwrap();
 
         assert_eq!(hf.segments().len(), 1);
         assert_eq!(hf.segments()[0].start_address, 0x1000);
@@ -468,7 +524,8 @@ mod tests {
                 pattern: vec![0xDE, 0xAD, 0xBE, 0xEF],
                 overwrite: false,
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             hf.segments()[0].data,
@@ -477,12 +534,78 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_full_span_keeps_boundary_bytes() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(
+            u32::MAX - 3,
+            vec![0xFC, 0xFD, 0xFE, 0xFF],
+        )]);
+
+        hf.filter_range(AddressRange::from_start_end(0, u32::MAX).unwrap());
+
+        assert_eq!(hf.segments().len(), 1);
+        assert_eq!(hf.segments()[0].start_address, u32::MAX - 3);
+        assert_eq!(hf.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
+    }
+
+    #[test]
+    fn test_filter_length_form_boundary_keeps_bytes() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(
+            u32::MAX - 3,
+            vec![0xFC, 0xFD, 0xFE, 0xFF],
+        )]);
+
+        hf.filter_range(AddressRange::from_start_length(u32::MAX - 3, 4).unwrap());
+
+        assert_eq!(hf.segments().len(), 1);
+        assert_eq!(hf.segments()[0].start_address, u32::MAX - 3);
+        assert_eq!(hf.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
+    }
+
+    #[test]
+    fn test_filter_overflowing_length_form_clips_to_address_space() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(
+            u32::MAX - 3,
+            vec![0xFC, 0xFD, 0xFE, 0xFF],
+        )]);
+
+        hf.filter_range(AddressRange::from_start_length(u32::MAX - 3, 8).unwrap());
+
+        assert_eq!(hf.segments().len(), 1);
+        assert_eq!(hf.segments()[0].start_address, u32::MAX - 3);
+        assert_eq!(hf.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
+    }
+
+    #[test]
+    fn test_fill_rejects_full_span_allocation() {
+        let mut hf = HexFile::new();
+        let result = hf.fill(
+            AddressRange::from_start_end(0, u32::MAX).unwrap(),
+            &FillOptions::default(),
+        );
+
+        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(hf.segments().is_empty());
+    }
+
+    #[test]
+    fn test_fill_rejects_range_extending_past_address_space() {
+        let mut hf = HexFile::new();
+        let result = hf.fill(
+            AddressRange::from_start_length(u32::MAX - 3, 8).unwrap(),
+            &FillOptions::default(),
+        );
+
+        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(hf.segments().is_empty());
+    }
+
+    #[test]
     fn test_fill_gaps() {
         let mut hf = HexFile::with_segments(vec![
             Segment::new(0x1000, vec![0xAA, 0xBB]),
             Segment::new(0x1004, vec![0xCC, 0xDD]),
         ]);
-        hf.fill_gaps(0xFF);
+        hf.fill_gaps(0xFF).unwrap();
 
         assert_eq!(hf.segments().len(), 1);
         assert_eq!(hf.segments()[0].start_address, 0x1000);
@@ -656,7 +779,8 @@ mod tests {
                 pattern: vec![0xFF],
                 overwrite: true,
             },
-        );
+        )
+        .unwrap();
         let norm = hf.normalized();
         assert_eq!(
             norm.segments()[0].data,
@@ -670,7 +794,7 @@ mod tests {
             Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC]),
             Segment::new(0x1001, vec![0xFF]), // overlaps
         ]);
-        hf.fill_gaps(0x00);
+        hf.fill_gaps(0x00).unwrap();
         let seg = &hf.segments()[0];
         assert_eq!(seg.start_address, 0x1000);
         // normalized: last wins, so 0x1001 = 0xFF
@@ -680,7 +804,7 @@ mod tests {
     #[test]
     fn test_fill_gaps_single_segment() {
         let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB])]);
-        hf.fill_gaps(0xFF);
+        hf.fill_gaps(0xFF).unwrap();
         assert_eq!(hf.segments().len(), 1);
         assert_eq!(hf.segments()[0].data, vec![0xAA, 0xBB]);
     }

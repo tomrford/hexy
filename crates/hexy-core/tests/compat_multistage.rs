@@ -18,7 +18,8 @@ fn test_fill_region_preserves_existing_data() {
             pattern: vec![0x11, 0x22],
             overwrite: false,
         },
-    );
+    )
+    .unwrap();
 
     let norm = hf.normalized();
     assert_eq!(
@@ -92,7 +93,8 @@ fn test_compat_multistage_order() {
             pattern: vec![0xAA, 0xBB],
             overwrite: false,
         },
-    );
+    )
+    .unwrap();
 
     hf.cut(AddressRange::from_start_end(0x1001, 0x1001).unwrap());
 
@@ -125,7 +127,7 @@ fn test_compat_multistage_order() {
     hf.checksum(&cs_options, &ChecksumTarget::Append).unwrap();
 
     let norm = hf.normalized();
-    assert_eq!(norm.segments()[0].start_address, 0x0FFF);
+    assert_eq!(norm.segments()[0].start_address(), 0x0FFF);
     assert_eq!(
         norm.read_bytes_contiguous(0x0FFF, 6).unwrap(),
         vec![0xEE, 0x10, 0x21, 0x22, 0x13, 0x14]
