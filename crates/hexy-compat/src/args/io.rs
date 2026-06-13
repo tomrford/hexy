@@ -358,6 +358,19 @@ pub(super) fn write_porsche_output(
     Ok(())
 }
 
+pub(super) fn validate_porsche_output_args(args: &Args) -> Result<(), CliError> {
+    if !matches!(
+        args.output_format,
+        Some(super::types::OutputFormat::Porsche)
+    ) {
+        return Ok(());
+    }
+
+    let checksum_params = porsche_checksum_params(args)?;
+    let _ = porsche_checksum_options(checksum_params)?;
+    Ok(())
+}
+
 fn porsche_checksum_params(args: &Args) -> Result<&ChecksumParams, CliError> {
     if !args.checksum_multi.is_empty() {
         return Err(CliError::Other(

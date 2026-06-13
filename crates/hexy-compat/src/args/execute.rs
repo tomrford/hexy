@@ -6,7 +6,7 @@ use crate::{
 use super::error::{CliError, ExecuteOutput};
 use super::io::{
     FsProvider, ReadProvider, load_binary_input, load_hex_ascii_input, load_input,
-    load_intel_hex_16bit_input, write_output_for_args,
+    load_intel_hex_16bit_input, validate_porsche_output_args, write_output_for_args,
 };
 use super::signature::{
     apply_data_processing, apply_signature_verification, is_supported_data_processing_method,
@@ -103,6 +103,7 @@ impl Args {
         provider: &P,
     ) -> Result<ExecuteOutput, CliError> {
         self.validate_supported_features()?;
+        validate_porsche_output_args(self)?;
 
         let mut hexfile = self.load_hexfile(provider)?;
         self.execute_operations(&mut hexfile, provider)?;
