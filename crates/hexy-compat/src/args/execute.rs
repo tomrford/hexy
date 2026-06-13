@@ -7,13 +7,13 @@ use hexy_core::ops::{LogCommand, LogCommandKind};
 use super::error::{CliError, ExecuteOutput};
 use super::io::{
     FsProvider, ReadProvider, load_binary_input, load_hex_ascii_input, load_input,
-    load_intel_hex_16bit_input, write_output_for_args,
+    load_intel_hex_16bit_input, validate_porsche_output_args, write_output_for_args,
 };
 use super::signature::{
     apply_data_processing, apply_signature_verification, is_supported_data_processing_method,
     is_supported_signature_verify_method,
 };
-use super::types::{Args, ChecksumParams, ChecksumTarget, ParseArgError};
+use super::types::{Args, ChecksumParams, ChecksumTarget, OutputFormat, ParseArgError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Args {
@@ -112,11 +112,17 @@ impl Args {
         provider: &P,
     ) -> Result<ExecuteOutput, CliError> {
         self.validate_supported_features()?;
+        validate_porsche_output_args(self)?;
 
         let mut hexfile = self.load_hexfile(provider)?;
         self.execute_operations(&mut hexfile, provider)?;
 
-        let checksum_bytes = self.apply_checksums(&mut hexfile)?;
+        let is_porsche_output = matches!(self.output_format, Some(OutputFormat::Porsche));
+        let checksum_bytes = if is_porsche_output {
+            None
+        } else {
+            self.apply_checksums(&mut hexfile)?
+        };
         let _signature_bytes = self.apply_data_processing(&mut hexfile)?;
         self.apply_signature_verification(&hexfile)?;
         self.write_outputs(&hexfile, provider)?;
@@ -209,7 +215,10 @@ impl Args {
         }
 
         if self.fill_all {
-            hexfile.fill_gaps(0x00);
+            self.wrap_error(
+                "/FA",
+                hexfile.fill_gaps_bounded(0x00, crate::DEFAULT_DENSE_SPAN_LIMIT),
+            )?;
         }
 
         if let Some(alignment) = self.align_address {

@@ -139,6 +139,37 @@ fn test_cli_checksum_forced_range_uses_pattern_for_gaps() {
 }
 
 #[test]
+fn test_cli_checksum_forced_range_keeps_real_data_outside_range_virtual() {
+    let dir = temp_dir("cli_checksum_forced_virtual");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out_path = dir.join("out.hex");
+    write_file(&base, &[0x01]);
+    write_file(&merge, &[0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", base.display()),
+        format!("/MO:{};0x2000", merge.display()),
+        "/CS0:@append;!0x1000-0x1001#FF".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out_path.display().to_string(),
+    ];
+
+    let output = run_hexy(&args);
+    assert_success(&output);
+
+    let data = std::fs::read(&out_path).unwrap();
+    let hexfile = parse_intel_hex(&data).unwrap();
+    let norm = hexfile.normalized();
+    assert!(norm.read_bytes_contiguous(0x1001, 1).is_none());
+    assert_eq!(
+        norm.read_bytes_contiguous(0x2000, 3).unwrap(),
+        vec![0x02, 0x01, 0x02]
+    );
+}
+
+#[test]
 fn test_cli_checksum_little_endian_output() {
     let hexfile = run_checksum_hex(&[0x01, 0x02, 0x03, 0x04], "/CSR0:@append");
     let norm = hexfile.normalized();

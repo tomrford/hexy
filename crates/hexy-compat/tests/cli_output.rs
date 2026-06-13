@@ -3,6 +3,8 @@ mod common_lines;
 
 use common::{assert_success, run_hexy, temp_dir, write_file};
 use common_lines::read_nonempty_lines;
+use ed25519_dalek::SigningKey as EdSigningKey;
+use ed25519_dalek::pkcs8::EncodePrivateKey as EdEncodePrivateKey;
 
 fn parse_hex_pairs(line: &str) -> Vec<u8> {
     let mut out = Vec::new();
@@ -18,6 +20,15 @@ fn parse_hex_pairs(line: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+fn write_ed25519_private_key(dir: &std::path::Path, prefix: &str) -> std::path::PathBuf {
+    let secret = [0x42u8; 32];
+    let signing = EdSigningKey::from_bytes(&secret);
+    let private_path = dir.join(format!("{prefix}_private.der"));
+    let private_der = signing.to_pkcs8_der().unwrap();
+    write_file(&private_path, private_der.as_bytes());
+    private_path
 }
 
 #[test]
@@ -447,6 +458,34 @@ fn test_cli_binary_and_separate_binary() {
 }
 
 #[test]
+fn test_cli_separate_binary_preserves_split_blocks() -> std::io::Result<()> {
+    let dir = temp_dir("cli_xsb_split");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.bin");
+    write_file(&input, &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input.display()),
+        "/SB:4".to_owned(),
+        "/XSB".to_owned(),
+        "-o".to_owned(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+    assert_success(&output);
+
+    assert_eq!(
+        std::fs::read(dir.join("out_1000.bin"))?,
+        vec![0x00, 0x01, 0x02, 0x03]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("out_1004.bin"))?,
+        vec![0x04, 0x05, 0x06, 0x07]
+    );
+    Ok(())
+}
+
+#[test]
 fn test_cli_binary_address_order() {
     let dir = temp_dir("cli_xn_order");
     let base = dir.join("base.bin");
@@ -466,6 +505,129 @@ fn test_cli_binary_address_order() {
     assert_success(&output);
     let data = std::fs::read(&out).unwrap();
     assert_eq!(data, vec![0x02, 0x01]);
+}
+
+#[test]
+fn test_cli_porsche_requires_checksum_without_partial_output() {
+    let dir = temp_dir("cli_xp_requires_cs");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.bin");
+    write_file(&input, &[0x01, 0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input.display()),
+        "/XP".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/XP requires /CS or /CSR"));
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_porsche_rejects_checksum_multi_before_signature_sidecar() {
+    let dir = temp_dir("cli_xp_csm_preflight");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.bin");
+    let signature = dir.join("sig.bin");
+    let private_key = write_ed25519_private_key(&dir, "ed");
+    write_file(&input, &[0x01, 0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input.display()),
+        "/XP".to_string(),
+        "/CSM0:@append".to_string(),
+        format!("/DP46:{};{}", private_key.display(), signature.display()),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/CSM is not supported for /XP"));
+    assert!(!signature.exists());
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_porsche_appends_selected_checksum_over_dense_filled_output() {
+    let dir = temp_dir("cli_xp_checksum");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.bin");
+    write_file(&base, &[0x01, 0x02]);
+    write_file(&merge, &[0x03]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", base.display()),
+        format!("/MO:{};0x1004", merge.display()),
+        "/AF:00".to_string(),
+        "/CS0".to_string(),
+        "/XP".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+    assert_success(&output);
+
+    let data = std::fs::read(&out).unwrap();
+    assert_eq!(data, vec![0x01, 0x02, 0x00, 0x00, 0x03, 0x00, 0x06]);
+}
+
+#[test]
+fn test_cli_porsche_rejects_large_sparse_span_without_partial_output() {
+    let dir = temp_dir("cli_xp_large_sparse");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.bin");
+    write_file(&base, &[0x01]);
+    write_file(&merge, &[0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x0", base.display()),
+        format!("/MO:{};0x20000000", merge.display()),
+        "/CS0".to_string(),
+        "/XP".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("dense materialization span too large"));
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_fill_all_rejects_large_sparse_span_without_partial_output() {
+    let dir = temp_dir("cli_fa_large_sparse");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.bin");
+    write_file(&base, &[0x01]);
+    write_file(&merge, &[0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x0", base.display()),
+        format!("/MO:{};0x20000000", merge.display()),
+        "/FA".to_string(),
+        "/XN".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/FA"));
+    assert!(stderr.contains("dense materialization span too large"));
+    assert!(!out.exists());
 }
 
 #[test]

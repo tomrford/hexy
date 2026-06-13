@@ -29,7 +29,7 @@ use ripemd::Ripemd160;
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 
-use crate::{AddressRange, HexFile, OpsError, Segment, merge_ranges};
+use crate::{AddressRange, HexFile, OpsError, merge_ranges};
 
 /// Target for checksum output.
 #[derive(Debug, Clone)]
@@ -420,72 +420,27 @@ impl HexFile {
                 | ChecksumAlgorithm::WordSumLeTwosComplement
         );
 
-        let working = if let Some(forced) = options.forced_range.as_ref() {
-            let mut combined = HexFile::new();
-            let fill = build_pattern_data(forced.range, &forced.pattern)?;
-            combined.append_segment(Segment::new(forced.range.start(), fill));
-            for segment in normalized.segments() {
-                combined.append_segment(segment.clone());
-            }
-            combined.normalized()
-        } else {
-            normalized
-        };
-
-        let effective_range = self.resolve_effective_checksum_range(options)?;
-
-        let Some(range) = effective_range else {
-            return Ok(Vec::new());
-        };
-
         let mut excludes = options.exclude_ranges.clone();
         if let Some(target) = options.target_exclude {
             excludes.push(target);
         }
         let excludes = merge_ranges(&excludes);
-        let include_ranges = subtract_ranges(range, &excludes);
+        let include_ranges = checksum_include_ranges(&normalized, options, &excludes);
         if include_ranges.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut cap_u64: u64 = 0;
-        let segments = working.segments();
-        let has_forced_range = options.forced_range.is_some();
-
-        if has_forced_range {
-            for r in &include_ranges {
-                cap_u64 = cap_u64.saturating_add(r.length() as u64);
-            }
-        } else {
-            let mut seg_idx = 0usize;
-            let mut inc_idx = 0usize;
-            while seg_idx < segments.len() && inc_idx < include_ranges.len() {
-                let seg = &segments[seg_idx];
-                let inc = include_ranges[inc_idx];
-                if seg.end_address() < inc.start() {
-                    seg_idx += 1;
-                    continue;
-                }
-                if seg.start_address > inc.end() {
-                    inc_idx += 1;
-                    continue;
-                }
-                let start = seg.start_address.max(inc.start());
-                let end = seg.end_address().min(inc.end());
-                cap_u64 = cap_u64.saturating_add((end - start + 1) as u64);
-                if seg.end_address() <= inc.end() {
-                    seg_idx += 1;
-                } else {
-                    inc_idx += 1;
-                }
-            }
+        for range in &include_ranges {
+            cap_u64 = cap_u64.saturating_add(range.length() as u64);
         }
 
         let cap = usize::try_from(cap_u64).map_err(|_| {
+            let start = include_ranges.first().map_or(0, AddressRange::start);
+            let end = include_ranges.last().map_or(0, AddressRange::end);
             OpsError::AddressOverflow(format!(
                 "checksum range length exceeds usize (start={:#X}, end={:#X})",
-                range.start(),
-                range.end()
+                start, end
             ))
         })?;
 
@@ -511,108 +466,26 @@ impl HexFile {
             Ok(())
         };
 
-        if has_forced_range {
-            for r in &include_ranges {
-                let run_len = usize::try_from(r.length()).map_err(|_| {
-                    OpsError::AddressOverflow(format!(
-                        "checksum range length exceeds usize (start={:#X}, end={:#X})",
-                        r.start(),
-                        r.end()
-                    ))
-                })?;
-                finalize_run(r.start(), run_len)?;
-            }
+        for range in &include_ranges {
+            let run_len = usize::try_from(range.length()).map_err(|_| {
+                OpsError::AddressOverflow(format!(
+                    "checksum range length exceeds usize (start={:#X}, end={:#X})",
+                    range.start(),
+                    range.end()
+                ))
+            })?;
+            finalize_run(range.start(), run_len)?;
+        }
 
-            let mut seg_idx = 0usize;
-            for r in include_ranges {
-                let mut addr = r.start();
-                while seg_idx < segments.len() && segments[seg_idx].end_address() < addr {
-                    seg_idx += 1;
-                }
-                while addr <= r.end() {
-                    let Some(seg) = segments.get(seg_idx) else {
-                        let len = (r.end() - addr + 1) as usize;
-                        data.resize(data.len() + len, 0x00);
-                        break;
-                    };
-                    if seg.start_address > r.end() {
-                        let len = (r.end() - addr + 1) as usize;
-                        data.resize(data.len() + len, 0x00);
-                        break;
-                    }
-                    if seg.start_address > addr {
-                        let gap_end = seg.start_address.saturating_sub(1).min(r.end());
-                        let len = (gap_end - addr + 1) as usize;
-                        data.resize(data.len() + len, 0x00);
-                        addr = gap_end.saturating_add(1);
-                        continue;
-                    }
-
-                    let seg_start = addr.max(seg.start_address);
-                    let seg_end = seg.end_address().min(r.end());
-                    let offset = (seg_start - seg.start_address) as usize;
-                    let len = (seg_end - seg_start + 1) as usize;
-                    data.extend_from_slice(&seg.data[offset..offset + len]);
-
-                    if seg.end_address() <= seg_end {
-                        seg_idx += 1;
-                    }
-                    if let Some(next_addr) = seg_end.checked_add(1) {
-                        addr = next_addr;
-                    } else {
-                        break;
-                    }
-                }
-            }
-        } else {
-            let mut run_start: Option<u32> = None;
-            let mut run_len: usize = 0;
-            let mut prev_end: Option<u32> = None;
-            let mut seg_idx = 0usize;
-            let mut inc_idx = 0usize;
-
-            while seg_idx < segments.len() && inc_idx < include_ranges.len() {
-                let seg = &segments[seg_idx];
-                let inc = include_ranges[inc_idx];
-                if seg.end_address() < inc.start() {
-                    seg_idx += 1;
-                    continue;
-                }
-                if seg.start_address > inc.end() {
-                    inc_idx += 1;
-                    continue;
-                }
-                let start = seg.start_address.max(inc.start());
-                let end = seg.end_address().min(inc.end());
-
-                if let Some(prev) = prev_end
-                    && start != prev.saturating_add(1)
-                {
-                    if let Some(start_addr) = run_start.take() {
-                        finalize_run(start_addr, run_len)?;
-                    }
-                    run_len = 0;
-                }
-                if run_start.is_none() {
-                    run_start = Some(start);
-                }
-
-                let offset = (start - seg.start_address) as usize;
-                let len = (end - start + 1) as usize;
-                data.extend_from_slice(&seg.data[offset..offset + len]);
-                run_len += len;
-                prev_end = Some(end);
-
-                if seg.end_address() <= inc.end() {
-                    seg_idx += 1;
-                } else {
-                    inc_idx += 1;
-                }
-            }
-
-            if let Some(start_addr) = run_start {
-                finalize_run(start_addr, run_len)?;
-            }
+        let mut seg_idx = 0usize;
+        for range in include_ranges {
+            append_checksum_range(
+                &normalized,
+                options.forced_range.as_ref(),
+                range,
+                &mut seg_idx,
+                &mut data,
+            )?;
         }
 
         Ok(data)
@@ -625,10 +498,13 @@ impl HexFile {
         if let Some(range) = options.range {
             return Ok(Some(range));
         }
+        let mut min = self.min_address();
+        let mut max = self.max_address();
         if let Some(forced) = options.forced_range.as_ref() {
-            return Ok(Some(forced.range));
+            min = Some(min.map_or(forced.range.start(), |addr| addr.min(forced.range.start())));
+            max = Some(max.map_or(forced.range.end(), |addr| addr.max(forced.range.end())));
         }
-        if let (Some(min), Some(max)) = (self.min_address(), self.max_address()) {
+        if let (Some(min), Some(max)) = (min, max) {
             return Ok(Some(AddressRange::from_start_end(min, max).map_err(
                 |e| OpsError::AddressOverflow(format!("checksum range invalid: {e}")),
             )?));
@@ -637,23 +513,118 @@ impl HexFile {
     }
 }
 
-fn build_pattern_data(range: AddressRange, pattern: &[u8]) -> Result<Vec<u8>, OpsError> {
-    let len = usize::try_from(range.length()).map_err(|_| {
+fn checksum_include_ranges(
+    normalized: &HexFile,
+    options: &ChecksumOptions,
+    excludes: &[AddressRange],
+) -> Vec<AddressRange> {
+    let mut domains: Vec<AddressRange> = normalized
+        .segments()
+        .iter()
+        .filter_map(|segment| {
+            AddressRange::from_start_end(segment.start_address, segment.end_address()).ok()
+        })
+        .collect();
+
+    if let Some(forced) = options.forced_range.as_ref() {
+        domains.push(forced.range);
+    }
+
+    let domains = merge_ranges(&domains)
+        .into_iter()
+        .filter_map(|range| {
+            if let Some(limit) = options.range {
+                range.intersection(&limit)
+            } else {
+                Some(range)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut include_ranges = Vec::new();
+    for domain in domains {
+        include_ranges.extend(subtract_ranges(domain, excludes));
+    }
+    merge_ranges(&include_ranges)
+}
+
+fn append_checksum_range(
+    normalized: &HexFile,
+    forced_range: Option<&ForcedRange>,
+    range: AddressRange,
+    seg_idx: &mut usize,
+    data: &mut Vec<u8>,
+) -> Result<(), OpsError> {
+    let segments = normalized.segments();
+    let mut addr = range.start();
+
+    while addr <= range.end() {
+        while *seg_idx < segments.len() && segments[*seg_idx].end_address() < addr {
+            *seg_idx += 1;
+        }
+
+        if let Some(segment) = segments.get(*seg_idx)
+            && segment.start_address <= addr
+        {
+            let end = segment.end_address().min(range.end());
+            let offset = (addr - segment.start_address) as usize;
+            let len = (end - addr + 1) as usize;
+            data.extend_from_slice(&segment.data[offset..offset + len]);
+            if segment.end_address() <= end {
+                *seg_idx += 1;
+            }
+            let Some(next) = end.checked_add(1) else {
+                break;
+            };
+            addr = next;
+            continue;
+        }
+
+        let Some(forced) = forced_range.filter(|forced| forced.range.contains(addr)) else {
+            return Err(OpsError::RangeNotCovered {
+                start: addr,
+                length: range.end() - addr + 1,
+            });
+        };
+
+        let mut end = forced.range.end().min(range.end());
+        if let Some(segment) = segments.get(*seg_idx)
+            && segment.start_address > addr
+        {
+            end = end.min(segment.start_address - 1);
+        }
+        append_forced_pattern_bytes(forced, addr, end, data)?;
+        let Some(next) = end.checked_add(1) else {
+            break;
+        };
+        addr = next;
+    }
+
+    Ok(())
+}
+
+fn append_forced_pattern_bytes(
+    forced: &ForcedRange,
+    start: u32,
+    end: u32,
+    data: &mut Vec<u8>,
+) -> Result<(), OpsError> {
+    let fill_pattern: &[u8] = if forced.pattern.is_empty() {
+        &[0xFF]
+    } else {
+        &forced.pattern
+    };
+    let base_offset = start - forced.range.start();
+    let len = usize::try_from(end - start + 1).map_err(|_| {
         OpsError::AddressOverflow(format!(
-            "forced range length exceeds usize (start={:#X}, end={:#X})",
-            range.start(),
-            range.end()
+            "forced range length exceeds usize (start={start:#X}, end={end:#X})"
         ))
     })?;
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-    let fill_pattern = if pattern.is_empty() { &[0xFF] } else { pattern };
-    let mut data = Vec::with_capacity(len);
     for i in 0..len {
-        data.push(fill_pattern[i % fill_pattern.len()]);
+        let pattern_idx = ((base_offset as usize) + i) % fill_pattern.len();
+        data.push(fill_pattern[pattern_idx]);
     }
-    Ok(data)
+    Ok(())
 }
 
 fn subtract_ranges(range: AddressRange, excludes: &[AddressRange]) -> Vec<AddressRange> {
@@ -1208,6 +1179,59 @@ mod tests {
         let result = hf.calculate_checksum(&options).unwrap();
         // Compatibility: forced range gaps are filled by the requested pattern.
         assert_eq!(result, vec![0x02, 0x01]);
+    }
+
+    #[test]
+    fn test_hexfile_checksum_forced_range_keeps_real_data_outside_range() {
+        let hf = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01]),
+            Segment::new(0x2000, vec![0x02]),
+        ]);
+        let options = ChecksumOptions {
+            algorithm: ChecksumAlgorithm::ByteSumBe,
+            forced_range: Some(ForcedRange {
+                range: AddressRange::from_start_end(0x1000, 0x1001).unwrap(),
+                pattern: vec![0xFF],
+            }),
+            ..Default::default()
+        };
+        let result = hf.calculate_checksum(&options).unwrap();
+        assert_eq!(result, vec![0x01, 0x02]);
+    }
+
+    #[test]
+    fn test_hexfile_checksum_forced_range_excludes_virtual_bytes() {
+        let hf = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x10]),
+            Segment::new(0x2000, vec![0x02]),
+        ]);
+        let options = ChecksumOptions {
+            algorithm: ChecksumAlgorithm::ByteSumBe,
+            forced_range: Some(ForcedRange {
+                range: AddressRange::from_start_end(0x1000, 0x100F).unwrap(),
+                pattern: vec![0x01],
+            }),
+            exclude_ranges: vec![AddressRange::from_start_end(0x1001, 0x100E).unwrap()],
+            ..Default::default()
+        };
+        let result = hf.calculate_checksum(&options).unwrap();
+        assert_eq!(result, vec![0x00, 0x13]);
+    }
+
+    #[test]
+    fn test_hexfile_checksum_large_forced_range_applies_exclusions_before_collecting() {
+        let hf = HexFile::new();
+        let options = ChecksumOptions {
+            algorithm: ChecksumAlgorithm::ByteSumBe,
+            forced_range: Some(ForcedRange {
+                range: AddressRange::from_start_end(0, u32::MAX - 1).unwrap(),
+                pattern: vec![0xAB, 0xCD],
+            }),
+            exclude_ranges: vec![AddressRange::from_start_end(1, u32::MAX - 2).unwrap()],
+            ..Default::default()
+        };
+        let result = hf.calculate_checksum(&options).unwrap();
+        assert_eq!(result, vec![0x01, 0x56]);
     }
 
     #[test]

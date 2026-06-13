@@ -108,4 +108,4 @@ patched = pipeline.apply(source)
 patched.write_intel_hex("patched.hex")
 ```
 
-Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span.
+Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span. In `hexy-compat`, `/FA` and `/XP` reject dense spans above 256 MiB.

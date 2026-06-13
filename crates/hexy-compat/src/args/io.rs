@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, io};
 
-use hexy_core::HexFile;
+use hexy_core::{HexFile, Segment};
 
 use super::error::CliError;
 use super::ini::load_ini;
 use super::parse_util::parse_number;
 use super::types::Args;
+use super::types::ChecksumParams;
 use super::types::OutputFormat;
 
 const DEFAULT_SREC_BYTES_PER_LINE: u8 = 32;
@@ -335,20 +336,79 @@ pub(super) fn write_porsche_output(
     hexfile: &HexFile,
     output_path: &Path,
 ) -> Result<(), CliError> {
+    let checksum_params = porsche_checksum_params(args)?;
+    let options = porsche_checksum_options(checksum_params)?;
     let mut normalized = hexfile.normalized();
-    if normalized.segments().is_empty() {
-        std::fs::write(output_path, [])?;
+    let fill = args.align_fill;
+    normalized
+        .fill_gaps_bounded(fill, crate::DEFAULT_DENSE_SPAN_LIMIT)
+        .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
+
+    let checksum = normalized
+        .calculate_checksum(&options)
+        .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
+    if let super::types::ChecksumTarget::File(path) = &checksum_params.target {
+        write_checksum_text(path, &checksum).map_err(|e| CliError::Other(format!("/XP: {e}")))?;
+    }
+
+    let mut segments = normalized.into_segments();
+    let mut output = segments.pop().map_or_else(Vec::new, |segment| segment.data);
+    output.extend_from_slice(&checksum);
+    std::fs::write(output_path, output)?;
+    Ok(())
+}
+
+pub(super) fn validate_porsche_output_args(args: &Args) -> Result<(), CliError> {
+    if !matches!(
+        args.output_format,
+        Some(super::types::OutputFormat::Porsche)
+    ) {
         return Ok(());
     }
 
-    let fill = args.align_fill;
-    normalized.fill_gaps(fill);
-    let data = normalized.segments()[0].data.clone();
-    let checksum = byte_sum_u16(&data);
-    let mut output = data;
-    output.extend_from_slice(&checksum.to_be_bytes());
-    std::fs::write(output_path, output)?;
+    let checksum_params = porsche_checksum_params(args)?;
+    let _ = porsche_checksum_options(checksum_params)?;
     Ok(())
+}
+
+fn porsche_checksum_params(args: &Args) -> Result<&ChecksumParams, CliError> {
+    if !args.checksum_multi.is_empty() {
+        return Err(CliError::Other(
+            "/XP requires a single /CS or /CSR checksum; /CSM is not supported for /XP".into(),
+        ));
+    }
+    args.checksum.as_ref().ok_or_else(|| {
+        CliError::Other("/XP requires /CS or /CSR to select the appended checksum".into())
+    })
+}
+
+fn porsche_checksum_options(params: &ChecksumParams) -> Result<crate::ChecksumOptions, CliError> {
+    let algorithm = crate::ChecksumAlgorithm::from_index(params.algorithm)
+        .map_err(|e| CliError::Other(format!("/CS{}: {e}", params.algorithm)))?;
+    let forced_range = params
+        .forced_range
+        .as_ref()
+        .map(|forced| crate::ForcedRange {
+            range: forced.range,
+            pattern: forced.pattern.clone(),
+        });
+    Ok(crate::ChecksumOptions {
+        algorithm,
+        range: params.range,
+        little_endian_output: params.little_endian,
+        forced_range,
+        exclude_ranges: params.exclude_ranges.clone(),
+        target_exclude: None,
+    })
+}
+
+fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let formatted = bytes
+        .iter()
+        .map(|b| format!("0x{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(path, formatted)
 }
 
 pub(super) fn resolve_porsche_output_path(args: &Args) -> Result<PathBuf, CliError> {
@@ -540,10 +600,6 @@ fn format_erase_sectors(hexfile: &HexFile, alignment: Option<u32>) -> String {
         .collect::<String>()
 }
 
-fn byte_sum_u16(data: &[u8]) -> u16 {
-    data.iter().fold(0u16, |acc, &b| acc.wrapping_add(b as u16))
-}
-
 fn current_date_mmddyyyy() -> Option<String> {
     let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -569,9 +625,7 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
 }
 
 fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
-    let normalized = hexfile.normalized();
-    let mut segments = normalized.into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    let segments = separate_binary_segments(hexfile);
 
     if segments.is_empty() {
         return Ok(());
@@ -593,8 +647,72 @@ fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError>
     Ok(())
 }
 
+fn separate_binary_segments(hexfile: &HexFile) -> Vec<Segment> {
+    let all_segments = hexfile.segments();
+    let mut indexed_segments: Vec<(usize, &Segment)> = all_segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| !segment.is_empty())
+        .collect();
+    indexed_segments.sort_by_key(|(_, segment)| segment.start_address);
+
+    let mut output = Vec::new();
+    let mut run_indices = Vec::new();
+    let mut run_end = None;
+
+    for (index, segment) in indexed_segments {
+        match run_end {
+            Some(end) if segment.start_address <= end => {
+                run_indices.push(index);
+                run_end = Some(end.max(segment.end_address()));
+            }
+            Some(_) => {
+                push_separate_binary_run(all_segments, &run_indices, &mut output);
+                run_indices.clear();
+                run_indices.push(index);
+                run_end = Some(segment.end_address());
+            }
+            None => {
+                run_indices.push(index);
+                run_end = Some(segment.end_address());
+            }
+        }
+    }
+
+    if !run_indices.is_empty() {
+        push_separate_binary_run(all_segments, &run_indices, &mut output);
+    }
+
+    output.sort_by_key(|segment| segment.start_address);
+    output
+}
+
+fn push_separate_binary_run(
+    all_segments: &[Segment],
+    run_indices: &[usize],
+    output: &mut Vec<Segment>,
+) {
+    if run_indices.len() == 1 {
+        output.push(all_segments[run_indices[0]].clone());
+        return;
+    }
+
+    let mut insertion_order = run_indices.to_vec();
+    insertion_order.sort_unstable();
+    let run_segments = insertion_order
+        .into_iter()
+        .map(|index| all_segments[index].clone())
+        .collect();
+    output.extend(
+        HexFile::with_segments(run_segments)
+            .normalized()
+            .into_segments(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::types::ChecksumTarget;
     use super::*;
     use crate::Segment;
     use std::fs;
@@ -634,6 +752,37 @@ mod tests {
         assert_eq!(fs::read(file2).unwrap(), vec![0xCC]);
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_separate_binary_preserves_adjacent_blocks() -> Result<(), CliError> {
+        let dir = unique_temp_dir();
+        let output = dir.join("out.bin");
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x00, 0x01, 0x02, 0x03]),
+            Segment::new(0x1004, vec![0x04, 0x05, 0x06, 0x07]),
+            Segment::new(0x2000, vec![0x10, 0x11, 0x12, 0x13]),
+            Segment::new(0x2002, vec![0xAA, 0xBB]),
+        ]);
+
+        write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
+
+        assert_eq!(
+            fs::read(dir.join("out_1000.bin"))?,
+            vec![0x00, 0x01, 0x02, 0x03]
+        );
+        assert_eq!(
+            fs::read(dir.join("out_1004.bin"))?,
+            vec![0x04, 0x05, 0x06, 0x07]
+        );
+        assert_eq!(
+            fs::read(dir.join("out_2000.bin"))?,
+            vec![0x10, 0x11, 0xAA, 0xBB]
+        );
+        assert!(!dir.join("out_2002.bin").exists());
+
+        fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[test]
@@ -750,11 +899,33 @@ mod tests {
     }
 
     #[test]
-    fn test_write_porsche_output_appends_checksum() {
+    fn test_write_porsche_output_requires_checksum() {
+        let dir = unique_temp_dir();
+        let output = dir.join("porsche.bin");
+        let args = Args::default();
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+
+        let result = write_porsche_output(&args, &hexfile, &output);
+        assert!(result.is_err());
+        assert!(!output.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_porsche_output_appends_selected_checksum() {
         let dir = unique_temp_dir();
         let output = dir.join("porsche.bin");
         let args = Args {
             align_fill: 0xFF,
+            checksum: Some(ChecksumParams {
+                algorithm: 0,
+                target: ChecksumTarget::None,
+                little_endian: false,
+                range: None,
+                forced_range: None,
+                exclude_ranges: Vec::new(),
+            }),
             ..Args::default()
         };
         let hexfile = HexFile::with_segments(vec![
@@ -768,6 +939,33 @@ mod tests {
         assert_eq!(&data[..5], &[0x01, 0x02, 0xFF, 0xFF, 0x03]);
         let checksum = u16::from_be_bytes([data[5], data[6]]);
         assert_eq!(checksum, 0x01 + 0x02 + 0xFF + 0xFF + 0x03);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_porsche_output_rejects_large_dense_span_without_partial_file() {
+        let dir = unique_temp_dir();
+        let output = dir.join("porsche.bin");
+        let args = Args {
+            checksum: Some(ChecksumParams {
+                algorithm: 0,
+                target: ChecksumTarget::None,
+                little_endian: false,
+                range: None,
+                forced_range: None,
+                exclude_ranges: Vec::new(),
+            }),
+            ..Args::default()
+        };
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0, vec![0x01]),
+            Segment::new((crate::DEFAULT_DENSE_SPAN_LIMIT as u32) + 1, vec![0x02]),
+        ]);
+
+        let result = write_porsche_output(&args, &hexfile, &output);
+        assert!(result.is_err());
+        assert!(!output.exists());
 
         let _ = fs::remove_dir_all(dir);
     }
