@@ -506,24 +506,26 @@ fn test_cli_auto_detect_ihex_after_blank_lines() {
 }
 
 #[test]
-fn test_cli_auto_detect_header_then_ihex_is_binary() {
+fn test_cli_auto_detect_header_then_ihex_exports_ihex_data()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = temp_dir("cli_auto_ihex_header");
     let input = dir.join("input.txt");
-    let out = dir.join("out.bin");
+    let out = dir.join("out.hex");
     let content = "HEADER\n:020000000102FB\n:00000001FF\n";
     write_file(&input, content.as_bytes());
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
     let output = run_hexy(&args);
     assert_success(&output);
-    let data = std::fs::read(&out).unwrap();
-    assert_eq!(data, content.as_bytes());
+    let text = std::fs::read_to_string(&out)?;
+    assert_eq!(text, ":020000000102FB\n:00000001FF\n".replace('\n', "\r\n"));
+    Ok(())
 }
 
 #[test]

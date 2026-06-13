@@ -26,54 +26,32 @@ pub enum FileIoError {
 }
 
 pub fn detect_format(data: &[u8]) -> AutoFormat {
-    let mut ascii_only = true;
-    let mut first_nonempty_line: Option<Vec<u8>> = None;
-    let mut ascii_lines_checked = 0usize;
-    let mut current_line: Vec<u8> = Vec::new();
+    let mut lines_checked = 0usize;
 
-    for &byte in data {
-        if byte == b'\n' || byte == b'\r' {
-            if !current_line.is_empty() {
-                if ascii_lines_checked < 25 {
-                    if !current_line.is_ascii() {
-                        ascii_only = false;
-                    }
-                    ascii_lines_checked += 1;
-                }
-                if first_nonempty_line.is_none() {
-                    first_nonempty_line = Some(current_line.clone());
-                }
-                if ascii_lines_checked >= 25 {
-                    break;
-                }
-            }
-            current_line.clear();
-            continue;
+    for mut line in data.split(|&b| b == b'\n') {
+        if let Some(stripped) = line.strip_suffix(b"\r") {
+            line = stripped;
         }
-        current_line.push(byte);
+        let Some(first) = line.iter().copied().find(|b| !b.is_ascii_whitespace()) else {
+            continue;
+        };
+
+        if lines_checked >= 25 {
+            break;
+        }
+        if !line.is_ascii() {
+            return AutoFormat::Binary;
+        }
+        lines_checked += 1;
+
+        match first {
+            b':' => return AutoFormat::IntelHex,
+            b'S' | b's' if lines_checked == 1 => return AutoFormat::SRecord,
+            _ => {}
+        }
     }
 
-    if !current_line.is_empty() && first_nonempty_line.is_none() {
-        first_nonempty_line = Some(current_line);
-    }
-
-    if ascii_lines_checked == 0 && !data.is_empty() {
-        ascii_only = data.is_ascii();
-    }
-
-    if !ascii_only {
-        return AutoFormat::Binary;
-    }
-
-    match first_nonempty_line
-        .as_deref()
-        .and_then(|line| line.first())
-        .copied()
-    {
-        Some(b':') => AutoFormat::IntelHex,
-        Some(b'S') | Some(b's') => AutoFormat::SRecord,
-        _ => AutoFormat::Binary,
-    }
+    AutoFormat::Binary
 }
 
 pub fn parse_auto(data: &[u8]) -> Result<HexFile, ParseError> {
