@@ -786,6 +786,28 @@ mod tests {
     }
 
     #[test]
+    fn test_write_separate_binary_outputs_normalized_sparse_blocks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = unique_temp_dir();
+        let output = dir.join("out.bin");
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03]),
+            Segment::new(0x1001, vec![0xAA]),
+            Segment::new(0x2000, vec![0xBB, 0xCC]),
+        ]);
+
+        write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
+
+        let file1 = dir.join("out_1000.bin");
+        let file2 = dir.join("out_2000.bin");
+        assert_eq!(fs::read(file1)?, vec![0x01, 0xAA, 0x03]);
+        assert_eq!(fs::read(file2)?, vec![0xBB, 0xCC]);
+
+        let _ = fs::remove_dir_all(dir);
+        Ok(())
+    }
+
+    #[test]
     fn test_write_ford_ihex_happy_path() {
         let dir = unique_temp_dir();
         let ini_path = dir.join("ford.ini");

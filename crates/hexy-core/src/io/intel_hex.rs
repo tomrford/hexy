@@ -42,6 +42,7 @@ fn parse_intel_hex_with_address_scale(
     let mut current_segment: Option<Segment> = None;
     let mut extended_address: u32 = 0;
     let mut eof_seen = false;
+    let mut record_seen = false;
 
     for (line_num, line) in text.lines().enumerate() {
         let line_num = line_num + 1;
@@ -59,11 +60,15 @@ fn parse_intel_hex_with_address_scale(
         }
 
         if !line.starts_with(':') {
+            if !record_seen && !looks_like_malformed_intel_hex_record(line) {
+                continue;
+            }
             return Err(ParseError::InvalidRecord {
                 line: line_num,
                 message: "line does not start with ':'".to_owned(),
             });
         }
+        record_seen = true;
 
         let hex_str = &line[1..];
         if hex_str.len() < 10 {
@@ -181,6 +186,13 @@ fn parse_intel_hex_with_address_scale(
     }
 
     Ok(HexFile::with_segments(segments))
+}
+
+fn looks_like_malformed_intel_hex_record(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    bytes.len() >= 10
+        && bytes.len().is_multiple_of(2)
+        && bytes.iter().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Parse Intel-HEX input. CLI: auto-detect Intel-HEX input.

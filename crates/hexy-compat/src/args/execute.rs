@@ -1,7 +1,8 @@
 use crate::{
     AlignOptions, ChecksumAlgorithm, FillOptions, MergeMode, MergeOptions, RemapOptions, Segment,
-    SwapMode, execute_log_commands, parse_log_commands,
+    SwapMode, parse_log_commands,
 };
+use hexy_core::ops::{LogCommand, LogCommandKind};
 
 use super::error::{CliError, ExecuteOutput};
 use super::io::{
@@ -64,6 +65,14 @@ impl Args {
             return Err(CliError::Unsupported(format!(
                 "signature verification (/SV{}) is not supported yet",
                 params.method
+            )));
+        }
+        if let (Some(dp), Some(sv)) = (&self.data_processing, &self.signature_verify)
+            && dp.placement.is_some()
+        {
+            return Err(CliError::Unsupported(format!(
+                "placed data processing (/DP{}) cannot be combined with signature verification (/SV{}) in one command",
+                dp.method, sv.method
             )));
         }
         if self.import_binary.is_some() && self.import_hex_ascii.is_some() {
@@ -202,10 +211,7 @@ impl Args {
                 .map_err(|e| CliError::Other(format!("/L: {e}")))?;
             let commands =
                 parse_log_commands(&content).map_err(|e| CliError::Other(format!("/L: {e}")))?;
-            execute_log_commands(hexfile, &commands, |log_path| {
-                load_input(provider, log_path)
-            })
-            .map_err(|e| CliError::Other(format!("/L: {e}")))?;
+            execute_compat_log_commands(hexfile, &commands)?;
         }
 
         if self.fill_all {
@@ -387,6 +393,28 @@ impl Args {
     ) -> Result<(), CliError> {
         write_output_for_args(self, hexfile, provider)
     }
+}
+
+fn execute_compat_log_commands(
+    hexfile: &mut crate::HexFile,
+    commands: &[LogCommand],
+) -> Result<(), CliError> {
+    for command in commands {
+        match &command.kind {
+            LogCommandKind::FileOpen(path) => {
+                return Err(CliError::Unsupported(format!(
+                    "/L: FileOpen is not supported for command-line export (line {}): {}",
+                    command.line,
+                    path.display()
+                )));
+            }
+            LogCommandKind::FileClose | LogCommandKind::FileNew => {
+                *hexfile = crate::HexFile::new();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn random_fill_bytes(range: crate::AddressRange) -> Vec<u8> {

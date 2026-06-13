@@ -130,8 +130,8 @@ fn test_cli_remap_s08map_conflict() {
 }
 
 #[test]
-fn test_cli_log_file_open_without_input() {
-    let dir = temp_dir("cli_log_open");
+fn test_cli_log_file_open_is_rejected_for_export() {
+    let dir = temp_dir("cli_log_open_rejected");
     let input = dir.join("input.bin");
     let log = dir.join("commands.log");
     let out = dir.join("out.hex");
@@ -140,16 +140,39 @@ fn test_cli_log_file_open_without_input() {
 
     let args = vec![
         format!("/L:{}", log.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
-    let hexfile = run_hex_output(args, &out);
-    let norm = hexfile.normalized();
-    assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x0);
-    assert_eq!(norm.segments()[0].data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("FileOpen"));
+    assert!(stderr.contains(&input.display().to_string()));
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_log_file_open_relative_path_is_rejected_with_raw_path() {
+    let dir = temp_dir("cli_log_open_relative_rejected");
+    let log = dir.join("commands.log");
+    let out = dir.join("out.hex");
+    write_file(&log, b"FileOpen relative/input.bin");
+
+    let args = vec![
+        format!("/L:{}", log.display()),
+        "/XI".to_owned(),
+        "-o".to_owned(),
+        out.display().to_string(),
+    ];
+
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("FileOpen"));
+    assert!(stderr.contains("relative/input.bin"));
+    assert!(!out.exists());
 }
 
 #[test]
@@ -483,24 +506,26 @@ fn test_cli_auto_detect_ihex_after_blank_lines() {
 }
 
 #[test]
-fn test_cli_auto_detect_header_then_ihex_is_binary() {
+fn test_cli_auto_detect_header_then_ihex_exports_ihex_data()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = temp_dir("cli_auto_ihex_header");
     let input = dir.join("input.txt");
-    let out = dir.join("out.bin");
+    let out = dir.join("out.hex");
     let content = "HEADER\n:020000000102FB\n:00000001FF\n";
     write_file(&input, content.as_bytes());
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
     let output = run_hexy(&args);
     assert_success(&output);
-    let data = std::fs::read(&out).unwrap();
-    assert_eq!(data, content.as_bytes());
+    let text = std::fs::read_to_string(&out)?;
+    assert_eq!(text, ":020000000102FB\n:00000001FF\n".replace('\n', "\r\n"));
+    Ok(())
 }
 
 #[test]

@@ -129,13 +129,15 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Merge opaquely and overwrite existing bytes on overlap.
 - Do not combine `/MO` and `/MT` in the same command.
 
-`/AR:'range1':'range2':...`
-- Keep only the listed address ranges after earlier edits and merges.
-- Use it late when you want upstream operations to see the full image first.
+`/AR:range`
+- Keep only one address range after earlier edits and merges.
+- If `/AR` appears more than once, the last `/AR` wins.
+- A colon in the `/AR` value is not a union; command-line export writes an empty image for that form.
 
 `/L:logfile`
-- Replay slash-style log commands from a file.
-- Use it when a workflow is already captured as `FileOpen`, `FileClose`, or `FileNew` steps.
+- Replay supported slash-style log commands from a file.
+- Use it for `FileClose` and `FileNew` cleanup/reset steps.
+- `FileOpen <path>` is rejected in command-line export; pass inputs through normal CLI input paths.
 
 `/FA`
 - Fill gaps and collapse the image into a single contiguous region.
@@ -203,6 +205,7 @@ The external compatibility target also supports additional proprietary or OEM-sp
 
 `/SVn:keyinfo!signatureinfo`
 - Verify a signature after all prior transforms.
+- Do not combine `/SV` with a placed `/DP` in the same command; write and verify the signature as separate steps instead.
 - Supported methods are `/SV4` through `/SV11`.
 
 ## Output and export

@@ -424,3 +424,29 @@ fn test_cli_address_range_multiple_ranges() {
     let text = std::fs::read_to_string(&out).unwrap();
     assert_eq!(text.trim(), ":00000001FF");
 }
+
+#[test]
+fn test_cli_address_range_repeated_last_wins() {
+    let dir = temp_dir("cli_ar_last_wins");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.hex");
+    write_file(&base, &[0xAA, 0xAB, 0xAC, 0xAD]);
+    write_file(&merge, &[0xBA, 0xBB, 0xBC, 0xBD]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", base.display()),
+        format!("/MO:{};0x2000", merge.display()),
+        "/AR:0x1000,0x2".to_owned(),
+        "/AR:0x2000,0x2".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address, 0x2000);
+    assert_eq!(norm.segments()[0].data, vec![0xBA, 0xBB]);
+}

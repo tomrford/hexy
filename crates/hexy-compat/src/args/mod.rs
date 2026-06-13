@@ -1,5 +1,9 @@
 //! Cleanroom slash-compatible CLI argument parsing and execution.
 //!
+//! Parser boundary: this module parses HexView-style argv into `Args`; execution
+//! maps `Args` onto typed `hexy-core` operations. `hexy-core` does not depend on
+//! slash syntax.
+//!
 //! Processing order matches the cleanroom compatibility target (implemented subset):
 //! 1. Read input file
 //! 2. Open error log (/E)

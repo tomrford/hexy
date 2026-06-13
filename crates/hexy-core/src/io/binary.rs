@@ -38,21 +38,20 @@ pub fn parse_binary(data: &[u8], base_address: u32) -> Result<HexFile, ParseErro
 /// Write the HexFile to a binary blob.
 /// CLI: /XN.
 pub fn write_binary(hexfile: &HexFile, options: &BinaryWriteOptions) -> Vec<u8> {
-    if hexfile.segments().is_empty() {
+    let mut normalized = hexfile.normalized();
+    if normalized.segments().is_empty() {
         return Vec::new();
     }
 
     if let Some(fill) = options.fill_gaps {
-        let mut filled = hexfile.normalized();
-        filled.fill_gaps(fill);
-        if let Some(segment) = filled.segments().first() {
+        normalized.fill_gaps(fill);
+        if let Some(segment) = normalized.segments().first() {
             return segment.data.clone();
         }
         return Vec::new();
     }
 
-    let normalized = hexfile.normalized();
-    let segments = normalized.segments();
+    let segments = normalized.into_segments();
     let total_len: usize = segments.iter().map(|s| s.len()).sum();
     let mut out = Vec::with_capacity(total_len);
     for segment in segments {
