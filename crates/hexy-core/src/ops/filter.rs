@@ -1,6 +1,8 @@
 use super::OpsError;
 use crate::{AddressRange, HexFile, Segment, merge_ranges};
 
+pub const DEFAULT_DENSE_SPAN_LIMIT: u64 = 256 * 1024 * 1024;
+
 /// Options for fill operations.
 #[derive(Debug, Clone)]
 pub struct FillOptions {
@@ -259,6 +261,41 @@ impl HexFile {
         self.set_segments(vec![Segment::new(min_addr, data)]);
     }
 
+    /// Fill all gaps after checking the dense span against a caller-selected limit.
+    pub fn fill_gaps_bounded(&mut self, fill_byte: u8, limit: u64) -> Result<(), OpsError> {
+        let normalized = self.normalized();
+        let Some(min_addr) = normalized.min_address() else {
+            return Ok(());
+        };
+        let Some(max_addr) = normalized.max_address() else {
+            return Ok(());
+        };
+
+        let span = (max_addr as u64) - (min_addr as u64) + 1;
+        if span > limit {
+            return Err(OpsError::DenseSpanTooLarge {
+                operation: "gap fill".to_owned(),
+                span,
+                limit,
+            });
+        }
+        if span > usize::MAX as u64 {
+            return Err(OpsError::AddressOverflow(format!(
+                "dense span length exceeds usize (start={min_addr:#X}, end={max_addr:#X})"
+            )));
+        }
+
+        let total_len = span as usize;
+        let mut data = vec![fill_byte; total_len];
+        for segment in normalized.segments() {
+            let offset = (segment.start_address - min_addr) as usize;
+            data[offset..offset + segment.len()].copy_from_slice(&segment.data);
+        }
+
+        self.set_segments(vec![Segment::new(min_addr, data)]);
+        Ok(())
+    }
+
     /// Merge another file into this one (operates on raw segments).
     pub fn merge(&mut self, other: &HexFile, options: &MergeOptions) -> Result<(), OpsError> {
         let mut other_filtered = other.clone();
@@ -453,6 +490,17 @@ mod tests {
             hf.segments()[0].data,
             vec![0xAA, 0xBB, 0xFF, 0xFF, 0xCC, 0xDD]
         );
+    }
+
+    #[test]
+    fn test_fill_gaps_bounded_rejects_large_sparse_span() {
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x0000, vec![0xAA]),
+            Segment::new(0x1000, vec![0xBB]),
+        ]);
+        let result = hf.fill_gaps_bounded(0xFF, 16);
+        assert!(matches!(result, Err(OpsError::DenseSpanTooLarge { .. })));
+        assert_eq!(hf.segments().len(), 2);
     }
 
     #[test]

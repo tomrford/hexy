@@ -469,6 +469,103 @@ fn test_cli_binary_address_order() {
 }
 
 #[test]
+fn test_cli_porsche_requires_checksum_without_partial_output() {
+    let dir = temp_dir("cli_xp_requires_cs");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.bin");
+    write_file(&input, &[0x01, 0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input.display()),
+        "/XP".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/XP requires /CS or /CSR"));
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_porsche_appends_selected_checksum_over_dense_filled_output() {
+    let dir = temp_dir("cli_xp_checksum");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.bin");
+    write_file(&base, &[0x01, 0x02]);
+    write_file(&merge, &[0x03]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", base.display()),
+        format!("/MO:{};0x1004", merge.display()),
+        "/AF:00".to_string(),
+        "/CS0".to_string(),
+        "/XP".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+    assert_success(&output);
+
+    let data = std::fs::read(&out).unwrap();
+    assert_eq!(data, vec![0x01, 0x02, 0x00, 0x00, 0x03, 0x00, 0x06]);
+}
+
+#[test]
+fn test_cli_porsche_rejects_large_sparse_span_without_partial_output() {
+    let dir = temp_dir("cli_xp_large_sparse");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.bin");
+    write_file(&base, &[0x01]);
+    write_file(&merge, &[0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x0", base.display()),
+        format!("/MO:{};0x20000000", merge.display()),
+        "/CS0".to_string(),
+        "/XP".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("dense materialization span too large"));
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_fill_all_rejects_large_sparse_span_without_partial_output() {
+    let dir = temp_dir("cli_fa_large_sparse");
+    let base = dir.join("base.bin");
+    let merge = dir.join("merge.bin");
+    let out = dir.join("out.bin");
+    write_file(&base, &[0x01]);
+    write_file(&merge, &[0x02]);
+
+    let args = vec![
+        format!("/IN:{};0x0", base.display()),
+        format!("/MO:{};0x20000000", merge.display()),
+        "/FA".to_string(),
+        "/XN".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/FA"));
+    assert!(stderr.contains("dense materialization span too large"));
+    assert!(!out.exists());
+}
+
+#[test]
 fn test_cli_output_option_exclusive() {
     let dir = temp_dir("cli_xx_excl");
     let input = dir.join("input.bin");

@@ -7,6 +7,7 @@ use super::error::CliError;
 use super::ini::load_ini;
 use super::parse_util::parse_number;
 use super::types::Args;
+use super::types::ChecksumParams;
 use super::types::OutputFormat;
 
 const DEFAULT_SREC_BYTES_PER_LINE: u8 = 32;
@@ -335,20 +336,66 @@ pub(super) fn write_porsche_output(
     hexfile: &HexFile,
     output_path: &Path,
 ) -> Result<(), CliError> {
+    let checksum_params = porsche_checksum_params(args)?;
+    let options = porsche_checksum_options(checksum_params)?;
     let mut normalized = hexfile.normalized();
-    if normalized.segments().is_empty() {
-        std::fs::write(output_path, [])?;
-        return Ok(());
+    let fill = args.align_fill;
+    normalized
+        .fill_gaps_bounded(fill, crate::DEFAULT_DENSE_SPAN_LIMIT)
+        .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
+
+    let checksum = normalized
+        .calculate_checksum(&options)
+        .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
+    if let super::types::ChecksumTarget::File(path) = &checksum_params.target {
+        write_checksum_text(path, &checksum).map_err(|e| CliError::Other(format!("/XP: {e}")))?;
     }
 
-    let fill = args.align_fill;
-    normalized.fill_gaps(fill);
-    let data = normalized.segments()[0].data.clone();
-    let checksum = byte_sum_u16(&data);
-    let mut output = data;
-    output.extend_from_slice(&checksum.to_be_bytes());
+    let mut segments = normalized.into_segments();
+    let mut output = segments.pop().map_or_else(Vec::new, |segment| segment.data);
+    output.extend_from_slice(&checksum);
     std::fs::write(output_path, output)?;
     Ok(())
+}
+
+fn porsche_checksum_params(args: &Args) -> Result<&ChecksumParams, CliError> {
+    if !args.checksum_multi.is_empty() {
+        return Err(CliError::Other(
+            "/XP requires a single /CS or /CSR checksum; /CSM is not supported for /XP".into(),
+        ));
+    }
+    args.checksum.as_ref().ok_or_else(|| {
+        CliError::Other("/XP requires /CS or /CSR to select the appended checksum".into())
+    })
+}
+
+fn porsche_checksum_options(params: &ChecksumParams) -> Result<crate::ChecksumOptions, CliError> {
+    let algorithm = crate::ChecksumAlgorithm::from_index(params.algorithm)
+        .map_err(|e| CliError::Other(format!("/CS{}: {e}", params.algorithm)))?;
+    let forced_range = params
+        .forced_range
+        .as_ref()
+        .map(|forced| crate::ForcedRange {
+            range: forced.range,
+            pattern: forced.pattern.clone(),
+        });
+    Ok(crate::ChecksumOptions {
+        algorithm,
+        range: params.range,
+        little_endian_output: params.little_endian,
+        forced_range,
+        exclude_ranges: params.exclude_ranges.clone(),
+        target_exclude: None,
+    })
+}
+
+fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let formatted = bytes
+        .iter()
+        .map(|b| format!("0x{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(path, formatted)
 }
 
 pub(super) fn resolve_porsche_output_path(args: &Args) -> Result<PathBuf, CliError> {
@@ -540,10 +587,6 @@ fn format_erase_sectors(hexfile: &HexFile, alignment: Option<u32>) -> String {
         .collect::<String>()
 }
 
-fn byte_sum_u16(data: &[u8]) -> u16 {
-    data.iter().fold(0u16, |acc, &b| acc.wrapping_add(b as u16))
-}
-
 fn current_date_mmddyyyy() -> Option<String> {
     let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -595,6 +638,7 @@ fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError>
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::ChecksumTarget;
     use super::*;
     use crate::Segment;
     use std::fs;
@@ -728,11 +772,33 @@ mod tests {
     }
 
     #[test]
-    fn test_write_porsche_output_appends_checksum() {
+    fn test_write_porsche_output_requires_checksum() {
+        let dir = unique_temp_dir();
+        let output = dir.join("porsche.bin");
+        let args = Args::default();
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+
+        let result = write_porsche_output(&args, &hexfile, &output);
+        assert!(result.is_err());
+        assert!(!output.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_porsche_output_appends_selected_checksum() {
         let dir = unique_temp_dir();
         let output = dir.join("porsche.bin");
         let args = Args {
             align_fill: 0xFF,
+            checksum: Some(ChecksumParams {
+                algorithm: 0,
+                target: ChecksumTarget::None,
+                little_endian: false,
+                range: None,
+                forced_range: None,
+                exclude_ranges: Vec::new(),
+            }),
             ..Args::default()
         };
         let hexfile = HexFile::with_segments(vec![
@@ -746,6 +812,33 @@ mod tests {
         assert_eq!(&data[..5], &[0x01, 0x02, 0xFF, 0xFF, 0x03]);
         let checksum = u16::from_be_bytes([data[5], data[6]]);
         assert_eq!(checksum, 0x01 + 0x02 + 0xFF + 0xFF + 0x03);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_porsche_output_rejects_large_dense_span_without_partial_file() {
+        let dir = unique_temp_dir();
+        let output = dir.join("porsche.bin");
+        let args = Args {
+            checksum: Some(ChecksumParams {
+                algorithm: 0,
+                target: ChecksumTarget::None,
+                little_endian: false,
+                range: None,
+                forced_range: None,
+                exclude_ranges: Vec::new(),
+            }),
+            ..Args::default()
+        };
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0, vec![0x01]),
+            Segment::new((crate::DEFAULT_DENSE_SPAN_LIMIT as u32) + 1, vec![0x02]),
+        ]);
+
+        let result = write_porsche_output(&args, &hexfile, &output);
+        assert!(result.is_err());
+        assert!(!output.exists());
 
         let _ = fs::remove_dir_all(dir);
     }

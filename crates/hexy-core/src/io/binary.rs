@@ -51,12 +51,8 @@ pub fn write_binary(hexfile: &HexFile, options: &BinaryWriteOptions) -> Vec<u8> 
         return Vec::new();
     }
 
-    let mut segments: Vec<_> = hexfile
-        .segments()
-        .iter()
-        .filter(|s| !s.is_empty())
-        .collect();
-    segments.sort_by_key(|s| s.start_address);
+    let normalized = hexfile.normalized();
+    let segments = normalized.segments();
     let total_len: usize = segments.iter().map(|s| s.len()).sum();
     let mut out = Vec::with_capacity(total_len);
     for segment in segments {
@@ -93,6 +89,17 @@ mod tests {
         ]);
         let out = write_binary(&hexfile, &BinaryWriteOptions::default());
         assert_eq!(out, vec![0xAA, 0x01, 0x02]);
+    }
+
+    #[test]
+    fn test_write_binary_concatenates_normalized_segments_without_gaps() {
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03]),
+            Segment::new(0x1001, vec![0xAA]),
+            Segment::new(0x2000, vec![0x04]),
+        ]);
+        let out = write_binary(&hexfile, &BinaryWriteOptions::default());
+        assert_eq!(out, vec![0x01, 0xAA, 0x03, 0x04]);
     }
 
     #[test]
