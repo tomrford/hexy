@@ -18,6 +18,18 @@ fn intel_hex_input_scans_past_header_text() -> Result<(), ParseError> {
 }
 
 #[test]
+fn intel_hex_input_rejects_leading_record_missing_colon() {
+    let input = b"020000000102FB\r\n:00000001FF\r\n";
+
+    let result = parse_intel_hex(input);
+
+    assert!(matches!(
+        result,
+        Err(ParseError::InvalidRecord { line: 1, .. })
+    ));
+}
+
+#[test]
 fn srecord_input_does_not_scan_past_header_text() -> Result<(), ParseError> {
     let input = b"HEADER\r\nS10500000102F7\r\nS9030000FC\r\n";
 
