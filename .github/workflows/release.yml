@@ -33,30 +33,36 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verify tag is on main
-        shell: bash
-        run: |
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          TAG="${{ github.event.release.tag_name }}"
-          TAG_COMMIT="$(git rev-parse "${TAG}^{commit}")"
-          git merge-base --is-ancestor "$TAG_COMMIT" origin/main
-
       - name: Resolve tag
         id: tag
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="$RELEASE_TAG"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release tags must match vX.Y.Z, got $TAG." >&2
             exit 1
           fi
           echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Verify tag is on main
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
+        run: |
+          TAG="$RELEASE_TAG"
+          git fetch --force origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/${TAG}:refs/tags/${TAG}"
+          TAG_COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main
+
       - name: Validate version metadata
         id: metadata
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
         run: |
-          TAG="${{ steps.tag.outputs.tag_name }}"
+          TAG="$RELEASE_TAG"
           VERSION="${TAG#v}"
           WORKSPACE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-core") | .version')"
           COMPAT_CORE_REQ="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .dependencies[] | select(.name == "hexy-core") | .req')"
@@ -184,8 +190,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag_name }}
         run: |
-          TAG="${{ needs.validate-release.outputs.tag_name }}"
+          TAG="$RELEASE_TAG"
           gh release upload "$TAG" "${{ env.PKG_PATH }}" "${{ env.PKG_CHECKSUM }}" --clobber
 
   build-python:
