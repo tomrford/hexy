@@ -128,8 +128,9 @@ fn parse_range_option(
 ) -> Result<bool, ParseArgError> {
     match key_upper {
         "AR" => {
+            args.address_range.clear();
+            args.address_range_empty_output = false;
             if value.contains(':') {
-                args.address_range.clear();
                 args.address_range_empty_output = true;
             } else {
                 extend_ranges(&mut args.address_range, value)?;

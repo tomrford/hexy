@@ -130,8 +130,8 @@ fn test_cli_remap_s08map_conflict() {
 }
 
 #[test]
-fn test_cli_log_file_open_without_input() {
-    let dir = temp_dir("cli_log_open");
+fn test_cli_log_file_open_is_rejected_for_export() {
+    let dir = temp_dir("cli_log_open_rejected");
     let input = dir.join("input.bin");
     let log = dir.join("commands.log");
     let out = dir.join("out.hex");
@@ -140,16 +140,39 @@ fn test_cli_log_file_open_without_input() {
 
     let args = vec![
         format!("/L:{}", log.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
-    let hexfile = run_hex_output(args, &out);
-    let norm = hexfile.normalized();
-    assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x0);
-    assert_eq!(norm.segments()[0].data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("FileOpen"));
+    assert!(stderr.contains(&input.display().to_string()));
+    assert!(!out.exists());
+}
+
+#[test]
+fn test_cli_log_file_open_relative_path_is_rejected_with_raw_path() {
+    let dir = temp_dir("cli_log_open_relative_rejected");
+    let log = dir.join("commands.log");
+    let out = dir.join("out.hex");
+    write_file(&log, b"FileOpen relative/input.bin");
+
+    let args = vec![
+        format!("/L:{}", log.display()),
+        "/XI".to_owned(),
+        "-o".to_owned(),
+        out.display().to_string(),
+    ];
+
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("FileOpen"));
+    assert!(stderr.contains("relative/input.bin"));
+    assert!(!out.exists());
 }
 
 #[test]

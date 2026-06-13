@@ -125,6 +125,32 @@ fn test_cli_dp_placement_append_writes_signature_to_data() {
     assert_eq!(&bytes[..4], &[0x10, 0x20, 0x30, 0x40]);
 }
 
+#[test]
+fn test_cli_dp_placed_and_sv_same_invocation_rejected_before_outputs() {
+    let dir = temp_dir("cli_sig_dp_place_sv_reject");
+    let input_path = dir.join("input.bin");
+    let sig_path = dir.join("sig.bin");
+    let out_hex = dir.join("out.hex");
+    write_file(&input_path, &[0x10, 0x20, 0x30, 0x40]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input_path.display()),
+        format!("/DP32:@append:private.pem;{}", sig_path.display()),
+        format!("/SV4:public.pem!{}", sig_path.display()),
+        "/XI".to_owned(),
+        "-o".to_owned(),
+        out_hex.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("placed data processing"));
+    assert!(stderr.contains("/DP32"));
+    assert!(stderr.contains("/SV4"));
+    assert!(!sig_path.exists());
+    assert!(!out_hex.exists());
+}
+
 fn assert_dp_placement_empty_input_noop(target: &str) {
     let dir = temp_dir("cli_sig_dp_place_empty");
     let input_path = dir.join("input.bin");
