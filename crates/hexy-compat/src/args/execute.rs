@@ -1,18 +1,19 @@
 use crate::{
     AlignOptions, ChecksumAlgorithm, FillOptions, MergeMode, MergeOptions, RemapOptions, Segment,
-    SwapMode, execute_log_commands, parse_log_commands,
+    SwapMode, parse_log_commands,
 };
+use hexy_core::ops::{LogCommand, LogCommandKind};
 
 use super::error::{CliError, ExecuteOutput};
 use super::io::{
     FsProvider, ReadProvider, load_binary_input, load_hex_ascii_input, load_input,
-    load_intel_hex_16bit_input, write_output_for_args,
+    load_intel_hex_16bit_input, validate_porsche_output_args, write_output_for_args,
 };
 use super::signature::{
     apply_data_processing, apply_signature_verification, is_supported_data_processing_method,
     is_supported_signature_verify_method,
 };
-use super::types::{Args, ChecksumParams, ChecksumTarget, ParseArgError};
+use super::types::{Args, ChecksumParams, ChecksumTarget, OutputFormat, ParseArgError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Args {
@@ -66,6 +67,14 @@ impl Args {
                 params.method
             )));
         }
+        if let (Some(dp), Some(sv)) = (&self.data_processing, &self.signature_verify)
+            && dp.placement.is_some()
+        {
+            return Err(CliError::Unsupported(format!(
+                "placed data processing (/DP{}) cannot be combined with signature verification (/SV{}) in one command",
+                dp.method, sv.method
+            )));
+        }
         if self.import_binary.is_some() && self.import_hex_ascii.is_some() {
             return Err(CliError::Unsupported(
                 "binary import (/IN) cannot be combined with HEX ASCII import (/IA)".into(),
@@ -103,11 +112,17 @@ impl Args {
         provider: &P,
     ) -> Result<ExecuteOutput, CliError> {
         self.validate_supported_features()?;
+        validate_porsche_output_args(self)?;
 
         let mut hexfile = self.load_hexfile(provider)?;
         self.execute_operations(&mut hexfile, provider)?;
 
-        let checksum_bytes = self.apply_checksums(&mut hexfile)?;
+        let is_porsche_output = matches!(self.output_format, Some(OutputFormat::Porsche));
+        let checksum_bytes = if is_porsche_output {
+            None
+        } else {
+            self.apply_checksums(&mut hexfile)?
+        };
         let _signature_bytes = self.apply_data_processing(&mut hexfile)?;
         self.apply_signature_verification(&hexfile)?;
         self.write_outputs(&hexfile, provider)?;
@@ -196,14 +211,14 @@ impl Args {
                 .map_err(|e| CliError::Other(format!("/L: {e}")))?;
             let commands =
                 parse_log_commands(&content).map_err(|e| CliError::Other(format!("/L: {e}")))?;
-            execute_log_commands(hexfile, &commands, |log_path| {
-                load_input(provider, log_path)
-            })
-            .map_err(|e| CliError::Other(format!("/L: {e}")))?;
+            execute_compat_log_commands(hexfile, &commands)?;
         }
 
         if self.fill_all {
-            self.wrap_error("/FA", hexfile.fill_gaps(0x00))?;
+            self.wrap_error(
+                "/FA",
+                hexfile.fill_gaps_bounded(0x00, crate::DEFAULT_DENSE_SPAN_LIMIT),
+            )?;
         }
 
         if let Some(alignment) = self.align_address {
@@ -378,6 +393,28 @@ impl Args {
     ) -> Result<(), CliError> {
         write_output_for_args(self, hexfile, provider)
     }
+}
+
+fn execute_compat_log_commands(
+    hexfile: &mut crate::HexFile,
+    commands: &[LogCommand],
+) -> Result<(), CliError> {
+    for command in commands {
+        match &command.kind {
+            LogCommandKind::FileOpen(path) => {
+                return Err(CliError::Unsupported(format!(
+                    "/L: FileOpen is not supported for command-line export (line {}): {}",
+                    command.line,
+                    path.display()
+                )));
+            }
+            LogCommandKind::FileClose | LogCommandKind::FileNew => {
+                *hexfile = crate::HexFile::new();
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn random_fill_bytes(range: crate::AddressRange) -> Result<Vec<u8>, crate::OpsError> {

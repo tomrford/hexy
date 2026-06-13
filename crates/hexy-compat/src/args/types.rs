@@ -326,4 +326,18 @@ mod tests {
         assert_eq!(parsed.output_file, Some(PathBuf::from(r"C:\temp\out.hex")));
         assert_eq!(parsed.input_file, Some(PathBuf::from("input.hex")));
     }
+
+    #[test]
+    fn test_parse_dash_prefix_case_and_equal_separator() -> Result<(), Box<dyn std::error::Error>> {
+        let args = vec![
+            "-afcd".to_owned(),
+            "/aD=0x10".to_owned(),
+            "input.hex".to_owned(),
+        ];
+        let parsed = Args::parse_from_with(args, |_| false)?;
+        assert_eq!(parsed.align_fill, 0xCD);
+        assert_eq!(parsed.align_address, Some(0x10));
+        assert_eq!(parsed.input_file, Some(PathBuf::from("input.hex")));
+        Ok(())
+    }
 }

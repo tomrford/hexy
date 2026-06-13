@@ -61,6 +61,41 @@ fn test_parse_dp_signature_subset_option() {
 }
 
 #[test]
+fn test_parse_ar_repeated_last_wins() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = Args::default();
+    parse_option(&mut args, "AR:0x1000,0x2")?;
+    parse_option(&mut args, "AR:0x2000,0x2")?;
+    assert_eq!(
+        args.address_range,
+        vec![AddressRange::from_start_length(0x2000, 0x2)?]
+    );
+    assert!(!args.address_range_empty_output);
+    Ok(())
+}
+
+#[test]
+fn test_parse_ar_multiple_ranges_empty_output() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = Args::default();
+    parse_option(&mut args, "AR:0x1000,0x2:0x2000,0x2")?;
+    assert!(args.address_range.is_empty());
+    assert!(args.address_range_empty_output);
+    Ok(())
+}
+
+#[test]
+fn test_parse_ar_repeated_single_resets_empty_output() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = Args::default();
+    parse_option(&mut args, "AR:0x1000,0x2:0x2000,0x2")?;
+    parse_option(&mut args, "AR:0x3000,0x2")?;
+    assert_eq!(
+        args.address_range,
+        vec![AddressRange::from_start_length(0x3000, 0x2)?]
+    );
+    assert!(!args.address_range_empty_output);
+    Ok(())
+}
+
+#[test]
 fn test_parse_i16_option_with_windows_absolute_path() {
     let mut args = Args::default();
     parse_option(&mut args, r"II2=C:\temp\input.hex").unwrap();

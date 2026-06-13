@@ -32,8 +32,8 @@ pub use io::{
 };
 pub use ops::{
     AlignOptions, BankedMapOptions, ChecksumAlgorithm, ChecksumJob, ChecksumOptions,
-    ChecksumTarget, FillOptions, ForcedRange, MergeMode, MergeOptions, OpsError, RemapOptions,
-    SwapMode,
+    ChecksumTarget, DEFAULT_DENSE_SPAN_LIMIT, FillOptions, ForcedRange, MergeMode, MergeOptions,
+    OpsError, RemapOptions, SwapMode,
 };
 pub use range::{AddressRange, AddressRangeError, merge_ranges, parse_compat_ranges, parse_ranges};
 pub use segment::{Segment, SegmentError};

@@ -47,27 +47,22 @@ pub fn write_binary(
     hexfile: &HexFile,
     options: &BinaryWriteOptions,
 ) -> Result<Vec<u8>, ParseError> {
-    if hexfile.segments().is_empty() {
+    let mut normalized = hexfile.normalized();
+    if normalized.segments().is_empty() {
         return Ok(Vec::new());
     }
 
     if let Some(fill) = options.fill_gaps {
-        let mut filled = hexfile.normalized();
-        filled
+        normalized
             .fill_gaps(fill)
             .map_err(|e| ParseError::InvalidOutput(e.to_string()))?;
-        if let Some(segment) = filled.segments().first() {
+        if let Some(segment) = normalized.segments().first() {
             return Ok(segment.data.clone());
         }
         return Ok(Vec::new());
     }
 
-    let mut segments: Vec<_> = hexfile
-        .segments()
-        .iter()
-        .filter(|s| !s.is_empty())
-        .collect();
-    segments.sort_by_key(|s| s.start_address);
+    let segments = normalized.into_segments();
     let total_len: usize = segments.iter().map(|s| s.len()).sum();
     let mut out = Vec::with_capacity(total_len);
     for segment in segments {
@@ -104,6 +99,17 @@ mod tests {
         ]);
         let out = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
         assert_eq!(out, vec![0xAA, 0x01, 0x02]);
+    }
+
+    #[test]
+    fn test_write_binary_concatenates_normalized_segments_without_gaps() {
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03]),
+            Segment::new(0x1001, vec![0xAA]),
+            Segment::new(0x2000, vec![0x04]),
+        ]);
+        let out = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
+        assert_eq!(out, vec![0x01, 0xAA, 0x03, 0x04]);
     }
 
     #[test]

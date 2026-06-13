@@ -27,6 +27,15 @@ pub enum OpsError {
     #[error("range not fully covered by data: start {start:#X}, length {length}")]
     RangeNotCovered { start: u32, length: u64 },
 
+    #[error(
+        "dense materialization span too large for {operation}: {span} bytes exceeds limit {limit} bytes"
+    )]
+    DenseSpanTooLarge {
+        operation: String,
+        span: u64,
+        limit: u64,
+    },
+
     #[error("{context}: {source}")]
     Context {
         context: String,
