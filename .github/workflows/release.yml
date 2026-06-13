@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -12,13 +11,10 @@ env:
   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
 
 jobs:
-  create-release:
-    name: Create release
+  validate-release:
+    name: Validate release
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_REPO: ${{ github.repository }}
     outputs:
       tag_name: ${{ steps.tag.outputs.tag_name }}
       version: ${{ steps.metadata.outputs.version }}
@@ -27,7 +23,7 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
+          ref: refs/tags/${{ github.event.release.tag_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -37,28 +33,36 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Verify tag is on main
-        shell: bash
-        run: |
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-
       - name: Resolve tag
         id: tag
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="$RELEASE_TAG"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release tags must match vX.Y.Z, got $TAG." >&2
             exit 1
           fi
           echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Verify tag is on main
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
+        run: |
+          TAG="$RELEASE_TAG"
+          git fetch --force origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/${TAG}:refs/tags/${TAG}"
+          TAG_COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main
+
       - name: Validate version metadata
         id: metadata
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
         run: |
-          TAG="${{ steps.tag.outputs.tag_name }}"
+          TAG="$RELEASE_TAG"
           VERSION="${TAG#v}"
           WORKSPACE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-core") | .version')"
           COMPAT_CORE_REQ="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .dependencies[] | select(.name == "hexy-core") | .req')"
@@ -81,22 +85,10 @@ jobs:
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure release exists
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.tag.outputs.tag_name }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists."
-          else
-            gh release create "$TAG" --generate-notes
-          fi
-
   build-release:
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
-    needs: create-release
+    needs: validate-release
     permissions:
       contents: write
     strategy:
@@ -124,7 +116,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          ref: refs/tags/${{ needs.create-release.outputs.tag_name }}
+          ref: refs/tags/${{ needs.validate-release.outputs.tag_name }}
 
       - name: Extract crate metadata
         shell: bash
@@ -198,14 +190,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag_name }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag_name }}"
+          TAG="$RELEASE_TAG"
           gh release upload "$TAG" "${{ env.PKG_PATH }}" "${{ env.PKG_CHECKSUM }}" --clobber
 
   build-python:
     name: Python ${{ matrix.job.name }}
     runs-on: ${{ matrix.job.os }}
-    needs: create-release
+    needs: validate-release
     strategy:
       fail-fast: false
       matrix:
@@ -219,7 +212,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          ref: refs/tags/${{ needs.create-release.outputs.tag_name }}
+          ref: refs/tags/${{ needs.validate-release.outputs.tag_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -291,7 +284,7 @@ jobs:
   publish-crates:
     name: Publish crates
     runs-on: ubuntu-latest
-    needs: [create-release, build-release, build-python]
+    needs: [validate-release, build-release, build-python]
     environment: crates
     permissions:
       contents: read
@@ -301,7 +294,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
-          ref: refs/tags/${{ needs.create-release.outputs.tag_name }}
+          ref: refs/tags/${{ needs.validate-release.outputs.tag_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -310,7 +303,7 @@ jobs:
         id: metadata
         shell: bash
         run: |
-          echo "version=${{ needs.create-release.outputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "version=${{ needs.validate-release.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Check hexy-core publish status
         id: core_status
