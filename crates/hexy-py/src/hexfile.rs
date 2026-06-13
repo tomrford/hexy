@@ -144,8 +144,8 @@ impl PyHexFile {
         self.inner.prepend_segment(segment.inner.clone());
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) {
-        self.inner.write_bytes(addr, data);
+    fn write(&mut self, addr: u32, data: &[u8]) -> PyResult<()> {
+        self.inner.write_bytes(addr, data).map_err(value_error)
     }
 
     fn read_byte(&self, addr: u32) -> Option<u8> {
@@ -170,9 +170,10 @@ impl PyHexFile {
     }
 
     #[pyo3(signature = (*, fill_gaps=None))]
-    fn to_binary(&self, py: Python<'_>, fill_gaps: Option<u8>) -> Py<PyBytes> {
-        let data = write_binary(&self.inner, &BinaryWriteOptions { fill_gaps });
-        py_bytes(py, &data)
+    fn to_binary(&self, py: Python<'_>, fill_gaps: Option<u8>) -> PyResult<Py<PyBytes>> {
+        let data =
+            write_binary(&self.inner, &BinaryWriteOptions { fill_gaps }).map_err(parse_error)?;
+        Ok(py_bytes(py, &data))
     }
 
     #[pyo3(signature = (*, bytes_per_line=32, mode=None))]
@@ -305,19 +306,20 @@ impl PyHexFile {
         pattern: Option<&[u8]>,
         overwrite: bool,
     ) -> PyResult<()> {
-        self.inner.fill_ranges(
-            &parse_ranges_arg(ranges)?,
-            &FillOptions {
-                pattern: parse_fill_pattern(pattern)?,
-                overwrite,
-            },
-        );
-        Ok(())
+        self.inner
+            .fill_ranges(
+                &parse_ranges_arg(ranges)?,
+                &FillOptions {
+                    pattern: parse_fill_pattern(pattern)?,
+                    overwrite,
+                },
+            )
+            .map_err(value_error)
     }
 
     #[pyo3(signature = (*, fill=0xFF))]
-    fn fill_gaps(&mut self, fill: u8) {
-        self.inner.fill_gaps(fill);
+    fn fill_gaps(&mut self, fill: u8) -> PyResult<()> {
+        self.inner.fill_gaps(fill).map_err(value_error)
     }
 
     #[pyo3(signature = (other, *, mode=None, offset=0, range=None))]

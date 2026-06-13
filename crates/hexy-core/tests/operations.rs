@@ -26,7 +26,8 @@ fn test_cut_fill_normalize() {
             pattern: vec![0xCC],
             overwrite: false,
         },
-    );
+    )
+    .unwrap();
 
     let norm = hf.normalized();
 
@@ -165,7 +166,7 @@ fn test_fill_gaps_then_merge_overwrite() {
     ]);
 
     // Fill gaps
-    hf_a.fill_gaps(0x00);
+    hf_a.fill_gaps(0x00).unwrap();
 
     // Now it's contiguous 0x1000-0x1013, gaps filled with 0x00
     assert_eq!(hf_a.segments().len(), 1);
@@ -200,7 +201,7 @@ fn test_fill_gaps_then_merge_preserve() {
         Segment::new(0x1000, vec![0xAA; 4]),
         Segment::new(0x1010, vec![0xBB; 4]),
     ]);
-    hf_a.fill_gaps(0x00);
+    hf_a.fill_gaps(0x00).unwrap();
 
     let hf_b = HexFile::with_segments(vec![Segment::new(0x1008, vec![0xCC; 4])]);
 
@@ -261,7 +262,8 @@ fn test_filter_cut_fill_align_split() {
             pattern: vec![0xBB],
             overwrite: false,
         },
-    );
+    )
+    .unwrap();
 
     // Align to 16 bytes
     hf.align(&AlignOptions {
@@ -272,7 +274,7 @@ fn test_filter_cut_fill_align_split() {
     .unwrap();
 
     // Fill gaps to merge everything
-    hf.fill_gaps(0x00);
+    hf.fill_gaps(0x00).unwrap();
 
     // Now we have a single contiguous segment - verify data integrity
     let norm = hf.normalized();
@@ -302,7 +304,7 @@ fn test_operations_on_empty_file() {
     // None of these should panic (scale/offset on empty are no-ops)
     hf.filter_range(AddressRange::from_start_end(0x1000, 0x1FFF).unwrap());
     hf.cut(AddressRange::from_start_end(0x1000, 0x1FFF).unwrap());
-    hf.fill_gaps(0xFF);
+    hf.fill_gaps(0xFF).unwrap();
     hf.scale_addresses(2).unwrap();
     hf.offset_addresses(0x1000).unwrap();
     hf.split(16);

@@ -39,13 +39,15 @@ fn test_operations_match_cli_basic() {
     let mut hexfile = parse_binary(&[0x01, 0x02, 0x03, 0x04], 0).unwrap();
     let merge_hex = parse_binary(&[0x99, 0x88], 0).unwrap();
 
-    hexfile.fill_ranges(
-        &[AddressRange::from_start_end(0x0, 0x7).unwrap()],
-        &FillOptions {
-            pattern: vec![0xAA],
-            overwrite: false,
-        },
-    );
+    hexfile
+        .fill_ranges(
+            &[AddressRange::from_start_end(0x0, 0x7).unwrap()],
+            &FillOptions {
+                pattern: vec![0xAA],
+                overwrite: false,
+            },
+        )
+        .unwrap();
     hexfile.cut_ranges(&[AddressRange::from_start_end(0x2, 0x3).unwrap()]);
     hexfile
         .merge(

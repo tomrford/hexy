@@ -18,7 +18,8 @@ fn test_fill_region_preserves_existing_data() {
             pattern: vec![0x11, 0x22],
             overwrite: false,
         },
-    );
+    )
+    .unwrap();
 
     let norm = hf.normalized();
     assert_eq!(
@@ -92,7 +93,8 @@ fn test_compat_multistage_order() {
             pattern: vec![0xAA, 0xBB],
             overwrite: false,
         },
-    );
+    )
+    .unwrap();
 
     hf.cut(AddressRange::from_start_end(0x1001, 0x1001).unwrap());
 

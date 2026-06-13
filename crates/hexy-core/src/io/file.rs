@@ -99,7 +99,7 @@ impl HexFile {
         path: impl AsRef<Path>,
         options: &BinaryWriteOptions,
     ) -> Result<(), FileIoError> {
-        std::fs::write(path, write_binary(self, options))?;
+        std::fs::write(path, write_binary(self, options)?)?;
         Ok(())
     }
 

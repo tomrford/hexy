@@ -98,6 +98,9 @@ pub enum SignatureError {
     #[error("signature overwrite underflows u32")]
     OverwriteUnderflow,
 
+    #[error("signature placement overflows u32: {0}")]
+    PlacementOverflow(String),
+
     #[error("{0}")]
     InvalidKeyMaterial(String),
 
@@ -139,19 +142,22 @@ impl HexFile {
     ) -> Result<(), SignatureError> {
         match target {
             SignaturePlacement::Address(addr) => {
-                self.write_bytes(*addr, signature);
+                self.write_bytes(*addr, signature)
+                    .map_err(|e| SignatureError::PlacementOverflow(e.to_string()))?;
                 Ok(())
             }
             SignaturePlacement::Append => {
                 if let Some(end) = self.max_address() {
                     let addr = end.checked_add(1).ok_or(SignatureError::AppendOverflow)?;
-                    self.write_bytes(addr, signature);
+                    self.write_bytes(addr, signature)
+                        .map_err(|e| SignatureError::PlacementOverflow(e.to_string()))?;
                 }
                 Ok(())
             }
             SignaturePlacement::Begin => {
                 if let Some(start) = self.min_address() {
-                    self.write_bytes(start, signature);
+                    self.write_bytes(start, signature)
+                        .map_err(|e| SignatureError::PlacementOverflow(e.to_string()))?;
                 } else {
                     self.place_signature(&SignaturePlacement::Append, signature)?;
                 }
@@ -162,7 +168,8 @@ impl HexFile {
                     let new_start = start
                         .checked_sub(signature.len() as u32)
                         .ok_or(SignatureError::PrependUnderflow)?;
-                    self.write_bytes(new_start, signature);
+                    self.write_bytes(new_start, signature)
+                        .map_err(|e| SignatureError::PlacementOverflow(e.to_string()))?;
                 }
                 Ok(())
             }
@@ -172,7 +179,8 @@ impl HexFile {
                     let write_addr = end
                         .checked_sub(offset)
                         .ok_or(SignatureError::OverwriteUnderflow)?;
-                    self.write_bytes(write_addr, signature);
+                    self.write_bytes(write_addr, signature)
+                        .map_err(|e| SignatureError::PlacementOverflow(e.to_string()))?;
                 }
                 Ok(())
             }

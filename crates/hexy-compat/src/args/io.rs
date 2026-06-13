@@ -342,7 +342,9 @@ pub(super) fn write_porsche_output(
     }
 
     let fill = args.align_fill;
-    normalized.fill_gaps(fill);
+    normalized
+        .fill_gaps(fill)
+        .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
     let data = normalized.segments()[0].data.clone();
     let checksum = byte_sum_u16(&data);
     let mut output = data;

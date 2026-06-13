@@ -44,6 +44,15 @@ def test_segments_preserve_raw_order_and_normalize_last_wins():
     assert hf.segments(normalized=True)[0].data == b"\xaa\xcc"
 
 
+def test_segment_constructor_rejects_overflow():
+    try:
+        hexy.Segment(0xFFFFFFFF, b"\xaa\xbb")
+    except ValueError as error:
+        assert "exceeds u32 address space" in str(error)
+    else:
+        raise AssertionError("expected overflowing segment to be rejected")
+
+
 def test_binary_hex_ascii_intel_hex_and_srec_roundtrip_in_memory():
     hf = hexy.HexFile.from_binary(b"\xde\xad\xbe\xef", 0x1000)
 

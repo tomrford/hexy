@@ -402,6 +402,94 @@ fn test_cli_address_range_reduction_start_end() {
 }
 
 #[test]
+fn test_cli_address_range_full_span_keeps_u32_max_boundary() {
+    let dir = temp_dir("cli_ar_full_span");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
+
+    let args = vec![
+        format!("/IN:{};0xFFFFFFFC", input.display()),
+        "/AR:0x00000000-0xFFFFFFFF".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address, 0xFFFF_FFFC);
+    assert_eq!(norm.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
+}
+
+#[test]
+fn test_cli_address_range_length_form_keeps_u32_max_boundary() {
+    let dir = temp_dir("cli_ar_max_len");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
+
+    let args = vec![
+        format!("/IN:{};0xFFFFFFFC", input.display()),
+        "/AR:0xFFFFFFFC,0x4".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address, 0xFFFF_FFFC);
+    assert_eq!(norm.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
+}
+
+#[test]
+fn test_cli_address_range_overflowing_length_form_filters_to_u32_max() {
+    let dir = temp_dir("cli_ar_overflow_len");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
+
+    let args = vec![
+        format!("/IN:{};0xFFFFFFFC", input.display()),
+        "/AR:0xFFFFFFFC,0x8".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let hexfile = run_hex_output(args, &out);
+    let norm = hexfile.normalized();
+    assert_eq!(norm.segments().len(), 1);
+    assert_eq!(norm.segments()[0].start_address, 0xFFFF_FFFC);
+    assert_eq!(norm.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
+}
+
+#[test]
+fn test_cli_fill_rejects_range_past_u32_max() {
+    let dir = temp_dir("cli_fr_overflow");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.hex");
+    write_file(&input, &[0xAA]);
+
+    let args = vec![
+        format!("/IN:{};0x0", input.display()),
+        "/FR:0xFFFFFFFC,0x8".to_string(),
+        "/FP:FF".to_string(),
+        "/XI".to_string(),
+        "-o".to_string(),
+        out.display().to_string(),
+    ];
+
+    let output = run_hexy(&args);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("address overflow"));
+}
+
+#[test]
 fn test_cli_address_range_multiple_ranges() {
     let dir = temp_dir("cli_ar_multi");
     let base = dir.join("base.bin");

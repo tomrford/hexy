@@ -57,8 +57,7 @@ fn apply_op(hexfile: &mut HexFile, op: &PipelineOp) -> PyResult<()> {
             hexfile.dspic_clear_ghost(*range).map_err(value_error)
         }
         PipelineOp::Fill { ranges, options } => {
-            hexfile.fill_ranges(ranges, options);
-            Ok(())
+            hexfile.fill_ranges(ranges, options).map_err(value_error)
         }
         PipelineOp::Cut(ranges) => {
             hexfile.cut_ranges(ranges);
@@ -69,10 +68,7 @@ fn apply_op(hexfile: &mut HexFile, op: &PipelineOp) -> PyResult<()> {
             hexfile.filter_ranges(ranges);
             Ok(())
         }
-        PipelineOp::FillGaps(fill) => {
-            hexfile.fill_gaps(*fill);
-            Ok(())
-        }
+        PipelineOp::FillGaps(fill) => hexfile.fill_gaps(*fill).map_err(value_error),
         PipelineOp::Align(options) => hexfile.align(options).map_err(value_error),
         PipelineOp::Split(size) => {
             hexfile.split(*size);

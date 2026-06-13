@@ -29,6 +29,7 @@ use ripemd::Ripemd160;
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 
+use super::filter::materialized_range_len;
 use crate::{AddressRange, HexFile, OpsError, Segment, merge_ranges};
 
 /// Target for checksum output.
@@ -309,11 +310,17 @@ impl HexFile {
         let size = options.algorithm.result_size() as u32;
         match target {
             ChecksumTarget::Address(addr) => {
-                let target_range = AddressRange::from_start_length(*addr, size).map_err(|_| {
-                    OpsError::AddressOverflow(format!(
+                let target_range = AddressRange::from_start_length(*addr, u64::from(size))
+                    .map_err(|_| {
+                        OpsError::AddressOverflow(format!(
+                            "checksum target at {addr:#X} with size {size} overflows u32"
+                        ))
+                    })?;
+                if target_range.extends_past_address_space() {
+                    return Err(OpsError::AddressOverflow(format!(
                         "checksum target at {addr:#X} with size {size} overflows u32"
-                    ))
-                })?;
+                    )));
+                }
                 effective_options.target_exclude = Some(target_range);
             }
             ChecksumTarget::OverwriteEnd => {
@@ -321,7 +328,9 @@ impl HexFile {
                 if let Some(end) = self.max_address() {
                     let offset = size.saturating_sub(1);
                     if let Some(write_addr) = end.checked_sub(offset)
-                        && let Ok(target_range) = AddressRange::from_start_length(write_addr, size)
+                        && let Ok(target_range) =
+                            AddressRange::from_start_length(write_addr, u64::from(size))
+                        && !target_range.extends_past_address_space()
                     {
                         effective_options.target_exclude = Some(target_range);
                     }
@@ -332,11 +341,19 @@ impl HexFile {
                     let write_addr = end.checked_add(1).ok_or_else(|| {
                         OpsError::AddressOverflow("checksum append overflows u32".into())
                     })?;
-                    let target_range = AddressRange::from_start_length(write_addr, size).map_err(|_| {
-                        OpsError::AddressOverflow(format!(
+                    let target_range =
+                        AddressRange::from_start_length(write_addr, u64::from(size)).map_err(
+                            |_| {
+                                OpsError::AddressOverflow(format!(
+                                    "checksum append target at {write_addr:#X} with size {size} overflows u32"
+                                ))
+                            },
+                        )?;
+                    if target_range.extends_past_address_space() {
+                        return Err(OpsError::AddressOverflow(format!(
                             "checksum append target at {write_addr:#X} with size {size} overflows u32"
-                        ))
-                    })?;
+                        )));
+                    }
                     effective_options.target_exclude = Some(target_range);
                 }
             }
@@ -345,11 +362,19 @@ impl HexFile {
                     let write_addr = start.checked_sub(size).ok_or_else(|| {
                         OpsError::AddressOverflow("checksum prepend underflows u32".into())
                     })?;
-                    let target_range = AddressRange::from_start_length(write_addr, size).map_err(|_| {
-                        OpsError::AddressOverflow(format!(
+                    let target_range =
+                        AddressRange::from_start_length(write_addr, u64::from(size)).map_err(
+                            |_| {
+                                OpsError::AddressOverflow(format!(
+                                    "checksum prepend target at {write_addr:#X} with size {size} overflows u32"
+                                ))
+                            },
+                        )?;
+                    if target_range.extends_past_address_space() {
+                        return Err(OpsError::AddressOverflow(format!(
                             "checksum prepend target at {write_addr:#X} with size {size} overflows u32"
-                        ))
-                    })?;
+                        )));
+                    }
                     effective_options.target_exclude = Some(target_range);
                 }
             }
@@ -359,14 +384,14 @@ impl HexFile {
 
         match target {
             ChecksumTarget::Address(addr) => {
-                self.write_bytes(*addr, &result);
+                self.write_bytes(*addr, &result)?;
             }
             ChecksumTarget::Append => {
                 if let Some(end) = self.max_address() {
                     let addr = end.checked_add(1).ok_or_else(|| {
                         OpsError::AddressOverflow("checksum append overflows u32".into())
                     })?;
-                    self.write_bytes(addr, &result);
+                    self.write_bytes(addr, &result)?;
                 }
             }
             ChecksumTarget::Prepend => {
@@ -374,7 +399,7 @@ impl HexFile {
                     let new_start = start.checked_sub(result.len() as u32).ok_or_else(|| {
                         OpsError::AddressOverflow("checksum prepend underflows u32".into())
                     })?;
-                    self.write_bytes(new_start, &result);
+                    self.write_bytes(new_start, &result)?;
                 }
             }
             ChecksumTarget::OverwriteEnd => {
@@ -385,7 +410,7 @@ impl HexFile {
                     let write_addr = end.checked_sub(offset).ok_or_else(|| {
                         OpsError::AddressOverflow("checksum overwrite underflows u32".into())
                     })?;
-                    self.write_bytes(write_addr, &result);
+                    self.write_bytes(write_addr, &result)?;
                 }
             }
             ChecksumTarget::None | ChecksumTarget::File(_) => {
@@ -454,7 +479,11 @@ impl HexFile {
 
         if has_forced_range {
             for r in &include_ranges {
-                cap_u64 = cap_u64.saturating_add(r.length() as u64);
+                cap_u64 = cap_u64.saturating_add(
+                    u64::try_from(materialized_range_len(*r, "checksum range")?).map_err(|_| {
+                        OpsError::AddressOverflow("checksum range length exceeds u64".to_owned())
+                    })?,
+                );
             }
         } else {
             let mut seg_idx = 0usize;
@@ -513,13 +542,7 @@ impl HexFile {
 
         if has_forced_range {
             for r in &include_ranges {
-                let run_len = usize::try_from(r.length()).map_err(|_| {
-                    OpsError::AddressOverflow(format!(
-                        "checksum range length exceeds usize (start={:#X}, end={:#X})",
-                        r.start(),
-                        r.end()
-                    ))
-                })?;
+                let run_len = materialized_range_len(*r, "checksum range")?;
                 finalize_run(r.start(), run_len)?;
             }
 
@@ -638,13 +661,7 @@ impl HexFile {
 }
 
 fn build_pattern_data(range: AddressRange, pattern: &[u8]) -> Result<Vec<u8>, OpsError> {
-    let len = usize::try_from(range.length()).map_err(|_| {
-        OpsError::AddressOverflow(format!(
-            "forced range length exceeds usize (start={:#X}, end={:#X})",
-            range.start(),
-            range.end()
-        ))
-    })?;
+    let len = materialized_range_len(range, "forced checksum range")?;
     if len == 0 {
         return Ok(Vec::new());
     }

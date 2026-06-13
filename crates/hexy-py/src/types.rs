@@ -15,7 +15,7 @@ pub(crate) struct PyAddressRange {
 impl PyAddressRange {
     #[new]
     #[pyo3(signature = (start, end=None, *, length=None))]
-    fn new(start: u32, end: Option<u32>, length: Option<u32>) -> PyResult<Self> {
+    fn new(start: u32, end: Option<u32>, length: Option<u64>) -> PyResult<Self> {
         let inner = match (end, length) {
             (Some(end), None) => AddressRange::from_start_end(start, end),
             (None, Some(length)) => AddressRange::from_start_length(start, length),
@@ -42,7 +42,7 @@ impl PyAddressRange {
     }
 
     #[staticmethod]
-    fn from_start_length(start: u32, length: u32) -> PyResult<Self> {
+    fn from_start_length(start: u32, length: u64) -> PyResult<Self> {
         Ok(Self {
             inner: AddressRange::from_start_length(start, length).map_err(value_error)?,
         })
@@ -66,8 +66,18 @@ impl PyAddressRange {
     }
 
     #[getter]
-    fn length(&self) -> u32 {
+    fn length(&self) -> u64 {
         self.inner.length()
+    }
+
+    #[getter]
+    fn addressable_length(&self) -> u64 {
+        self.inner.addressable_length()
+    }
+
+    #[getter]
+    fn extends_past_address_space(&self) -> bool {
+        self.inner.extends_past_address_space()
     }
 
     fn contains(&self, addr: u32) -> bool {
@@ -88,10 +98,10 @@ pub(crate) struct PySegment {
 #[pymethods]
 impl PySegment {
     #[new]
-    fn new(start: u32, data: &[u8]) -> Self {
-        Self {
-            inner: Segment::new(start, data.to_vec()),
-        }
+    fn new(start: u32, data: &[u8]) -> PyResult<Self> {
+        Ok(Self {
+            inner: Segment::try_new(start, data.to_vec()).map_err(value_error)?,
+        })
     }
 
     #[getter]

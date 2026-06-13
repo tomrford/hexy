@@ -155,10 +155,10 @@ impl Args {
                 pattern: self.fill_pattern.clone(),
                 overwrite: false,
             };
-            hexfile.fill_ranges(&self.fill_ranges, &options);
+            self.wrap_error("/FR", hexfile.fill_ranges(&self.fill_ranges, &options))?;
         } else {
             for range in &self.fill_ranges {
-                let data = random_fill_bytes(*range);
+                let data = self.wrap_error("/FR", random_fill_bytes(*range))?;
                 hexfile.prepend_segment(Segment::new(range.start(), data));
             }
         }
@@ -203,7 +203,7 @@ impl Args {
         }
 
         if self.fill_all {
-            hexfile.fill_gaps(0x00);
+            self.wrap_error("/FA", hexfile.fill_gaps(0x00))?;
         }
 
         if let Some(alignment) = self.align_address {
@@ -380,10 +380,10 @@ impl Args {
     }
 }
 
-fn random_fill_bytes(range: crate::AddressRange) -> Vec<u8> {
-    let len = range.length() as usize;
+fn random_fill_bytes(range: crate::AddressRange) -> Result<Vec<u8>, crate::OpsError> {
+    let len = materialized_range_len(range, "random fill range")?;
     if len == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let now = SystemTime::now()
@@ -391,7 +391,7 @@ fn random_fill_bytes(range: crate::AddressRange) -> Vec<u8> {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     let mut state = {
-        let seed = now ^ ((range.start() as u64) << 32) ^ (range.length() as u64);
+        let seed = now ^ ((range.start() as u64) << 32) ^ range.length();
         if seed == 0 { 0x9E3779B97F4A7C15 } else { seed }
     };
 
@@ -400,5 +400,31 @@ fn random_fill_bytes(range: crate::AddressRange) -> Vec<u8> {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
         out.push((state >> 32) as u8);
     }
-    out
+    Ok(out)
+}
+
+fn materialized_range_len(
+    range: crate::AddressRange,
+    context: &str,
+) -> Result<usize, crate::OpsError> {
+    if range.extends_past_address_space() {
+        return Err(crate::OpsError::AddressOverflow(format!(
+            "{context} {:#X}-{:#X} requests end {:#X} beyond u32 address space",
+            range.start(),
+            range.end(),
+            range.requested_end()
+        )));
+    }
+    if range.length() > u32::MAX as u64 {
+        return Err(crate::OpsError::AddressOverflow(format!(
+            "{context} length {} cannot be materialized",
+            range.length()
+        )));
+    }
+    usize::try_from(range.length()).map_err(|_| {
+        crate::OpsError::AddressOverflow(format!(
+            "{context} length {} exceeds usize",
+            range.length()
+        ))
+    })
 }

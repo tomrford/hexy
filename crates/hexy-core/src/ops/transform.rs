@@ -1,4 +1,4 @@
-use super::OpsError;
+use super::{OpsError, filter::materialized_range_len};
 use crate::{AddressRange, HexFile, Segment};
 
 /// Mode for byte swapping.
@@ -130,9 +130,15 @@ impl HexFile {
             }
 
             let mut addr = segment.start_address;
-            for chunk in segment.data.chunks(max_size_usize) {
+            let mut chunks = segment.data.chunks(max_size_usize).peekable();
+            while let Some(chunk) = chunks.next() {
                 new_segments.push(Segment::new(addr, chunk.to_vec()));
-                addr += chunk.len() as u32;
+                if chunks.peek().is_some() {
+                    let Some(next) = addr.checked_add(chunk.len() as u32) else {
+                        break;
+                    };
+                    addr = next;
+                }
             }
         }
 
@@ -303,7 +309,7 @@ impl HexFile {
         range: AddressRange,
         target: Option<u32>,
     ) -> Result<(), OpsError> {
-        let length = range.length() as usize;
+        let length = materialized_range_len(range, "dspic expand range")?;
         if !length.is_multiple_of(2) {
             return Err(OpsError::LengthNotMultiple {
                 length,
@@ -332,7 +338,7 @@ impl HexFile {
                 .checked_mul(2)
                 .ok_or_else(|| OpsError::AddressOverflow("dspic expand target overflow".into()))?,
         };
-        self.write_bytes(target, &out);
+        self.write_bytes(target, &out)?;
         Ok(())
     }
 
@@ -343,7 +349,7 @@ impl HexFile {
         range: AddressRange,
         target: Option<u32>,
     ) -> Result<(), OpsError> {
-        let length = range.length() as usize;
+        let length = materialized_range_len(range, "dspic shrink range")?;
         if !length.is_multiple_of(4) {
             return Err(OpsError::LengthNotMultiple {
                 length,
@@ -371,13 +377,13 @@ impl HexFile {
         }
 
         let target = target.unwrap_or(range.start() / 2);
-        self.write_bytes(target, &out);
+        self.write_bytes(target, &out)?;
         Ok(())
     }
 
     /// Clear dsPIC ghost bytes: set highest byte in each 4-byte group to 0.
     pub fn dspic_clear_ghost(&mut self, range: AddressRange) -> Result<(), OpsError> {
-        let length = range.length() as usize;
+        let length = materialized_range_len(range, "dspic clear ghost range")?;
         if !length.is_multiple_of(4) {
             return Err(OpsError::LengthNotMultiple {
                 length,
@@ -397,7 +403,7 @@ impl HexFile {
             chunk[3] = 0x00;
         }
 
-        self.write_bytes(range.start(), &data);
+        self.write_bytes(range.start(), &data)?;
         Ok(())
     }
 
@@ -423,14 +429,23 @@ impl HexFile {
                     segment.len()
                 ))
             })?;
-            AddressRange::from_start_length(new_start, length).map_err(|_| {
-                OpsError::AddressOverflow(format!(
+            let range =
+                AddressRange::from_start_length(new_start, u64::from(length)).map_err(|_| {
+                    OpsError::AddressOverflow(format!(
+                        "{:#X} * {} with length {} exceeds u32 range",
+                        segment.start_address,
+                        factor,
+                        segment.len()
+                    ))
+                })?;
+            if range.extends_past_address_space() {
+                return Err(OpsError::AddressOverflow(format!(
                     "{:#X} * {} with length {} exceeds u32 range",
                     segment.start_address,
                     factor,
                     segment.len()
-                ))
-            })?;
+                )));
+            }
         }
 
         // Second pass: apply mutation

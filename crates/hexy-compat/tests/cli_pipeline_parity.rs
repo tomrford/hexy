@@ -44,13 +44,15 @@ fn test_cli_pipeline_parity_basic_chain() {
     let cut_ranges = [AddressRange::from_start_end(0x1004, 0x1005).unwrap()];
     let filter_ranges = [AddressRange::from_start_end(0x1000, 0x1010).unwrap()];
 
-    hexfile.fill_ranges(
-        &fill_ranges,
-        &FillOptions {
-            pattern: vec![0xF0],
-            overwrite: false,
-        },
-    );
+    hexfile
+        .fill_ranges(
+            &fill_ranges,
+            &FillOptions {
+                pattern: vec![0xF0],
+                overwrite: false,
+            },
+        )
+        .unwrap();
     hexfile.cut_ranges(&cut_ranges);
     hexfile
         .merge(
@@ -112,7 +114,7 @@ fn test_cli_pipeline_parity_binary_order() {
         )
         .unwrap();
 
-    let lib_bytes = write_binary(&hexfile, &BinaryWriteOptions::default());
+    let lib_bytes = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
     assert_eq!(cli_bytes, lib_bytes);
 }
 
@@ -259,13 +261,14 @@ fn test_cli_pipeline_parity_fa_fill_binary() {
     let cli_bytes = std::fs::read(&out_cli).unwrap();
 
     let mut hexfile = parse_binary(&[0xAA], 0x1000).unwrap();
-    hexfile.fill_gaps(0x00);
+    hexfile.fill_gaps(0x00).unwrap();
     let lib_bytes = write_binary(
         &hexfile,
         &BinaryWriteOptions {
             fill_gaps: Some(0x00),
         },
-    );
+    )
+    .unwrap();
 
     assert_eq!(cli_bytes, lib_bytes);
 }

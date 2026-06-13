@@ -15,7 +15,12 @@ pub fn parse_binary(data: &[u8], base_address: u32) -> Result<HexFile, ParseErro
         return Ok(HexFile::new());
     }
 
-    let len = data.len() as u32;
+    let len = u32::try_from(data.len()).map_err(|_| {
+        ParseError::AddressOverflow(format!(
+            "binary length {} exceeds u32 address space",
+            data.len()
+        ))
+    })?;
     let end = base_address
         .checked_add(len.saturating_sub(1))
         .ok_or_else(|| {
@@ -29,26 +34,32 @@ pub fn parse_binary(data: &[u8], base_address: u32) -> Result<HexFile, ParseErro
         )));
     }
 
-    Ok(HexFile::with_segments(vec![Segment::new(
-        base_address,
-        data.to_vec(),
-    )]))
+    let segment = Segment::try_new(base_address, data.to_vec()).map_err(|e| {
+        ParseError::AddressOverflow(format!("{:#X} + {} exceeds u32: {e}", base_address, len))
+    })?;
+
+    Ok(HexFile::with_segments(vec![segment]))
 }
 
 /// Write the HexFile to a binary blob.
 /// CLI: /XN.
-pub fn write_binary(hexfile: &HexFile, options: &BinaryWriteOptions) -> Vec<u8> {
+pub fn write_binary(
+    hexfile: &HexFile,
+    options: &BinaryWriteOptions,
+) -> Result<Vec<u8>, ParseError> {
     if hexfile.segments().is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     if let Some(fill) = options.fill_gaps {
         let mut filled = hexfile.normalized();
-        filled.fill_gaps(fill);
+        filled
+            .fill_gaps(fill)
+            .map_err(|e| ParseError::InvalidOutput(e.to_string()))?;
         if let Some(segment) = filled.segments().first() {
-            return segment.data.clone();
+            return Ok(segment.data.clone());
         }
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut segments: Vec<_> = hexfile
@@ -62,7 +73,7 @@ pub fn write_binary(hexfile: &HexFile, options: &BinaryWriteOptions) -> Vec<u8> 
     for segment in segments {
         out.extend_from_slice(&segment.data);
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -91,7 +102,7 @@ mod tests {
             Segment::new(0x2000, vec![0x01, 0x02]),
             Segment::new(0x1000, vec![0xAA]),
         ]);
-        let out = write_binary(&hexfile, &BinaryWriteOptions::default());
+        let out = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
         assert_eq!(out, vec![0xAA, 0x01, 0x02]);
     }
 
@@ -106,7 +117,8 @@ mod tests {
             &BinaryWriteOptions {
                 fill_gaps: Some(0x00),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(out, vec![0xAA, 0x00, 0xBB]);
     }
 }

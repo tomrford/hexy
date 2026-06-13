@@ -123,13 +123,16 @@ fn parse_intel_hex_with_address_scale(
                         seg.data.extend_from_slice(data);
                     }
                     Some(seg) => {
-                        segments.push(std::mem::replace(
-                            seg,
-                            Segment::new(full_address, data.to_vec()),
-                        ));
+                        let next = Segment::try_new(full_address, data.to_vec()).map_err(|e| {
+                            ParseError::AddressOverflow(format!("line {line_num}: {e}"))
+                        })?;
+                        segments.push(std::mem::replace(seg, next));
                     }
                     None => {
-                        current_segment = Some(Segment::new(full_address, data.to_vec()));
+                        current_segment =
+                            Some(Segment::try_new(full_address, data.to_vec()).map_err(|e| {
+                                ParseError::AddressOverflow(format!("line {line_num}: {e}"))
+                            })?);
                     }
                 }
             }
@@ -416,6 +419,22 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_record_crossing_u32_max_errors() {
+        let mut input = Vec::new();
+        write_record(
+            &mut input,
+            RECORD_EXTENDED_LINEAR,
+            0,
+            &0xFFFFu16.to_be_bytes(),
+        );
+        write_record(&mut input, RECORD_DATA, 0xFFFF, &[0xAA, 0xBB]);
+        write_record(&mut input, RECORD_EOF, 0, &[]);
+
+        let result = parse_intel_hex(&input);
+        assert!(matches!(result, Err(ParseError::AddressOverflow(_))));
+    }
+
+    #[test]
     fn test_checksum_error() {
         let input = b":10010000214601360121470136007EFE09D2190141\n\
                       :00000001FF\n";
@@ -449,6 +468,19 @@ mod tests {
         let text = String::from_utf8(output).unwrap();
         assert!(text.contains(":0401000000010203F5"));
         assert!(text.contains(":00000001FF"));
+    }
+
+    #[test]
+    fn test_write_roundtrip_at_u32_max_boundary() {
+        let hf = HexFile::with_segments(vec![Segment::new(
+            u32::MAX - 3,
+            vec![0xFC, 0xFD, 0xFE, 0xFF],
+        )]);
+
+        let output = write_intel_hex(&hf, &IntelHexWriteOptions::default());
+        let parsed = parse_intel_hex(&output).unwrap();
+
+        assert_eq!(parsed.normalized(), hf.normalized());
     }
 
     #[test]
