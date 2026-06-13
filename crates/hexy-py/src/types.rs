@@ -106,7 +106,7 @@ impl PySegment {
 
     #[getter]
     fn start(&self) -> u32 {
-        self.inner.start_address
+        self.inner.start_address()
     }
 
     #[getter]
@@ -116,7 +116,7 @@ impl PySegment {
 
     #[getter]
     fn data(&self, py: Python<'_>) -> Py<PyBytes> {
-        py_bytes(py, &self.inner.data)
+        py_bytes(py, self.inner.data())
     }
 
     fn __len__(&self) -> usize {

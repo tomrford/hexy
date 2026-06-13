@@ -233,10 +233,10 @@ fn test_cli_pipeline_parity_xsb_split() {
         )
         .unwrap();
     let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(|s| s.start_address());
 
-    assert_eq!(cli_a, segments[0].data);
-    assert_eq!(cli_b, segments[1].data);
+    assert_eq!(cli_a, segments[0].data());
+    assert_eq!(cli_b, segments[1].data());
 }
 
 #[test]

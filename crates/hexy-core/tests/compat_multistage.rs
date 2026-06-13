@@ -127,7 +127,7 @@ fn test_compat_multistage_order() {
     hf.checksum(&cs_options, &ChecksumTarget::Append).unwrap();
 
     let norm = hf.normalized();
-    assert_eq!(norm.segments()[0].start_address, 0x0FFF);
+    assert_eq!(norm.segments()[0].start_address(), 0x0FFF);
     assert_eq!(
         norm.read_bytes_contiguous(0x0FFF, 6).unwrap(),
         vec![0xEE, 0x10, 0x21, 0x22, 0x13, 0x14]

@@ -4,12 +4,14 @@ use thiserror::Error;
 pub enum SegmentError {
     #[error("segment at {start:#X} with length {length} exceeds u32 address space")]
     AddressOverflow { start: u32, length: usize },
+    #[error("segments are not contiguous (left end {left_end:#X}, right start {right_start:#X})")]
+    NotContiguous { left_end: u32, right_start: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
-    pub start_address: u32,
-    pub data: Vec<u8>,
+    pub(crate) start_address: u32,
+    pub(crate) data: Vec<u8>,
 }
 
 impl Segment {
@@ -45,8 +47,20 @@ impl Segment {
         Self::checked_end_address_for(self.start_address, self.data.len())
     }
 
+    pub fn start_address(&self) -> u32 {
+        self.start_address
+    }
+
     pub fn end_address(&self) -> u32 {
         self.checked_end_address().unwrap_or(u32::MAX)
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn into_parts(self) -> (u32, Vec<u8>) {
+        (self.start_address, self.data)
     }
 
     pub fn len(&self) -> usize {
@@ -61,9 +75,40 @@ impl Segment {
         self.end_address().checked_add(1) == Some(other.start_address)
     }
 
-    pub fn merge(&mut self, other: Segment) {
-        debug_assert!(self.is_contiguous_with(&other));
+    pub fn merge(&mut self, other: Segment) -> Result<(), SegmentError> {
+        if !self.is_contiguous_with(&other) {
+            return Err(SegmentError::NotContiguous {
+                left_end: self.end_address(),
+                right_start: other.start_address,
+            });
+        }
+        let new_len =
+            self.data
+                .len()
+                .checked_add(other.data.len())
+                .ok_or(SegmentError::AddressOverflow {
+                    start: self.start_address,
+                    length: usize::MAX,
+                })?;
+        if Self::checked_end_address_for(self.start_address, new_len).is_none() {
+            return Err(SegmentError::AddressOverflow {
+                start: self.start_address,
+                length: new_len,
+            });
+        }
         self.data.extend(other.data);
+        Ok(())
+    }
+
+    pub(crate) fn set_start_address(&mut self, start_address: u32) -> Result<(), SegmentError> {
+        if Self::checked_end_address_for(start_address, self.data.len()).is_none() {
+            return Err(SegmentError::AddressOverflow {
+                start: start_address,
+                length: self.data.len(),
+            });
+        }
+        self.start_address = start_address;
+        Ok(())
     }
 
     fn checked_end_address_for(start_address: u32, len: usize) -> Option<u32> {
@@ -96,5 +141,18 @@ mod tests {
         let seg = Segment::new(u32::MAX, vec![0xAA]);
         let next = Segment::new(0, vec![0xCC]);
         assert!(!seg.is_contiguous_with(&next));
+    }
+
+    #[test]
+    fn test_merge_rejects_non_contiguous_segment() {
+        let mut seg = Segment::new(u32::MAX, vec![0xAA]);
+        let result = seg.merge(Segment::new(0, vec![0xCC]));
+
+        assert!(matches!(
+            result,
+            Err(super::SegmentError::NotContiguous { .. })
+        ));
+        assert_eq!(seg.start_address(), u32::MAX);
+        assert_eq!(seg.data(), &[0xAA]);
     }
 }

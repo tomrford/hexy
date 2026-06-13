@@ -551,7 +551,7 @@ impl HexFile {
                     ))
                 })?;
 
-            segment.start_address = new_start;
+            set_segment_start_checked(segment, new_start, "remap")?;
         }
 
         Ok(())
@@ -572,30 +572,30 @@ impl HexFile {
 
             if start >= 0x4000 && end <= 0x7FFF {
                 let offset = start - 0x4000;
-                segment.start_address =
-                    options
-                        .nonbank_low_base
-                        .checked_add(offset)
-                        .ok_or_else(|| {
-                            OpsError::AddressOverflow(format!(
-                                "non-banked low map overflow (base={:#X}, start={:#X})",
-                                options.nonbank_low_base, start
-                            ))
-                        })?;
+                let new_start = options
+                    .nonbank_low_base
+                    .checked_add(offset)
+                    .ok_or_else(|| {
+                        OpsError::AddressOverflow(format!(
+                            "non-banked low map overflow (base={:#X}, start={:#X})",
+                            options.nonbank_low_base, start
+                        ))
+                    })?;
+                set_segment_start_checked(segment, new_start, "non-banked low map")?;
                 continue;
             }
             if start >= 0xC000 && end <= 0xFFFF {
                 let offset = start - 0xC000;
-                segment.start_address =
-                    options
-                        .nonbank_high_base
-                        .checked_add(offset)
-                        .ok_or_else(|| {
-                            OpsError::AddressOverflow(format!(
-                                "non-banked high map overflow (base={:#X}, start={:#X})",
-                                options.nonbank_high_base, start
-                            ))
-                        })?;
+                let new_start = options
+                    .nonbank_high_base
+                    .checked_add(offset)
+                    .ok_or_else(|| {
+                        OpsError::AddressOverflow(format!(
+                            "non-banked high map overflow (base={:#X}, start={:#X})",
+                            options.nonbank_high_base, start
+                        ))
+                    })?;
+                set_segment_start_checked(segment, new_start, "non-banked high map")?;
                 continue;
             }
 
@@ -625,15 +625,15 @@ impl HexFile {
                         options.linear_base, bank_index
                     ))
                 })?;
-            segment.start_address =
-                linear_bank_base
-                    .checked_add(start - bank_base)
-                    .ok_or_else(|| {
-                        OpsError::AddressOverflow(format!(
-                            "bank map overflow (linear={:#X}, start={:#X})",
-                            options.linear_base, start
-                        ))
-                    })?;
+            let new_start = linear_bank_base
+                .checked_add(start - bank_base)
+                .ok_or_else(|| {
+                    OpsError::AddressOverflow(format!(
+                        "bank map overflow (linear={:#X}, start={:#X})",
+                        options.linear_base, start
+                    ))
+                })?;
+            set_segment_start_checked(segment, new_start, "bank map")?;
         }
 
         Ok(())
@@ -666,12 +666,13 @@ impl HexFile {
 
             if start >= 0x4000 && end <= 0x7FFF {
                 let offset = start - 0x4000;
-                segment.start_address = 0x104000u32.checked_add(offset).ok_or_else(|| {
+                let new_start = 0x104000u32.checked_add(offset).ok_or_else(|| {
                     OpsError::AddressOverflow(format!(
                         "star08 low map overflow (start={:#X})",
                         start
                     ))
                 })?;
+                set_segment_start_checked(segment, new_start, "star08 low map")?;
                 continue;
             }
 
@@ -689,19 +690,29 @@ impl HexFile {
                 .ok_or_else(|| {
                     OpsError::AddressOverflow(format!("star08 bank base overflow (bank={})", bank))
                 })?;
-            segment.start_address =
-                linear_bank_base
-                    .checked_add(start - bank_base)
-                    .ok_or_else(|| {
-                        OpsError::AddressOverflow(format!(
-                            "star08 bank map overflow (start={:#X})",
-                            start
-                        ))
-                    })?;
+            let new_start = linear_bank_base
+                .checked_add(start - bank_base)
+                .ok_or_else(|| {
+                    OpsError::AddressOverflow(format!(
+                        "star08 bank map overflow (start={:#X})",
+                        start
+                    ))
+                })?;
+            set_segment_start_checked(segment, new_start, "star08 bank map")?;
         }
 
         Ok(())
     }
+}
+
+fn set_segment_start_checked(
+    segment: &mut Segment,
+    new_start: u32,
+    operation: &str,
+) -> Result<(), OpsError> {
+    segment.set_start_address(new_start).map_err(|e| {
+        OpsError::AddressOverflow(format!("{operation} output exceeds u32 address space: {e}"))
+    })
 }
 
 #[cfg(test)]
@@ -1125,6 +1136,74 @@ mod tests {
 
         let result = hf.remap(&options);
         assert!(matches!(result, Err(OpsError::InvalidRemapParams(_))));
+    }
+
+    #[test]
+    fn test_remap_rejects_output_segment_end_overflow() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC])]);
+        let options = RemapOptions {
+            start: 0x1000,
+            end: 0x1FFF,
+            linear: u32::MAX - 1,
+            size: 0x1000,
+            inc: 0x1000,
+        };
+
+        let result = hf.remap(&options);
+
+        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert_eq!(hf.segments()[0].start_address, 0x1000);
+    }
+
+    #[test]
+    fn test_map_banked_rejects_low_output_segment_end_overflow() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x4000, vec![0xAA, 0xBB, 0xCC])]);
+        let options = BankedMapOptions {
+            bank_min: 0x30,
+            bank_max: 0x30,
+            linear_base: 0,
+            nonbank_low_base: u32::MAX - 1,
+            nonbank_high_base: 0,
+        };
+
+        let result = hf.map_banked(&options);
+
+        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert_eq!(hf.segments()[0].start_address, 0x4000);
+    }
+
+    #[test]
+    fn test_map_banked_rejects_high_output_segment_end_overflow() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0xC000, vec![0xAA, 0xBB, 0xCC])]);
+        let options = BankedMapOptions {
+            bank_min: 0x30,
+            bank_max: 0x30,
+            linear_base: 0,
+            nonbank_low_base: 0,
+            nonbank_high_base: u32::MAX - 1,
+        };
+
+        let result = hf.map_banked(&options);
+
+        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert_eq!(hf.segments()[0].start_address, 0xC000);
+    }
+
+    #[test]
+    fn test_map_banked_rejects_bank_output_segment_end_overflow() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x308000, vec![0xAA, 0xBB, 0xCC])]);
+        let options = BankedMapOptions {
+            bank_min: 0x30,
+            bank_max: 0x30,
+            linear_base: u32::MAX - 1,
+            nonbank_low_base: 0,
+            nonbank_high_base: 0,
+        };
+
+        let result = hf.map_banked(&options);
+
+        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert_eq!(hf.segments()[0].start_address, 0x308000);
     }
 
     #[test]

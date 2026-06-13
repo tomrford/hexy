@@ -166,7 +166,7 @@ impl PyHexFile {
     fn to_bytes(&self, py: Python<'_>, fill: u8) -> Option<Py<PyBytes>> {
         self.inner
             .as_contiguous(fill)
-            .map(|segment| py_bytes(py, &segment.data))
+            .map(|segment| py_bytes(py, segment.data()))
     }
 
     #[pyo3(signature = (*, fill_gaps=None))]

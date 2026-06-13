@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, io};
 
-use hexy_core::HexFile;
+use hexy_core::{HexFile, Segment};
 
 use super::error::CliError;
 use super::ini::load_ini;
@@ -68,19 +68,19 @@ pub(super) fn load_hex_ascii_input(
 pub(super) fn hexfiles_overlap(a: &HexFile, b: &HexFile) -> bool {
     let mut a_segments = a.segments().to_vec();
     let mut b_segments = b.segments().to_vec();
-    a_segments.sort_by_key(|s| s.start_address);
-    b_segments.sort_by_key(|s| s.start_address);
+    a_segments.sort_by_key(Segment::start_address);
+    b_segments.sort_by_key(Segment::start_address);
 
     let mut i = 0usize;
     let mut j = 0usize;
     while i < a_segments.len() && j < b_segments.len() {
         let a_seg = &a_segments[i];
         let b_seg = &b_segments[j];
-        if a_seg.end_address() < b_seg.start_address {
+        if a_seg.end_address() < b_seg.start_address() {
             i += 1;
             continue;
         }
-        if b_seg.end_address() < a_seg.start_address {
+        if b_seg.end_address() < a_seg.start_address() {
             j += 1;
             continue;
         }
@@ -345,7 +345,7 @@ pub(super) fn write_porsche_output(
     normalized
         .fill_gaps(fill)
         .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
-    let data = normalized.segments()[0].data.clone();
+    let data = normalized.segments()[0].data().to_vec();
     let checksum = byte_sum_u16(&data);
     let mut output = data;
     output.extend_from_slice(&checksum.to_be_bytes());
@@ -504,9 +504,9 @@ fn normalize_crlf(text: &str) -> String {
 fn compute_ford_checksum(hexfile: &HexFile) -> u16 {
     let mut sum: u16 = 0;
     let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(Segment::start_address);
     for segment in segments {
-        for byte in segment.data {
+        for &byte in segment.data() {
             sum = sum.wrapping_add(byte as u16);
         }
     }
@@ -515,11 +515,11 @@ fn compute_ford_checksum(hexfile: &HexFile) -> u16 {
 
 fn format_erase_sectors(hexfile: &HexFile, alignment: Option<u32>) -> String {
     let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(Segment::start_address);
     let mut parts = Vec::new();
 
     for segment in segments {
-        let start = segment.start_address;
+        let start = segment.start_address();
         let len = segment.len() as u32;
         let (aligned_start, aligned_len) = if let Some(align) = alignment.filter(|a| *a > 0) {
             let start64 = start as u64;
@@ -573,7 +573,7 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
 fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
     let normalized = hexfile.normalized();
     let mut segments = normalized.into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(Segment::start_address);
 
     if segments.is_empty() {
         return Ok(());
@@ -587,9 +587,10 @@ fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError>
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
 
     for segment in segments {
-        let filename = format!("{stem}_{:x}.{ext}", segment.start_address);
+        let (start_address, data) = segment.into_parts();
+        let filename = format!("{stem}_{start_address:x}.{ext}");
         let out_path = dir.join(filename);
-        std::fs::write(out_path, segment.data)?;
+        std::fs::write(out_path, data)?;
     }
 
     Ok(())

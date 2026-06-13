@@ -20,7 +20,10 @@ impl HexFile {
 
     pub fn with_segments(segments: Vec<Segment>) -> Self {
         Self {
-            segments: segments.into_iter().filter(|s| !s.is_empty()).collect(),
+            segments: segments
+                .into_iter()
+                .filter_map(checked_non_empty_segment)
+                .collect(),
         }
     }
 
@@ -42,22 +45,25 @@ impl HexFile {
     }
 
     pub fn set_segments(&mut self, segments: Vec<Segment>) {
-        self.segments = segments.into_iter().filter(|s| !s.is_empty()).collect();
+        self.segments = segments
+            .into_iter()
+            .filter_map(checked_non_empty_segment)
+            .collect();
     }
 
     /// Add segment with HIGH priority (wins on overlap after normalize).
     pub fn append_segment(&mut self, segment: Segment) {
-        if segment.is_empty() {
+        let Some(segment) = checked_non_empty_segment(segment) else {
             return;
-        }
+        };
         self.segments.push(segment);
     }
 
     /// Add segment with LOW priority (loses on overlap after normalize).
     pub fn prepend_segment(&mut self, segment: Segment) {
-        if segment.is_empty() {
+        let Some(segment) = checked_non_empty_segment(segment) else {
             return;
-        }
+        };
         self.segments.insert(0, segment);
     }
 
@@ -239,12 +245,21 @@ fn merge_adjacent_segments(segments: Vec<Segment>) -> Vec<Segment> {
         if let Some(last) = merged.last_mut()
             && last.is_contiguous_with(&seg)
         {
-            last.data.extend_from_slice(&seg.data);
+            last.data.extend(seg.data);
+            debug_assert!(last.checked_end_address().is_some());
             continue;
         }
         merged.push(seg);
     }
     merged
+}
+
+fn checked_non_empty_segment(segment: Segment) -> Option<Segment> {
+    assert!(
+        segment.checked_end_address().is_some(),
+        "segment exceeds u32 address space; use Segment::try_new to handle overflow"
+    );
+    (!segment.is_empty()).then_some(segment)
 }
 
 fn overlay_segment(segments: Vec<Segment>, seg: Segment) -> Vec<Segment> {
@@ -437,6 +452,25 @@ mod tests {
 
         hf.append_segment(Segment::new(0x1000, vec![0xAA]));
         assert_eq!(hf.read_byte(0x1000), Some(0xAA));
+    }
+
+    #[test]
+    #[should_panic(expected = "segment exceeds u32 address space")]
+    fn test_with_segments_rejects_invalid_segment() {
+        let _ = HexFile::with_segments(vec![Segment {
+            start_address: u32::MAX,
+            data: vec![0xAA, 0xBB],
+        }]);
+    }
+
+    #[test]
+    #[should_panic(expected = "segment exceeds u32 address space")]
+    fn test_append_segment_rejects_invalid_segment() {
+        let mut hf = HexFile::new();
+        hf.append_segment(Segment {
+            start_address: u32::MAX,
+            data: vec![0xAA, 0xBB],
+        });
     }
 
     #[test]

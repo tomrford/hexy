@@ -22,14 +22,14 @@ fn test_cli_cut_multiple_ranges_one_arg() {
 
     let hexfile = run_hex_output(args, &out);
     let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(|s| s.start_address());
     assert_eq!(segments.len(), 3);
-    assert_eq!(segments[0].start_address, 0x5000);
-    assert_eq!(segments[0].data, vec![0]);
-    assert_eq!(segments[1].start_address, 0x5002);
-    assert_eq!(segments[1].data, vec![2, 3, 4]);
-    assert_eq!(segments[2].start_address, 0x5007);
-    assert_eq!(segments[2].data, vec![7]);
+    assert_eq!(segments[0].start_address(), 0x5000);
+    assert_eq!(segments[0].data(), vec![0]);
+    assert_eq!(segments[1].start_address(), 0x5002);
+    assert_eq!(segments[1].data(), vec![2, 3, 4]);
+    assert_eq!(segments[2].start_address(), 0x5007);
+    assert_eq!(segments[2].data(), vec![7]);
 }
 
 #[test]
@@ -148,8 +148,8 @@ fn test_cli_log_file_open_without_input() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x0);
-    assert_eq!(norm.segments()[0].data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    assert_eq!(norm.segments()[0].start_address(), 0x0);
+    assert_eq!(norm.segments()[0].data(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
 }
 
 #[test]
@@ -235,8 +235,8 @@ fn test_cli_import_i16_scales_addresses() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x0002);
-    assert_eq!(norm.segments()[0].data, vec![0xAA, 0xBB]);
+    assert_eq!(norm.segments()[0].start_address(), 0x0002);
+    assert_eq!(norm.segments()[0].data(), vec![0xAA, 0xBB]);
 }
 
 #[test]
@@ -257,8 +257,8 @@ fn test_cli_merge_opaque_without_input_starts_empty() {
     let hexfile = run_hex_output(args, &out);
     let norm = hexfile.normalized();
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address, 0x1001);
-    assert_eq!(norm.segments()[0].data, vec![0xAA, 0xBB]);
+    assert_eq!(norm.segments()[0].start_address(), 0x1001);
+    assert_eq!(norm.segments()[0].data(), vec![0xAA, 0xBB]);
 }
 
 #[test]
@@ -283,9 +283,9 @@ fn test_cli_s08map_examples() {
 
     let hexfile = run_hex_output(args, &out);
     let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
-    assert_eq!(segments[0].start_address, 0x104000);
-    assert_eq!(segments[1].start_address, 0x108000);
+    segments.sort_by_key(|s| s.start_address());
+    assert_eq!(segments[0].start_address(), 0x104000);
+    assert_eq!(segments[1].start_address(), 0x108000);
 }
 
 #[test]
@@ -619,11 +619,11 @@ fn test_cli_remap_basic() {
 
     let hexfile = run_hex_output(args, &out);
     let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(|s| s.start_address());
     assert_eq!(segments.len(), 3);
-    assert_eq!(segments[0].start_address, 0x1000);
-    assert_eq!(segments[1].start_address, 0x008000);
-    assert_eq!(segments[2].start_address, 0x00C000);
+    assert_eq!(segments[0].start_address(), 0x1000);
+    assert_eq!(segments[1].start_address(), 0x008000);
+    assert_eq!(segments[2].start_address(), 0x00C000);
 }
 
 #[test]
@@ -675,12 +675,12 @@ fn test_cli_s12map_basic() {
 
     let hexfile = run_hex_output(args, &out);
     let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(|s| s.start_address());
     assert_eq!(segments.len(), 4);
-    assert_eq!(segments[0].start_address, 0x0C0000);
-    assert_eq!(segments[1].start_address, 0x0C4000);
-    assert_eq!(segments[2].start_address, 0x0F8000);
-    assert_eq!(segments[3].start_address, 0x0FC000);
+    assert_eq!(segments[0].start_address(), 0x0C0000);
+    assert_eq!(segments[1].start_address(), 0x0C4000);
+    assert_eq!(segments[2].start_address(), 0x0F8000);
+    assert_eq!(segments[3].start_address(), 0x0FC000);
 }
 
 #[test]
@@ -713,10 +713,10 @@ fn test_cli_s12xmap_basic() {
 
     let hexfile = run_hex_output(args, &out);
     let mut segments = hexfile.segments().to_vec();
-    segments.sort_by_key(|s| s.start_address);
+    segments.sort_by_key(|s| s.start_address());
     assert_eq!(segments.len(), 4);
-    assert_eq!(segments[0].start_address, 0x780000);
-    assert_eq!(segments[1].start_address, 0x784000);
-    assert_eq!(segments[2].start_address, 0x7F4000);
-    assert_eq!(segments[3].start_address, 0x7FC000);
+    assert_eq!(segments[0].start_address(), 0x780000);
+    assert_eq!(segments[1].start_address(), 0x784000);
+    assert_eq!(segments[2].start_address(), 0x7F4000);
+    assert_eq!(segments[3].start_address(), 0x7FC000);
 }

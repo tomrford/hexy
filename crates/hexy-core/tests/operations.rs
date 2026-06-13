@@ -32,7 +32,7 @@ fn test_cut_fill_normalize() {
     let norm = hf.normalized();
 
     // The first segment should now have 0xAA, then 0xCC fill, then 0xAA
-    assert_eq!(norm.segments()[0].start_address, 0x1000);
+    assert_eq!(norm.segments()[0].start_address(), 0x1000);
     // Check the filled region
     let filled_data = norm.read_bytes_contiguous(0x1008, 8).unwrap();
     assert_eq!(filled_data, vec![0xCC; 8]);
@@ -60,7 +60,7 @@ fn test_merge_align_normalize_overwrite() {
 
     // After merge (overwrite): 0x1003-0x1006 should be 0xBB
     // After align: starts at 0x1000
-    assert_eq!(norm.segments()[0].start_address, 0x1000);
+    assert_eq!(norm.segments()[0].start_address(), 0x1000);
 
     // Check that merged bytes are present (BB overwrote AA at 0x1003-0x1006)
     let data = norm.read_bytes_contiguous(0x1003, 4).unwrap();
@@ -103,28 +103,28 @@ fn test_scale_unscale_roundtrip() {
     hf.scale_addresses(4).unwrap();
 
     // Check scaled addresses
-    assert_eq!(hf.segments()[0].start_address, 0x4000);
-    assert_eq!(hf.segments()[1].start_address, 0x8000);
-    assert_eq!(hf.segments()[2].start_address, 0xC000);
+    assert_eq!(hf.segments()[0].start_address(), 0x4000);
+    assert_eq!(hf.segments()[1].start_address(), 0x8000);
+    assert_eq!(hf.segments()[2].start_address(), 0xC000);
 
     hf.unscale_addresses(4).unwrap();
 
     // Should be back to original
     assert_eq!(
-        hf.segments()[0].start_address,
-        original.segments()[0].start_address
+        hf.segments()[0].start_address(),
+        original.segments()[0].start_address()
     );
     assert_eq!(
-        hf.segments()[1].start_address,
-        original.segments()[1].start_address
+        hf.segments()[1].start_address(),
+        original.segments()[1].start_address()
     );
     assert_eq!(
-        hf.segments()[2].start_address,
-        original.segments()[2].start_address
+        hf.segments()[2].start_address(),
+        original.segments()[2].start_address()
     );
 
     // Data unchanged
-    assert_eq!(hf.segments()[0].data, original.segments()[0].data);
+    assert_eq!(hf.segments()[0].data(), original.segments()[0].data());
 }
 
 // --- Align → Split ---
@@ -142,7 +142,7 @@ fn test_align_then_split() {
     .unwrap();
 
     // After align: start at 0x1000 (3 prepended), length becomes 32 (next multiple of 8)
-    assert_eq!(hf.segments()[0].start_address, 0x1000);
+    assert_eq!(hf.segments()[0].start_address(), 0x1000);
     assert_eq!(hf.segments()[0].len(), 32);
 
     // Split into 8-byte chunks
@@ -150,7 +150,7 @@ fn test_align_then_split() {
 
     assert_eq!(hf.segments().len(), 4);
     for (i, seg) in hf.segments().iter().enumerate() {
-        assert_eq!(seg.start_address, 0x1000 + (i as u32) * 8);
+        assert_eq!(seg.start_address(), 0x1000 + (i as u32) * 8);
         assert_eq!(seg.len(), 8);
     }
 }
@@ -283,7 +283,7 @@ fn test_filter_cut_fill_align_split() {
     assert_eq!(norm.segments().len(), 1);
 
     // Verify data integrity
-    let all_bytes = &norm.segments()[0].data;
+    let all_bytes = norm.segments()[0].data();
 
     // Should contain 0xBB (filled) and 0xAA (original)
     assert!(all_bytes.contains(&0xAA));
