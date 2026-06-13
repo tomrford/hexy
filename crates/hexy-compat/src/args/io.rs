@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, io};
 
-use hexy_core::HexFile;
+use hexy_core::{HexFile, Segment};
 
 use super::error::CliError;
 use super::ini::load_ini;
@@ -612,9 +612,7 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
 }
 
 fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
-    let normalized = hexfile.normalized();
-    let mut segments = normalized.into_segments();
-    segments.sort_by_key(|s| s.start_address);
+    let segments = separate_binary_segments(hexfile);
 
     if segments.is_empty() {
         return Ok(());
@@ -634,6 +632,69 @@ fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError>
     }
 
     Ok(())
+}
+
+fn separate_binary_segments(hexfile: &HexFile) -> Vec<Segment> {
+    let all_segments = hexfile.segments();
+    let mut indexed_segments: Vec<(usize, &Segment)> = all_segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| !segment.is_empty())
+        .collect();
+    indexed_segments.sort_by_key(|(_, segment)| segment.start_address);
+
+    let mut output = Vec::new();
+    let mut run_indices = Vec::new();
+    let mut run_end = None;
+
+    for (index, segment) in indexed_segments {
+        match run_end {
+            Some(end) if segment.start_address <= end => {
+                run_indices.push(index);
+                run_end = Some(end.max(segment.end_address()));
+            }
+            Some(_) => {
+                push_separate_binary_run(all_segments, &run_indices, &mut output);
+                run_indices.clear();
+                run_indices.push(index);
+                run_end = Some(segment.end_address());
+            }
+            None => {
+                run_indices.push(index);
+                run_end = Some(segment.end_address());
+            }
+        }
+    }
+
+    if !run_indices.is_empty() {
+        push_separate_binary_run(all_segments, &run_indices, &mut output);
+    }
+
+    output.sort_by_key(|segment| segment.start_address);
+    output
+}
+
+fn push_separate_binary_run(
+    all_segments: &[Segment],
+    run_indices: &[usize],
+    output: &mut Vec<Segment>,
+) {
+    if run_indices.len() == 1 {
+        output.push(all_segments[run_indices[0]].clone());
+        return;
+    }
+
+    let mut insertion_order = run_indices.to_vec();
+    insertion_order.sort_unstable();
+    let run_segments = insertion_order
+        .into_iter()
+        .map(|index| all_segments[index].clone())
+        .collect();
+    output.extend(
+        HexFile::with_segments(run_segments)
+            .normalized()
+            .into_segments(),
+    );
 }
 
 #[cfg(test)]
@@ -678,6 +739,37 @@ mod tests {
         assert_eq!(fs::read(file2).unwrap(), vec![0xCC]);
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_write_separate_binary_preserves_adjacent_blocks() -> Result<(), CliError> {
+        let dir = unique_temp_dir();
+        let output = dir.join("out.bin");
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x00, 0x01, 0x02, 0x03]),
+            Segment::new(0x1004, vec![0x04, 0x05, 0x06, 0x07]),
+            Segment::new(0x2000, vec![0x10, 0x11, 0x12, 0x13]),
+            Segment::new(0x2002, vec![0xAA, 0xBB]),
+        ]);
+
+        write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
+
+        assert_eq!(
+            fs::read(dir.join("out_1000.bin"))?,
+            vec![0x00, 0x01, 0x02, 0x03]
+        );
+        assert_eq!(
+            fs::read(dir.join("out_1004.bin"))?,
+            vec![0x04, 0x05, 0x06, 0x07]
+        );
+        assert_eq!(
+            fs::read(dir.join("out_2000.bin"))?,
+            vec![0x10, 0x11, 0xAA, 0xBB]
+        );
+        assert!(!dir.join("out_2002.bin").exists());
+
+        fs::remove_dir_all(dir)?;
+        Ok(())
     }
 
     #[test]

@@ -447,6 +447,34 @@ fn test_cli_binary_and_separate_binary() {
 }
 
 #[test]
+fn test_cli_separate_binary_preserves_split_blocks() -> std::io::Result<()> {
+    let dir = temp_dir("cli_xsb_split");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.bin");
+    write_file(&input, &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+
+    let args = vec![
+        format!("/IN:{};0x1000", input.display()),
+        "/SB:4".to_owned(),
+        "/XSB".to_owned(),
+        "-o".to_owned(),
+        out.display().to_string(),
+    ];
+    let output = run_hexy(&args);
+    assert_success(&output);
+
+    assert_eq!(
+        std::fs::read(dir.join("out_1000.bin"))?,
+        vec![0x00, 0x01, 0x02, 0x03]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("out_1004.bin"))?,
+        vec![0x04, 0x05, 0x06, 0x07]
+    );
+    Ok(())
+}
+
+#[test]
 fn test_cli_binary_address_order() {
     let dir = temp_dir("cli_xn_order");
     let base = dir.join("base.bin");
