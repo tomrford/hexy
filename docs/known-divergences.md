@@ -69,7 +69,7 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 
 ### Other Limits
 
-- `/L` support beyond `FileOpen`, `FileClose`, and `FileNew`; `FileOpen` path resolution and path dialect assumptions may also differ
+- in `hexy-compat`, `/L` executes `FileClose` and `FileNew`; `FileOpen <path>` is rejected with the attempted path
 - exact `/E` and `/V` text/file semantics
 - proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats
 
