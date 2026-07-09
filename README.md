@@ -10,7 +10,7 @@ Hexy is a reusable binary file modification library based on a cleanroom impleme
 | `hexy-compat` | `cargo install hexy-compat` | Running HexView-style slash-flag workflows from the shell (installs the `hexy` command) |
 | `hexy-py` | `pip install hexy-py` | Scripting in Python with in-memory hex editing and `Pipeline` recipes |
 
-`hexy-compat` is the HexView-compatible CLI built on `hexy-core`. `hexy-py` wraps a subset of the core API for Python. Coverage differs between surfaces — see [known divergences](docs/known_divergences.md) for what each crate exposes and where HexView parity is still incomplete.
+`hexy-compat` is the HexView-compatible CLI built on `hexy-core`. `hexy-py` wraps a subset of the core API for Python. Coverage differs between surfaces — see [known divergences](docs/known-divergences.md) for what each crate exposes and where HexView parity is still incomplete.
 
 For the full slash-flag reference, see [cli-reference.md](skill/hexy-compat/references/cli-reference.md).
 
@@ -86,7 +86,7 @@ The repo is structured so additional frontends can consume `hexy-core` without f
 
 ## Python bindings
 
-The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, and the main memory operations used by the compat CLI. Checksum, signing, and some export formats are core-only today — see [known divergences](docs/known_divergences.md).
+The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, and the main memory operations used by the compat CLI. Checksum, signing, and some export formats are core-only today — see [known divergences](docs/known-divergences.md).
 
 ```python
 import hexy
