@@ -2,19 +2,23 @@
 
 Hexy is a reusable binary file modification library based on a cleanroom implementation of Vector HexView.
 
-Hexy is available as:
+## Which surface?
 
-- `hexy-core` - Rust library crate with `HexFile`, `Segment`, `AddressRange`, parsers, writers, and typed operations.
-- `hexy-py` - Python bindings for `hexy-core`.
-- `hexy-compat` - Implements `hexy`, a drop-in replacement for the CLI functionality of HexView with slash-flag syntax, based on `hexy-core`.
+| Surface | Install | Use when |
+|---------|---------|----------|
+| `hexy-core` | `cargo add hexy-core` | Building Rust tools that need parsers, memory ops, checksums, or signatures |
+| `hexy-compat` | `cargo install hexy-compat` | Running HexView-style slash-flag workflows from the shell (installs the `hexy` command) |
+| `hexy-py` | `pip install hexy-py` | Scripting in Python with in-memory hex editing and `Pipeline` recipes |
 
-I have not yet achieved feature parity with hexview; the [known divergences doc](docs/known-divergences.md) details where the core library stands. There is still differing amounts of coverage between lib/binary/python that I am working to rectify. I plan on eventually adding additional features to -core/-py and implementing a 4th crate under -cli to provide these additional features.
+`hexy-compat` is the HexView-compatible CLI built on `hexy-core`. `hexy-py` wraps a subset of the core API for Python. Coverage differs between surfaces — see [known divergences](docs/known-divergences.md) for what each crate exposes and where HexView parity is still incomplete.
+
+For the full slash-flag reference, see [cli-reference.md](skill/hexy-compat/references/cli-reference.md).
 
 ## Install
 
 ```bash
-cargo add hexy-core
-cargo install hexy-compat
+cargo add hexy-core          # library
+cargo install hexy-compat    # installs the `hexy` CLI binary
 pip install hexy-py
 ```
 
@@ -30,8 +34,9 @@ hexy app.hex /FR:'0x0-0xFFF' /FP:FF /CR:'0x800-0x8FF' /CS0 /XS -o app.s19
 # Merge a calibration overlay and export binary
 hexy base.hex /MO:cal.hex /XN -o combined.bin
 
-# Export one binary per segment
+# Export one binary per segment (writes segments_<addr>.bin alongside -o path)
 hexy multi.hex /XSB -o segments.bin
+# -> segments_1000.bin, segments_2000.bin, ...
 ```
 
 ## Workspace commands
@@ -52,7 +57,7 @@ Compat flags execute in a fixed pipeline order, not in argument order:
 1. Input (`/IN`, `/IA`, `/II2`)
 2. Address mapping (`/S08MAP`, `/S12MAP`, `/S12XMAP`, `/REMAP`)
 3. dsPIC transforms (`/CDSPX`, `/CDSPS`, `/CDSPG`)
-4. Fill (`/FR` + `/FP`)
+4. Fill (`/FR`; `/FP` sets the pattern, random fill when omitted)
 5. Cut (`/CR`)
 6. Merge (`/MT` or `/MO`)
 7. Address range filter (`/AR`)
@@ -60,6 +65,8 @@ Compat flags execute in a fixed pipeline order, not in argument order:
 9. Checksum (`/CS`, `/CSR`, `/CSM`, `/CSMR`)
 10. Signing (`/DP`) and verification (`/SV`)
 11. Export (`/XI`, `/XS`, `/XN`, `/XSB`, `/XA`, `/XC`, `/XF`, `/XP`) via `-o`
+
+See [cli-reference.md](skill/hexy-compat/references/cli-reference.md) for flag syntax and examples.
 
 ## Library
 
@@ -79,7 +86,7 @@ The repo is structured so additional frontends can consume `hexy-core` without f
 
 ## Python bindings
 
-The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, and the main memory operations used by the compat CLI.
+The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, and the main memory operations used by the compat CLI. Checksum, signing, and some export formats are core-only today — see [known divergences](docs/known-divergences.md).
 
 ```python
 import hexy
