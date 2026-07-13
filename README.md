@@ -78,6 +78,9 @@ hf.cut(AddressRange::from_start_end(0x800, 0x8FF)?);
 let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 ```
 
+See [signatures](docs/signatures.md) for the typed signing and verification API,
+including the mapping from compat `/DP` and `/SV` methods.
+
 ## Scope
 
 `hexy-compat` targets non-proprietary cleanroom-compatible slash workflows. Proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats remain out of scope.
