@@ -19,7 +19,7 @@ default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-hexy-core = { path = "../hexy-core", version = "0.2.0" }
+hexy-core = { path = "../hexy-core", version = "0.3.0" }
 pyo3 = { workspace = true, features = ["abi3-py310"] }
 
 [build-dependencies]
