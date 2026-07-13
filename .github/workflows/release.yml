@@ -7,16 +7,13 @@ on:
 permissions:
   contents: read
 
-env:
-  CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
-
 jobs:
   validate-release:
     name: Validate release
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     outputs:
-      tag_name: ${{ steps.tag.outputs.tag_name }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.metadata.outputs.version }}
     steps:
       - name: Checkout source code
@@ -33,8 +30,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Resolve tag
-        id: tag
+      - name: Validate release tag
+        id: release
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -44,33 +41,42 @@ jobs:
             echo "Release tags must match vX.Y.Z, got $TAG." >&2
             exit 1
           fi
-          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Verify tag is on main
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
-        run: |
-          TAG="$RELEASE_TAG"
-          git fetch --force origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/${TAG}:refs/tags/${TAG}"
+          git fetch --force origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/tags/${TAG}:refs/tags/${TAG}"
+
           TAG_COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main
+          CHECKOUT_COMMIT="$(git rev-parse HEAD)"
+          if [[ "$CHECKOUT_COMMIT" != "$TAG_COMMIT" ]]; then
+            echo "Checked out $CHECKOUT_COMMIT, but release tag $TAG resolves to $TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "Release tag $TAG ($TAG_COMMIT) must be reachable from origin/main." >&2
+            exit 1
+          fi
+
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Validate version metadata
         id: metadata
         shell: bash
         env:
-          RELEASE_TAG: ${{ steps.tag.outputs.tag_name }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
         run: |
           TAG="$RELEASE_TAG"
           VERSION="${TAG#v}"
-          WORKSPACE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-core") | .version')"
+          CORE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-core") | .version')"
+          COMPAT_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .version')"
+          PY_CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-py") | .version')"
           COMPAT_CORE_REQ="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .dependencies[] | select(.name == "hexy-core") | .req')"
           PY_CORE_REQ="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-py") | .dependencies[] | select(.name == "hexy-core") | .req')"
           PY_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("crates/hexy-py/pyproject.toml", "rb"))["project"]["version"])')"
 
-          if [[ "$WORKSPACE_VERSION" != "$VERSION" ]]; then
-            echo "Tag $TAG does not match workspace version $WORKSPACE_VERSION." >&2
+          if [[ "$CORE_VERSION" != "$VERSION" || "$COMPAT_VERSION" != "$VERSION" || "$PY_CRATE_VERSION" != "$VERSION" ]]; then
+            echo "Tag $TAG must match hexy-core $CORE_VERSION, hexy-compat $COMPAT_VERSION, and hexy-py $PY_CRATE_VERSION." >&2
             exit 1
           fi
           if [[ "$COMPAT_CORE_REQ" != "^$VERSION" || "$PY_CORE_REQ" != "^$VERSION" ]]; then
@@ -85,206 +91,40 @@ jobs:
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-  build-release:
-    name: ${{ matrix.job.target }} (${{ matrix.job.os }})
-    runs-on: ${{ matrix.job.os }}
+  build-artifacts:
     needs: validate-release
     permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        job:
-          - {
-              target: x86_64-unknown-linux-musl,
-              os: ubuntu-latest,
-              use-cross: true,
-            }
-          - {
-              target: aarch64-unknown-linux-musl,
-              os: ubuntu-latest,
-              use-cross: true,
-            }
-          - { target: x86_64-apple-darwin, os: macos-15-intel }
-          - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+      contents: read
+    uses: ./.github/workflows/release-build.yml
+    with:
+      ref: refs/tags/${{ needs.validate-release.outputs.tag_name }}
 
-    env:
-      BUILD_CMD: cargo
+  publish-release-assets:
+    name: Publish release assets
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-artifacts]
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Download CLI distributions
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
-          ref: refs/tags/${{ needs.validate-release.outputs.tag_name }}
+          pattern: cli-dist-*
+          path: dist
+          merge-multiple: true
 
-      - name: Extract crate metadata
-        shell: bash
-        run: |
-          echo "PROJECT_NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .targets[] | select(.kind[] == "bin") | .name')" >> $GITHUB_ENV
-          echo "PROJECT_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hexy-compat") | .version')" >> $GITHUB_ENV
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-        with:
-          targets: ${{ matrix.job.target }}
-
-      - name: Install cross
-        if: matrix.job.use-cross
-        uses: taiki-e/install-action@3771e22aa892e03fd35585fae288baad1755695c
-        with:
-          tool: cross
-
-      - name: Overwrite build command
-        if: matrix.job.use-cross
-        shell: bash
-        run: echo "BUILD_CMD=cross" >> $GITHUB_ENV
-
-      - name: Build
-        shell: bash
-        run: $BUILD_CMD build --locked --release --target=${{ matrix.job.target }} -p hexy-compat --bin hexy
-
-      - name: Build archive
-        shell: bash
-        run: |
-          EXE_SUFFIX=""
-          case ${{ matrix.job.target }} in
-            *-pc-windows-*) EXE_SUFFIX=".exe" ;;
-          esac
-
-          BIN_NAME="${PROJECT_NAME}${EXE_SUFFIX}"
-          BIN_PATH="target/${{ matrix.job.target }}/release/${BIN_NAME}"
-
-          PKG_SUFFIX=".tar.gz"
-          case ${{ matrix.job.target }} in
-            *-pc-windows-*) PKG_SUFFIX=".zip" ;;
-          esac
-
-          PKG_BASENAME="${PROJECT_NAME}-v${PROJECT_VERSION}-${{ matrix.job.target }}"
-          PKG_NAME="${PKG_BASENAME}${PKG_SUFFIX}"
-
-          PKG_STAGING="${CICD_INTERMEDIATES_DIR}/package"
-          ARCHIVE_DIR="${PKG_STAGING}/${PKG_BASENAME}/"
-          mkdir -p "${ARCHIVE_DIR}"
-
-          cp "${BIN_PATH}" "${ARCHIVE_DIR}"
-          cp README.md LICENSE* "${ARCHIVE_DIR}" 2>/dev/null || true
-
-          pushd "${PKG_STAGING}/" >/dev/null
-          case ${{ matrix.job.target }} in
-            *-pc-windows-*)
-              7z a "${PKG_NAME}" "${PKG_BASENAME}"/* | tail -2
-              certutil -hashfile "${PKG_NAME}" SHA256 > "${PKG_NAME}.sha256"
-              ;;
-            *)
-              tar czf "${PKG_NAME}" "${PKG_BASENAME}"/*
-              shasum -a 256 "${PKG_NAME}" > "${PKG_NAME}.sha256"
-              ;;
-          esac
-          popd >/dev/null
-
-          echo "PKG_PATH=${PKG_STAGING}/${PKG_NAME}" >> $GITHUB_ENV
-          echo "PKG_CHECKSUM=${PKG_STAGING}/${PKG_NAME}.sha256" >> $GITHUB_ENV
-
-      - name: Publish release
+      - name: Publish release assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.validate-release.outputs.tag_name }}
-        run: |
-          TAG="$RELEASE_TAG"
-          gh release upload "$TAG" "${{ env.PKG_PATH }}" "${{ env.PKG_CHECKSUM }}" --clobber
-
-  build-python:
-    name: Python ${{ matrix.job.name }}
-    runs-on: ${{ matrix.job.os }}
-    needs: validate-release
-    strategy:
-      fail-fast: false
-      matrix:
-        job:
-          - { name: linux-x86_64, os: ubuntu-latest, sdist: true }
-          - { name: macos-x86_64, os: macos-15-intel, sdist: false }
-          - { name: macos-aarch64, os: macos-latest, sdist: false }
-          - { name: windows-x86_64, os: windows-latest, sdist: false }
-
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
-        with:
-          ref: refs/tags/${{ needs.validate-release.outputs.tag_name }}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-
-      - name: Install Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
-        with:
-          python-version: "3.10"
-
-      - name: Install uv
-        shell: bash
-        run: python -m pip install --upgrade uv
-
-      - name: Build Linux wheel
-        if: runner.os == 'Linux'
-        uses: PyO3/maturin-action@12dee64e4a21f3a4a4fd4d34e05cc55f0eda098a
-        with:
-          command: build
-          manylinux: "2014"
-          working-directory: crates/hexy-py
-          args: --release --out ../../dist
-
-      - name: Fix Linux dist permissions
-        if: runner.os == 'Linux'
-        run: sudo chown -R "$USER":"$USER" dist
-
-      - name: Build native wheel
-        if: runner.os != 'Linux'
-        shell: bash
-        run: uv run --directory crates/hexy-py --group dev maturin build --release --compatibility pypi --out ../../dist
-
-      - name: Build source distribution
-        if: matrix.job.sdist
-        shell: bash
-        run: uv run --directory crates/hexy-py --group dev maturin sdist --out ../../dist
-
-      - name: Test built wheel
-        shell: bash
-        run: |
-          WHEEL="$(find dist -maxdepth 1 -name '*.whl' | head -n 1)"
-          uv venv .venv-wheel
-          PYTHON=.venv-wheel/bin/python
-          if [[ ! -x "$PYTHON" ]]; then
-            PYTHON=.venv-wheel/Scripts/python.exe
-          fi
-          uv pip install --python "$PYTHON" "$WHEEL" pytest
-          "$PYTHON" -m pytest crates/hexy-py/tests
-
-      - name: Test source distribution
-        if: matrix.job.sdist
-        shell: bash
-        run: |
-          SDIST="$(find dist -maxdepth 1 -name '*.tar.gz' | head -n 1)"
-          uv venv .venv-sdist
-          PYTHON=.venv-sdist/bin/python
-          if [[ ! -x "$PYTHON" ]]; then
-            PYTHON=.venv-sdist/Scripts/python.exe
-          fi
-          uv pip install --python "$PYTHON" "$SDIST" pytest
-          "$PYTHON" -m pytest crates/hexy-py/tests
-
-      - name: Upload Python distributions
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: python-dist-${{ matrix.job.name }}
-          path: dist/*
-          if-no-files-found: error
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
 
   publish-crates:
     name: Publish crates
     runs-on: ubuntu-latest
-    needs: [validate-release, build-release, build-python]
+    needs: [validate-release, build-artifacts, publish-release-assets]
     environment: crates
     permissions:
       contents: read
@@ -302,8 +142,10 @@ jobs:
       - name: Extract workspace version
         id: metadata
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
         run: |
-          echo "version=${{ needs.validate-release.outputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check hexy-core publish status
         id: core_status
@@ -372,7 +214,7 @@ jobs:
   publish-pypi:
     name: Publish PyPI package
     runs-on: ubuntu-latest
-    needs: [build-python, publish-crates]
+    needs: [build-artifacts, publish-crates]
     environment: pypi
     permissions:
       contents: read
