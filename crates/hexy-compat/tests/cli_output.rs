@@ -47,6 +47,8 @@ fn test_cli_hex_ascii_basic() {
     ];
     let output = run_hexy(&args);
     assert_success(&output);
+    let raw = std::fs::read(&out).unwrap();
+    assert!(!raw.ends_with(b"\r\n"));
 
     let lines = read_nonempty_lines(&out);
     assert_eq!(lines.len(), 2);
