@@ -560,6 +560,10 @@ impl HexFile {
 }
 
 fn remap_segment(segment: &Segment, options: &RemapOptions) -> Result<Vec<Segment>, OpsError> {
+    if segment.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let seg_start = segment.start_address;
     let seg_end = segment.end_address();
     let mut parts = Vec::new();
@@ -1188,6 +1192,23 @@ mod tests {
                 Segment::new(0x1010, vec![0x12, 0x13]),
             ]
         );
+    }
+
+    #[test]
+    fn test_remap_ignores_empty_segment_inserted_through_mutable_view() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA])]);
+        hf.segments_mut()[0] = Segment::new(0x1000, Vec::new());
+        let options = RemapOptions {
+            start: 0x1000,
+            end: 0x1FFF,
+            linear: 0x2000,
+            size: 0x1000,
+            inc: 0x1000,
+        };
+
+        hf.remap(&options).unwrap();
+
+        assert!(hf.segments().is_empty());
     }
 
     #[test]
