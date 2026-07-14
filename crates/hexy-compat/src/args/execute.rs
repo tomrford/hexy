@@ -217,7 +217,7 @@ impl Args {
         if self.fill_all {
             self.wrap_error(
                 "/FA",
-                hexfile.fill_gaps_bounded(0x00, crate::DEFAULT_DENSE_SPAN_LIMIT),
+                hexfile.fill_gaps_bounded(self.align_fill, crate::DEFAULT_DENSE_SPAN_LIMIT),
             )?;
         }
 
@@ -231,7 +231,7 @@ impl Args {
             if self.align_length {
                 let options = AlignOptions {
                     alignment,
-                    fill_byte: if self.fill_all { 0x00 } else { self.align_fill },
+                    fill_byte: self.align_fill,
                     align_length: true,
                 };
                 self.wrap_error("/AD/AL", hexfile.align(&options))?;

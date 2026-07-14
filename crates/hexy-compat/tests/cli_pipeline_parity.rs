@@ -3,8 +3,8 @@ mod common;
 use common::{assert_success, run_hexy, temp_dir, write_file};
 use hexy_core::{
     AddressRange, AlignOptions, BinaryWriteOptions, ChecksumAlgorithm, ChecksumOptions,
-    ChecksumTarget, FillOptions, IntelHexWriteOptions, MergeMode, MergeOptions, SwapMode,
-    parse_binary, write_binary, write_intel_hex,
+    ChecksumTarget, FillOptions, HexFile, IntelHexWriteOptions, MergeMode, MergeOptions, Segment,
+    SwapMode, parse_binary, write_binary, write_intel_hex,
 };
 
 #[test]
@@ -240,17 +240,26 @@ fn test_cli_pipeline_parity_xsb_split() {
 }
 
 #[test]
-fn test_cli_pipeline_parity_fa_fill_binary() {
-    let dir = temp_dir("cli_pipeline_parity_fa");
-    let base = dir.join("base.bin");
+fn test_cli_pipeline_parity_obc_fa_uses_align_fill() {
+    let dir = temp_dir("cli_pipeline_parity_obc_fa");
+    let base = dir.join("base.hex");
     let out_cli = dir.join("out.bin");
 
-    write_file(&base, &[0xAA]);
+    let hexfile = HexFile::with_segments(vec![
+        Segment::new(0x1003, vec![0xAA, 0xBB]),
+        Segment::new(0x1021, vec![0xCC, 0xDD]),
+    ]);
+    write_file(
+        &base,
+        &write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap(),
+    );
 
     let args = vec![
-        format!("/IN:{};0x1000", base.display()),
-        "/AF:00".to_string(),
+        base.display().to_string(),
+        "/AD20".to_string(),
+        "/AFFF".to_string(),
         "/FA".to_string(),
+        "/AL".to_string(),
         "/XN".to_string(),
         "-o".to_string(),
         out_cli.display().to_string(),
@@ -260,15 +269,9 @@ fn test_cli_pipeline_parity_fa_fill_binary() {
     assert_success(&output);
     let cli_bytes = std::fs::read(&out_cli).unwrap();
 
-    let mut hexfile = parse_binary(&[0xAA], 0x1000).unwrap();
-    hexfile.fill_gaps(0x00).unwrap();
-    let lib_bytes = write_binary(
-        &hexfile,
-        &BinaryWriteOptions {
-            fill_gaps: Some(0x00),
-        },
-    )
-    .unwrap();
+    let mut expected = vec![0xFF; 0x40];
+    expected[0x03..0x05].copy_from_slice(&[0xAA, 0xBB]);
+    expected[0x21..0x23].copy_from_slice(&[0xCC, 0xDD]);
 
-    assert_eq!(cli_bytes, lib_bytes);
+    assert_eq!(cli_bytes, expected);
 }

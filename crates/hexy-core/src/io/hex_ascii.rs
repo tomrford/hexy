@@ -117,10 +117,6 @@ pub fn write_hex_ascii(hexfile: &HexFile, options: &HexAsciiWriteOptions) -> Vec
         }
     }
 
-    if !out.is_empty() {
-        push_crlf(&mut out);
-    }
-
     out
 }
 
@@ -178,6 +174,17 @@ mod tests {
         assert_eq!(parsed.segments().len(), 1);
         assert_eq!(parsed.segments()[0].start_address, 0x1000);
         assert_eq!(parsed.segments()[0].data, vec![0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn test_hex_ascii_omits_final_newline() {
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE])]);
+        let options = HexAsciiWriteOptions {
+            line_length: 2,
+            separator: None,
+        };
+
+        assert_eq!(write_hex_ascii(&hexfile, &options), b"DEAD\r\nBE");
     }
 
     #[test]

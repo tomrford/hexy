@@ -8,18 +8,18 @@
 //! - 4: ByteSum 2's complement
 //! - 5: WordSum BE 2's complement
 //! - 6: WordSum LE 2's complement
-//! - 7: CRC-16 (poly 0x8005)
+//! - 7: CRC-16/USB
 //! - 8: CRC-16 (non-standard)
 //! - 9: CRC-32 IEEE
 //! - 10: SHA-1
 //! - 11: RIPEMD-160
 //! - 12: WordSum LE 2's complement, BE output (GM new style)
-//! - 13: CRC-16 CCITT LE (poly 0x1021, init 0xFFFF)
-//! - 14: CRC-16 CCITT BE
+//! - 13: CRC-16/IBM-3740, LE output
+//! - 14: CRC-16/IBM-3740, BE output
 //! - 15: MD5
 //! - 17: CRC-16 CCITT LE init 0
 //! - 18: CRC-16 CCITT BE init 0
-//! - 19: SHA-512 including start address + length
+//! - 19: SHA-512
 //! - 20: SHA-256
 
 use std::path::PathBuf;
@@ -67,18 +67,18 @@ pub enum ChecksumAlgorithm {
     ByteSumTwosComplement = 4,
     WordSumBeTwosComplement = 5,
     WordSumLeTwosComplement = 6,
-    Crc16 = 7,
+    Crc16Usb = 7,
     Crc16NonStandard = 8,
     Crc32 = 9,
     Sha1 = 10,
     Ripemd160 = 11,
     ModularSum = 12,
-    Crc16CcittLe = 13,
-    Crc16CcittBe = 14,
+    Crc16Ibm3740Le = 13,
+    Crc16Ibm3740Be = 14,
     Md5 = 15,
     Crc16CcittLeInit0 = 17,
     Crc16CcittBeInit0 = 18,
-    Sha512AddressLength = 19,
+    Sha512 = 19,
     Sha256 = 20,
 }
 
@@ -92,18 +92,18 @@ impl ChecksumAlgorithm {
             4 => Ok(Self::ByteSumTwosComplement),
             5 => Ok(Self::WordSumBeTwosComplement),
             6 => Ok(Self::WordSumLeTwosComplement),
-            7 => Ok(Self::Crc16),
+            7 => Ok(Self::Crc16Usb),
             8 => Ok(Self::Crc16NonStandard),
             9 => Ok(Self::Crc32),
             10 => Ok(Self::Sha1),
             11 => Ok(Self::Ripemd160),
             12 => Ok(Self::ModularSum),
-            13 => Ok(Self::Crc16CcittLe),
-            14 => Ok(Self::Crc16CcittBe),
+            13 => Ok(Self::Crc16Ibm3740Le),
+            14 => Ok(Self::Crc16Ibm3740Be),
             15 => Ok(Self::Md5),
             17 => Ok(Self::Crc16CcittLeInit0),
             18 => Ok(Self::Crc16CcittBeInit0),
-            19 => Ok(Self::Sha512AddressLength),
+            19 => Ok(Self::Sha512),
             20 => Ok(Self::Sha256),
             _ => Err(OpsError::UnsupportedChecksumAlgorithm(index)),
         }
@@ -116,7 +116,7 @@ impl ChecksumAlgorithm {
             Self::Sha1 | Self::Ripemd160 => 20,
             Self::Md5 => 16,
             Self::Sha256 => 32,
-            Self::Sha512AddressLength => 64,
+            Self::Sha512 => 64,
             _ => 2,
         }
     }
@@ -129,7 +129,7 @@ impl ChecksumAlgorithm {
             Self::ByteSumLe
                 | Self::WordSumLe
                 | Self::WordSumLeTwosComplement
-                | Self::Crc16CcittLe
+                | Self::Crc16Ibm3740Le
                 | Self::Crc16CcittLeInit0
         )
     }
@@ -223,9 +223,7 @@ impl HexFile {
                 u16_bytes(sum, use_le)
             }
             ChecksumAlgorithm::ByteSumTwosComplement => {
-                let sum = byte_sum(&data);
-                let twos = (!sum).wrapping_add(1);
-                u16_bytes(twos, use_le)
+                u16_bytes(byte_twos_complement_sum(&data), use_le)
             }
             ChecksumAlgorithm::WordSumBeTwosComplement => {
                 let sum = word_sum_be(&data)?;
@@ -260,33 +258,19 @@ impl HexFile {
             ChecksumAlgorithm::Sha256 => {
                 reverse_if_requested(Sha256::digest(&data).to_vec(), options.little_endian_output)
             }
-            ChecksumAlgorithm::Sha512AddressLength => {
-                let start = self
-                    .resolve_effective_checksum_range(options)?
-                    .map(|range| range.start())
-                    .unwrap_or_default();
-                let len = u32::try_from(data.len()).map_err(|_| {
-                    OpsError::AddressOverflow(format!(
-                        "checksum data length exceeds u32 for SHA-512 metadata: {}",
-                        data.len()
-                    ))
-                })?;
-                let mut hasher = Sha512::new();
-                hasher.update(start.to_be_bytes());
-                hasher.update(len.to_be_bytes());
-                hasher.update(&data);
-                reverse_if_requested(hasher.finalize().to_vec(), options.little_endian_output)
+            ChecksumAlgorithm::Sha512 => {
+                reverse_if_requested(Sha512::digest(&data).to_vec(), options.little_endian_output)
             }
-            ChecksumAlgorithm::Crc16 => {
-                let crc = crc16_arc(&data);
+            ChecksumAlgorithm::Crc16Usb => {
+                let crc = crc16_usb(&data);
                 u16_bytes(crc, use_le)
             }
             ChecksumAlgorithm::Crc32 => {
                 let crc = crc32_iso_hdlc(&data);
                 u32_bytes(crc, use_le)
             }
-            ChecksumAlgorithm::Crc16CcittLe | ChecksumAlgorithm::Crc16CcittBe => {
-                let crc = crc16_ibm_sdlc(&data);
+            ChecksumAlgorithm::Crc16Ibm3740Le | ChecksumAlgorithm::Crc16Ibm3740Be => {
+                let crc = crc16_ibm_3740(&data);
                 u16_bytes(crc, use_le)
             }
             ChecksumAlgorithm::Crc16CcittLeInit0 | ChecksumAlgorithm::Crc16CcittBeInit0 => {
@@ -513,27 +497,6 @@ impl HexFile {
 
         Ok(data)
     }
-
-    fn resolve_effective_checksum_range(
-        &self,
-        options: &ChecksumOptions,
-    ) -> Result<Option<AddressRange>, OpsError> {
-        if let Some(range) = options.range {
-            return Ok(Some(range));
-        }
-        let mut min = self.min_address();
-        let mut max = self.max_address();
-        if let Some(forced) = options.forced_range.as_ref() {
-            min = Some(min.map_or(forced.range.start(), |addr| addr.min(forced.range.start())));
-            max = Some(max.map_or(forced.range.end(), |addr| addr.max(forced.range.end())));
-        }
-        if let (Some(min), Some(max)) = (min, max) {
-            return Ok(Some(AddressRange::from_start_end(min, max).map_err(
-                |e| OpsError::AddressOverflow(format!("checksum range invalid: {e}")),
-            )?));
-        }
-        Ok(None)
-    }
 }
 
 fn checksum_include_ranges(
@@ -691,6 +654,13 @@ fn byte_sum(data: &[u8]) -> u16 {
     data.iter().fold(0u16, |acc, &b| acc.wrapping_add(b as u16))
 }
 
+/// Sum the 8-bit two's complement of each byte, wrapping to 16-bit.
+fn byte_twos_complement_sum(data: &[u8]) -> u16 {
+    data.iter().fold(0u16, |acc, &byte| {
+        acc.wrapping_add(byte.wrapping_neg() as u16)
+    })
+}
+
 /// Sum 16-bit big-endian words.
 fn word_sum_be(data: &[u8]) -> Result<u16, OpsError> {
     if !data.len().is_multiple_of(2) {
@@ -719,9 +689,9 @@ fn word_sum_le(data: &[u8]) -> Result<u16, OpsError> {
     }))
 }
 
-/// CRC-16 with poly 0x8005 (CRC-16-ARC/CRC-16-IBM).
-fn crc16_arc(data: &[u8]) -> u16 {
-    const CRC: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_ARC);
+/// CRC-16/USB.
+fn crc16_usb(data: &[u8]) -> u16 {
+    const CRC: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_USB);
     CRC.checksum(data)
 }
 
@@ -744,9 +714,9 @@ fn crc32_iso_hdlc(data: &[u8]) -> u32 {
     CRC.checksum(data)
 }
 
-/// CRC-16 CCITT with init 0xFFFF (IBM-SDLC, ISO-HDLC).
-fn crc16_ibm_sdlc(data: &[u8]) -> u16 {
-    const CRC: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_IBM_SDLC);
+/// CRC-16/IBM-3740.
+fn crc16_ibm_3740(data: &[u8]) -> u16 {
+    const CRC: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_IBM_3740);
     CRC.checksum(data)
 }
 
@@ -777,6 +747,13 @@ mod tests {
         // Test actual wrapping: 258 * 0xFF = 65790, wraps to 65790 - 65536 = 254 = 0x00FE
         let data2 = vec![0xFF; 258];
         assert_eq!(byte_sum(&data2), 0x00FE);
+    }
+
+    #[test]
+    fn test_byte_twos_complement_sum() {
+        assert_eq!(byte_twos_complement_sum(&[0x01, 0x02]), 0x01FD);
+        assert_eq!(byte_twos_complement_sum(&[0x00, 0x80, 0xFF]), 0x0081);
+        assert_eq!(byte_twos_complement_sum(&[]), 0);
     }
 
     #[test]
@@ -841,9 +818,8 @@ mod tests {
     }
 
     #[test]
-    fn test_crc16_arc() {
-        // Known test vector: "123456789" -> 0xBB3D
-        assert_eq!(crc16_arc(b"123456789"), 0xBB3D);
+    fn test_crc16_usb() {
+        assert_eq!(crc16_usb(b"123456789"), 0xB4C8);
     }
 
     #[test]
@@ -865,9 +841,8 @@ mod tests {
     }
 
     #[test]
-    fn test_crc16_ibm_sdlc() {
-        // Known test vector: "123456789" -> 0x906E
-        assert_eq!(crc16_ibm_sdlc(b"123456789"), 0x906E);
+    fn test_crc16_ibm_3740() {
+        assert_eq!(crc16_ibm_3740(b"123456789"), 0x29B1);
     }
 
     #[test]
@@ -881,6 +856,17 @@ mod tests {
         };
         let result = hf.calculate_checksum(&options).unwrap();
         assert_eq!(result, vec![0x00, 0x0A]);
+    }
+
+    #[test]
+    fn test_hexfile_checksum_byte_twos_complement_sum() {
+        let hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02])]);
+        let options = ChecksumOptions {
+            algorithm: ChecksumAlgorithm::ByteSumTwosComplement,
+            ..Default::default()
+        };
+
+        assert_eq!(hf.calculate_checksum(&options).unwrap(), vec![0x01, 0xFD]);
     }
 
     #[test]
@@ -1053,17 +1039,17 @@ mod tests {
     fn test_algorithm_result_size() {
         assert_eq!(ChecksumAlgorithm::Crc32.result_size(), 4);
         assert_eq!(ChecksumAlgorithm::ByteSumBe.result_size(), 2);
-        assert_eq!(ChecksumAlgorithm::Crc16.result_size(), 2);
+        assert_eq!(ChecksumAlgorithm::Crc16Usb.result_size(), 2);
         assert_eq!(ChecksumAlgorithm::Sha1.result_size(), 20);
         assert_eq!(ChecksumAlgorithm::Ripemd160.result_size(), 20);
         assert_eq!(ChecksumAlgorithm::Md5.result_size(), 16);
         assert_eq!(ChecksumAlgorithm::Sha256.result_size(), 32);
-        assert_eq!(ChecksumAlgorithm::Sha512AddressLength.result_size(), 64);
+        assert_eq!(ChecksumAlgorithm::Sha512.result_size(), 64);
     }
 
     #[test]
-    fn test_crc16_arc_empty() {
-        assert_eq!(crc16_arc(&[]), 0x0000);
+    fn test_crc16_usb_empty() {
+        assert_eq!(crc16_usb(&[]), 0x0000);
     }
 
     #[test]
@@ -1080,54 +1066,52 @@ mod tests {
     fn test_hexfile_checksum_crc16() {
         let hf = HexFile::with_segments(vec![Segment::new(0x1000, b"123456789".to_vec())]);
         let options = ChecksumOptions {
-            algorithm: ChecksumAlgorithm::Crc16,
+            algorithm: ChecksumAlgorithm::Crc16Usb,
             range: None,
             little_endian_output: false,
             ..Default::default()
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        assert_eq!(result, vec![0xBB, 0x3D]);
+        assert_eq!(result, vec![0xB4, 0xC8]);
     }
 
     #[test]
     fn test_hexfile_checksum_crc16_le() {
         let hf = HexFile::with_segments(vec![Segment::new(0x1000, b"123456789".to_vec())]);
         let options = ChecksumOptions {
-            algorithm: ChecksumAlgorithm::Crc16,
+            algorithm: ChecksumAlgorithm::Crc16Usb,
             range: None,
             little_endian_output: true,
             ..Default::default()
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        assert_eq!(result, vec![0x3D, 0xBB]);
+        assert_eq!(result, vec![0xC8, 0xB4]);
     }
 
     #[test]
-    fn test_hexfile_checksum_crc16_ccitt_le_init_ffff() {
+    fn test_hexfile_checksum_crc16_ibm_3740_le() {
         let hf = HexFile::with_segments(vec![Segment::new(0x1000, b"123456789".to_vec())]);
         let options = ChecksumOptions {
-            algorithm: ChecksumAlgorithm::Crc16CcittLe,
+            algorithm: ChecksumAlgorithm::Crc16Ibm3740Le,
             range: None,
             little_endian_output: false,
             ..Default::default()
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        // CRC-16 IBM-SDLC: 0x906E, output forced LE
-        assert_eq!(result, vec![0x6E, 0x90]);
+        assert_eq!(result, vec![0xB1, 0x29]);
     }
 
     #[test]
-    fn test_hexfile_checksum_crc16_ccitt_be_init_ffff() {
+    fn test_hexfile_checksum_crc16_ibm_3740_be() {
         let hf = HexFile::with_segments(vec![Segment::new(0x1000, b"123456789".to_vec())]);
         let options = ChecksumOptions {
-            algorithm: ChecksumAlgorithm::Crc16CcittBe,
+            algorithm: ChecksumAlgorithm::Crc16Ibm3740Be,
             range: None,
             little_endian_output: false,
             ..Default::default()
         };
         let result = hf.calculate_checksum(&options).unwrap();
-        // CRC-16 IBM-SDLC: 0x906E, output forced BE
-        assert_eq!(result, vec![0x90, 0x6E]);
+        assert_eq!(result, vec![0x29, 0xB1]);
     }
 
     #[test]
@@ -1175,14 +1159,14 @@ mod tests {
     fn test_hexfile_checksum_crc16_with_range() {
         let hf = HexFile::with_segments(vec![Segment::new(0x1000, b"0123456789".to_vec())]);
         let options = ChecksumOptions {
-            algorithm: ChecksumAlgorithm::Crc16,
+            algorithm: ChecksumAlgorithm::Crc16Usb,
             range: Some(AddressRange::from_start_end(0x1001, 0x1009).unwrap()),
             little_endian_output: false,
             ..Default::default()
         };
         let result = hf.calculate_checksum(&options).unwrap();
         // AddressRange extracts "123456789"
-        assert_eq!(result, vec![0xBB, 0x3D]);
+        assert_eq!(result, vec![0xB4, 0xC8]);
     }
 
     #[test]
@@ -1403,21 +1387,21 @@ mod tests {
     }
 
     #[test]
-    fn test_hexfile_checksum_sha512_address_length() {
+    fn test_hexfile_checksum_sha512() {
         let hf = HexFile::with_segments(vec![Segment::new(0x1000, b"abc".to_vec())]);
         let options = ChecksumOptions {
-            algorithm: ChecksumAlgorithm::Sha512AddressLength,
+            algorithm: ChecksumAlgorithm::Sha512,
             ..Default::default()
         };
         let result = hf.calculate_checksum(&options).unwrap();
         assert_eq!(
             result,
             vec![
-                0x4F, 0x13, 0x88, 0xDA, 0xE9, 0x18, 0xCC, 0xAC, 0xF6, 0xC2, 0xAA, 0xB1, 0x84, 0xC7,
-                0xFE, 0xFD, 0xCB, 0x61, 0x69, 0x3B, 0x4A, 0x1B, 0x18, 0x90, 0x46, 0x18, 0x68, 0x65,
-                0xF9, 0x5C, 0x27, 0x49, 0xC0, 0xEA, 0xE2, 0x09, 0x8B, 0x75, 0x0E, 0x50, 0x8D, 0x8B,
-                0xFA, 0x60, 0xD4, 0x4A, 0x70, 0x81, 0x2D, 0xAD, 0xE3, 0xB2, 0xE0, 0x87, 0x38, 0x9E,
-                0x00, 0xCE, 0xED, 0x35, 0xB3, 0x3E, 0xB9, 0x54
+                0xDD, 0xAF, 0x35, 0xA1, 0x93, 0x61, 0x7A, 0xBA, 0xCC, 0x41, 0x73, 0x49, 0xAE, 0x20,
+                0x41, 0x31, 0x12, 0xE6, 0xFA, 0x4E, 0x89, 0xA9, 0x7E, 0xA2, 0x0A, 0x9E, 0xEE, 0xE6,
+                0x4B, 0x55, 0xD3, 0x9A, 0x21, 0x92, 0x99, 0x2A, 0x27, 0x4F, 0xC1, 0xA8, 0x36, 0xBA,
+                0x3C, 0x23, 0xA3, 0xFE, 0xEB, 0xBD, 0x45, 0x4D, 0x44, 0x23, 0x64, 0x3C, 0xE8, 0x0E,
+                0x2A, 0x9A, 0xC9, 0x4F, 0xA5, 0x4C, 0xA4, 0x9F
             ]
         );
     }

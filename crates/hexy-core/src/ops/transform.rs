@@ -499,12 +499,11 @@ impl HexFile {
             )));
         }
 
-        let new_starts = self
-            .segments()
-            .iter()
-            .map(|segment| remapped_start(segment, options))
-            .collect::<Result<Vec<_>, _>>()?;
-        apply_segment_starts(self.segments_mut(), new_starts);
+        let mut remapped = Vec::new();
+        for segment in self.segments() {
+            remapped.extend(remap_segment(segment, options)?);
+        }
+        self.set_segments(remapped);
 
         Ok(())
     }
@@ -560,60 +559,75 @@ impl HexFile {
     }
 }
 
-fn remapped_start(segment: &Segment, options: &RemapOptions) -> Result<Option<u32>, OpsError> {
+fn remap_segment(segment: &Segment, options: &RemapOptions) -> Result<Vec<Segment>, OpsError> {
+    if segment.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let seg_start = segment.start_address;
     let seg_end = segment.end_address();
+    let mut parts = Vec::new();
+    let mut start = seg_start;
 
-    if seg_start < options.start || seg_end > options.end {
-        return Ok(None);
+    loop {
+        let (end, mapped_start) = if start < options.start {
+            (seg_end.min(options.start - 1), start)
+        } else if start > options.end {
+            (seg_end, start)
+        } else {
+            let offset = start - options.start;
+            let bank_index = offset / options.inc;
+            let bank_offset = offset % options.inc;
+
+            if bank_offset < options.size {
+                let remaining = options.size - bank_offset;
+                let end = start
+                    .saturating_add(remaining - 1)
+                    .min(seg_end)
+                    .min(options.end);
+                let mapped_start = options
+                    .linear
+                    .checked_add(bank_index.checked_mul(options.size).ok_or_else(|| {
+                        OpsError::AddressOverflow(format!(
+                            "linear base overflows (linear={:#X}, bank_index={}, size={})",
+                            options.linear, bank_index, options.size
+                        ))
+                    })?)
+                    .and_then(|value| value.checked_add(bank_offset))
+                    .ok_or_else(|| {
+                        OpsError::AddressOverflow(format!(
+                            "linear address overflows (linear={:#X}, bank_offset={:#X})",
+                            options.linear, bank_offset
+                        ))
+                    })?;
+                (end, mapped_start)
+            } else {
+                let remaining = options.inc - bank_offset;
+                let end = start
+                    .saturating_add(remaining - 1)
+                    .min(seg_end)
+                    .min(options.end);
+                (end, start)
+            }
+        };
+
+        let data_start = (start - seg_start) as usize;
+        let data_end = (end - seg_start) as usize + 1;
+        let part = Segment::try_new(mapped_start, segment.data[data_start..data_end].to_vec())
+            .map_err(|error| {
+                OpsError::AddressOverflow(format!(
+                    "remap output exceeds u32 address space: {error}"
+                ))
+            })?;
+        parts.push(part);
+
+        if end == seg_end {
+            break;
+        }
+        start = end + 1;
     }
 
-    let offset = seg_start - options.start;
-    let bank_index = offset / options.inc;
-    let bank_base = options
-        .start
-        .checked_add(bank_index.checked_mul(options.inc).ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "bank base overflows (start={:#X}, inc={}, bank_index={})",
-                options.start, options.inc, bank_index
-            ))
-        })?)
-        .ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "bank base overflows (start={:#X}, inc={}, bank_index={})",
-                options.start, options.inc, bank_index
-            ))
-        })?;
-    let bank_end = bank_base.checked_add(options.size - 1).ok_or_else(|| {
-        OpsError::AddressOverflow(format!(
-            "bank end overflows (bank_base={:#X}, size={})",
-            bank_base, options.size
-        ))
-    })?;
-
-    if seg_end > bank_end {
-        return Ok(None);
-    }
-
-    let bank_offset = seg_start - bank_base;
-    let new_start = options
-        .linear
-        .checked_add(bank_index.checked_mul(options.size).ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "linear base overflows (linear={:#X}, bank_index={}, size={})",
-                options.linear, bank_index, options.size
-            ))
-        })?)
-        .and_then(|v| v.checked_add(bank_offset))
-        .ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "linear address overflows (linear={:#X}, bank_offset={:#X})",
-                options.linear, bank_offset
-            ))
-        })?;
-
-    validate_segment_start_checked(segment, new_start, "remap")?;
-    Ok(Some(new_start))
+    Ok(parts)
 }
 
 fn banked_map_start(
@@ -1139,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remap_skips_oversize_block() {
+    fn test_remap_splits_at_bank_boundary() {
         let mut hf = HexFile::with_segments(vec![Segment::new(0x018000, vec![0xAA; 0x4001])]);
         let options = RemapOptions {
             start: 0x018000,
@@ -1150,7 +1164,51 @@ mod tests {
         };
 
         hf.remap(&options).unwrap();
-        assert_eq!(hf.segments()[0].start_address, 0x018000);
+        assert_eq!(hf.segments().len(), 2);
+        assert_eq!(hf.segments()[0].start_address, 0x008000);
+        assert_eq!(hf.segments()[0].len(), 0x4000);
+        assert_eq!(hf.segments()[1], Segment::new(0x01C000, vec![0xAA]));
+    }
+
+    #[test]
+    fn test_remap_splits_segment_crossing_source_range() {
+        let data = (0u8..20).collect::<Vec<_>>();
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x0FFE, data)]);
+        let options = RemapOptions {
+            start: 0x1000,
+            end: 0x100F,
+            linear: 0x2000,
+            size: 0x10,
+            inc: 0x10,
+        };
+
+        hf.remap(&options).unwrap();
+
+        assert_eq!(
+            hf.segments(),
+            &[
+                Segment::new(0x0FFE, vec![0x00, 0x01]),
+                Segment::new(0x2000, (0x02u8..0x12).collect()),
+                Segment::new(0x1010, vec![0x12, 0x13]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_remap_ignores_empty_segment_inserted_through_mutable_view() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA])]);
+        hf.segments_mut()[0] = Segment::new(0x1000, Vec::new());
+        let options = RemapOptions {
+            start: 0x1000,
+            end: 0x1FFF,
+            linear: 0x2000,
+            size: 0x1000,
+            inc: 0x1000,
+        };
+
+        hf.remap(&options).unwrap();
+
+        assert!(hf.segments().is_empty());
     }
 
     #[test]
