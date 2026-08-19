@@ -41,13 +41,15 @@ hexy multi.hex /XSB -o segments.bin
 
 ## Workspace commands
 
+Local development uses rustup (`cargo`) and `uv`. CI installs the same tools directly.
+
 ```bash
-nix develop -c cargo build
-nix develop -c cargo test
-nix develop -c cargo clippy --all-targets --all-features -- -D warnings
-nix develop -c cargo run -p hexy-compat -- /XI input.hex -o output.hex
-nix develop -c uv run --directory crates/hexy-py --group dev maturin develop
-nix develop -c uv run --directory crates/hexy-py --group dev pytest tests
+cargo build
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo run -p hexy-compat -- /XI input.hex -o output.hex
+uv run --directory crates/hexy-py --group dev maturin develop
+uv run --directory crates/hexy-py --group dev pytest tests
 ```
 
 ## Operation order
