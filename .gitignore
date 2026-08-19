@@ -1,7 +1,5 @@
-.direnv
 .DS_Store
 /target
-/result
 *.pdf
 **/*.so
 

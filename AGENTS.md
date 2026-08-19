@@ -5,11 +5,11 @@ Hex-file workspace: `hexy-core` reusable binary file modification library, `hexy
 ## Commands
 
 ```bash
-nix develop -c cargo build                             # Build workspace
-nix develop -c cargo check                             # Typecheck workspace
-nix develop -c cargo test                              # Run tests
-nix develop -c cargo clippy --workspace --all-targets --all-features --locked
-nix develop -c cargo run -p hexy-compat -- [args]     # Run compat CLI
+cargo build                                            # Build workspace
+cargo check                                            # Typecheck workspace
+cargo test                                             # Run tests
+cargo clippy --workspace --all-targets --all-features --locked
+cargo run -p hexy-compat -- [args]                     # Run compat CLI
 ```
 
 CI clippy is the release gate. Workspace warning lints are useful cleanup signals, but `-D warnings` is not a handoff or release blocker unless the policy changes.
