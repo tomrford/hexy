@@ -18,7 +18,7 @@ Keep CLI parsing rules in mind:
 - Expect the first positional argument to be the input file when no explicit import option is used.
 - Expect numeric arguments to accept common compatibility forms such as `0x1234`, `1234h`, `0b1010`, and separators like `_` or `.`.
 
-Read [cli-reference.md](/Users/tomford/code/projects/hexy/skill/hexy-compat/references/cli-reference.md) for the actual interface. Scan the execution-order section first, then jump to the specific stage you need.
+Read [cli-reference.md](references/cli-reference.md) for the actual interface. Scan the execution-order section first, then jump to the specific stage you need.
 
 Use the reference to answer questions like:
 
