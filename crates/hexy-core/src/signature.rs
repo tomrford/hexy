@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::{HexFile, OpsError, Placement};
 use ed25519_dalek::pkcs8::{
@@ -49,30 +49,30 @@ impl SignatureMethod {
 }
 
 #[derive(Debug, Clone)]
-pub struct SignatureSignOptions<'a> {
+pub struct SignatureSignOptions {
     pub method: SignatureMethod,
-    pub key_source: SignatureKeySource<'a>,
+    pub key_source: SignatureKeySource,
     pub placement: Option<Placement>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SignatureVerifyOptions<'a> {
+pub struct SignatureVerifyOptions {
     pub method: SignatureMethod,
-    pub key_source: SignatureKeySource<'a>,
-    pub signature_source: SignatureBytesSource<'a>,
+    pub key_source: SignatureKeySource,
+    pub signature_source: SignatureBytesSource,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum SignatureKeySource<'a> {
-    Bytes(&'a [u8]),
-    File(&'a Path),
-    Text(&'a str),
+#[derive(Debug, Clone)]
+pub enum SignatureKeySource {
+    Bytes(Vec<u8>),
+    File(PathBuf),
+    Text(String),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum SignatureBytesSource<'a> {
-    Bytes(&'a [u8]),
-    File(&'a Path),
+#[derive(Debug, Clone)]
+pub enum SignatureBytesSource {
+    Bytes(Vec<u8>),
+    File(PathBuf),
 }
 
 #[derive(Debug, Error)]
@@ -97,9 +97,9 @@ pub enum SignatureError {
 }
 
 impl HexFile {
-    pub fn sign(&mut self, options: &SignatureSignOptions<'_>) -> Result<Vec<u8>, SignatureError> {
+    pub fn sign(&mut self, options: &SignatureSignOptions) -> Result<Vec<u8>, SignatureError> {
         let payload = signature_payload(self, options.method.with_metadata())?;
-        let key_material = resolve_key_material(options.key_source)?;
+        let key_material = resolve_key_material(&options.key_source)?;
         let signature = sign_payload(options.method, &payload, &key_material)?;
         if let Some(placement) = options.placement
             && let Some(target) = self.placement_range(placement, signature.len())?
@@ -109,13 +109,10 @@ impl HexFile {
         Ok(signature)
     }
 
-    pub fn verify_signature(
-        &self,
-        options: &SignatureVerifyOptions<'_>,
-    ) -> Result<(), SignatureError> {
+    pub fn verify_signature(&self, options: &SignatureVerifyOptions) -> Result<(), SignatureError> {
         let payload = signature_payload(self, options.method.with_metadata())?;
-        let key_material = resolve_key_material(options.key_source)?;
-        let signature = resolve_signature_bytes(options.signature_source)?;
+        let key_material = resolve_key_material(&options.key_source)?;
+        let signature = resolve_signature_bytes(&options.signature_source)?;
         verify_payload(options.method, &payload, &key_material, &signature)
     }
 }
@@ -138,9 +135,9 @@ fn signature_payload(hexfile: &HexFile, with_metadata: bool) -> Result<Vec<u8>, 
     Ok(out)
 }
 
-fn resolve_key_material(source: SignatureKeySource<'_>) -> Result<Vec<u8>, SignatureError> {
+fn resolve_key_material(source: &SignatureKeySource) -> Result<Vec<u8>, SignatureError> {
     match source {
-        SignatureKeySource::Bytes(bytes) => Ok(bytes.to_vec()),
+        SignatureKeySource::Bytes(bytes) => Ok(bytes.clone()),
         SignatureKeySource::File(path) => {
             std::fs::read(path).map_err(|e| SignatureError::InvalidKeyMaterial(e.to_string()))
         }
@@ -148,9 +145,9 @@ fn resolve_key_material(source: SignatureKeySource<'_>) -> Result<Vec<u8>, Signa
     }
 }
 
-fn resolve_signature_bytes(source: SignatureBytesSource<'_>) -> Result<Vec<u8>, SignatureError> {
+fn resolve_signature_bytes(source: &SignatureBytesSource) -> Result<Vec<u8>, SignatureError> {
     match source {
-        SignatureBytesSource::Bytes(bytes) => Ok(bytes.to_vec()),
+        SignatureBytesSource::Bytes(bytes) => Ok(bytes.clone()),
         SignatureBytesSource::File(path) => {
             std::fs::read(path).map_err(|e| SignatureError::InvalidSignatureBytes(e.to_string()))
         }

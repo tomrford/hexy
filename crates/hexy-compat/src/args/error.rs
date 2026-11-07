@@ -24,8 +24,3 @@ pub enum CliError {
     #[error("{0}")]
     Other(String),
 }
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct ExecuteOutput {
-    pub checksum_bytes: Option<Vec<u8>>,
-}

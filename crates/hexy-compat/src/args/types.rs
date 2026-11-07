@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{AddressRange, ForcedRange, Placement};
+use crate::{AddressRange, DspicOp, ForcedRange, Placement, RemapOptions};
 
 use super::parse::parse_option;
 
@@ -31,7 +31,7 @@ pub struct Args {
     pub import_hex_ascii: Option<ImportParam>,
 
     // Address mapping
-    pub remap: Option<RemapParams>,
+    pub remap: Option<RemapOptions>,
     pub s08_map: bool,
     pub s12_map: bool,
     pub s12x_map: bool,
@@ -110,15 +110,6 @@ pub struct ImportParam {
 }
 
 #[derive(Debug, Clone)]
-pub struct RemapParams {
-    pub start: u32,
-    pub end: u32,
-    pub linear: u32,
-    pub size: u32,
-    pub inc: u32,
-}
-
-#[derive(Debug, Clone)]
 pub struct ChecksumParams {
     pub algorithm: u8,
     pub target: ChecksumTarget,
@@ -148,12 +139,6 @@ pub struct SignatureVerifyParams {
     pub method: u8,
     pub key_info: String,
     pub signature_info: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct DspicOp {
-    pub range: AddressRange,
-    pub target: Option<u32>,
 }
 
 #[derive(Debug, Clone)]

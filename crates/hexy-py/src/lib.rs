@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use crate::hexfile::PyHexFile;
-use crate::pipeline::PyPipeline;
+use crate::pipeline::{PyPipeline, PyPipelineResult};
 use crate::types::{PyAddressRange, PySegment};
 
 #[pymodule]
@@ -17,6 +17,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySegment>()?;
     module.add_class::<PyHexFile>()?;
     module.add_class::<PyPipeline>()?;
+    module.add_class::<PyPipelineResult>()?;
     module.add("HexyError", module.py().get_type::<PyValueError>())?;
     module.add("RangeError", module.py().get_type::<PyValueError>())?;
     module.add("ParseError", module.py().get_type::<PyValueError>())?;

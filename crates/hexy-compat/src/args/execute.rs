@@ -1,6 +1,9 @@
-use crate::{AlignOptions, FillOptions, MergeMode, MergeOptions, RemapOptions, Segment, SwapMode};
+use crate::{
+    AddressMap, AlignOptions, ChecksumStage, Fill, FillData, HexFile, Merge, MergeMode,
+    MergeOptions, Pipeline, PipelineOutput, Stage,
+};
 
-use super::error::{CliError, ExecuteOutput};
+use super::error::CliError;
 use super::io::{
     FsProvider, ReadProvider, checksum_options, load_binary_input, load_hex_ascii_input,
     load_input, load_intel_hex_16bit_input, validate_porsche_output_args, write_checksum_text,
@@ -8,21 +11,12 @@ use super::io::{
 };
 use super::log::execute_log;
 use super::signature::{
-    apply_data_processing, apply_signature_verification, is_supported_data_processing_method,
-    is_supported_signature_verify_method,
+    data_processing_method, sign_options, signature_verify_method, verify_options,
 };
 use super::types::{Args, ChecksumParams, ChecksumTarget, OutputFormat, ParseArgError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Args {
-    fn wrap_error<T, E: std::fmt::Display>(
-        &self,
-        opt: &str,
-        res: Result<T, E>,
-    ) -> Result<T, CliError> {
-        res.map_err(|e| CliError::Other(format!("{opt}: {e}")))
-    }
-
     fn validate_supported_features(&self) -> Result<(), CliError> {
         if !self.merge_transparent.is_empty() && !self.merge_opaque.is_empty() {
             return Err(CliError::Unsupported(
@@ -49,21 +43,11 @@ impl Args {
                 "postbuild (/PB) is not supported yet".into(),
             ));
         }
-        if let Some(ref params) = self.data_processing
-            && !is_supported_data_processing_method(params.method)
-        {
-            return Err(CliError::Unsupported(format!(
-                "data processing (/DP{}) is not supported yet",
-                params.method
-            )));
+        if let Some(ref params) = self.data_processing {
+            data_processing_method(params.method)?;
         }
-        if let Some(ref params) = self.signature_verify
-            && !is_supported_signature_verify_method(params.method)
-        {
-            return Err(CliError::Unsupported(format!(
-                "signature verification (/SV{}) is not supported yet",
-                params.method
-            )));
+        if let Some(ref params) = self.signature_verify {
+            signature_verify_method(params.method)?;
         }
         if let (Some(dp), Some(sv)) = (&self.data_processing, &self.signature_verify)
             && dp.placement.is_some()
@@ -100,155 +84,216 @@ impl Args {
     }
 
     /// Execute the parsed arguments in compatibility processing order.
-    pub fn execute(&self) -> Result<ExecuteOutput, CliError> {
-        let provider = FsProvider;
-        self.execute_with_provider(&provider)
+    pub fn execute(&self) -> Result<(), CliError> {
+        self.execute_with_provider(&FsProvider)
     }
 
     pub(super) fn execute_with_provider<P: ReadProvider>(
         &self,
         provider: &P,
-    ) -> Result<ExecuteOutput, CliError> {
+    ) -> Result<(), CliError> {
         self.validate_supported_features()?;
         validate_porsche_output_args(self)?;
 
         let mut hexfile = self.load_hexfile(provider)?;
-        self.execute_operations(&mut hexfile, provider)?;
-
-        let is_porsche_output = matches!(self.output_format, Some(OutputFormat::Porsche));
-        let checksum_bytes = if is_porsche_output {
-            None
-        } else {
-            self.apply_checksums(&mut hexfile)?
-        };
-        let _signature_bytes = self.apply_data_processing(&mut hexfile)?;
-        self.apply_signature_verification(&hexfile)?;
-        self.write_outputs(&hexfile, provider)?;
-
-        Ok(ExecuteOutput { checksum_bytes })
+        let pipeline = self.pipeline(provider)?;
+        let mut output = PipelineOutput::default();
+        for stage in pipeline.stages() {
+            pipeline
+                .run_stage(stage, &mut hexfile, &mut output)
+                .map_err(|e| CliError::Other(format!("{}: {e}", self.stage_flag(stage))))?;
+            self.after_stage(stage, &mut hexfile, &output, provider)?;
+        }
+        write_output_for_args(self, &hexfile, provider)
     }
 
-    fn execute_operations<P: ReadProvider>(
-        &self,
-        hexfile: &mut crate::HexFile,
-        provider: &P,
-    ) -> Result<(), CliError> {
-        if self.s12_map {
-            self.wrap_error("/S12MAP", hexfile.map_star12())?;
-        }
-        if self.s12x_map {
-            self.wrap_error("/S12XMAP", hexfile.map_star12x())?;
-        }
-        if self.s08_map {
-            self.wrap_error("/S08MAP", hexfile.map_star08())?;
-        }
-        if let Some(ref remap) = self.remap {
-            let options = RemapOptions {
-                start: remap.start,
-                end: remap.end,
-                linear: remap.linear,
-                size: remap.size,
-                inc: remap.inc,
-            };
-            self.wrap_error("/REMAP", hexfile.remap(&options))?;
-        }
-
-        for op in &self.dspic_expand {
-            self.wrap_error("/CDSPX", hexfile.dspic_expand(op.range, op.target))?;
-        }
-        for op in &self.dspic_shrink {
-            self.wrap_error("/CDSPS", hexfile.dspic_shrink(op.range, op.target))?;
-        }
-        for range in &self.dspic_clear_ghost {
-            self.wrap_error("/CDSPG", hexfile.dspic_clear_ghost(*range))?;
-        }
-
-        if self.fill_pattern_set {
-            let options = FillOptions {
-                pattern: self.fill_pattern.clone(),
-                overwrite: false,
-            };
-            self.wrap_error("/FR", hexfile.fill_ranges(&self.fill_ranges, &options))?;
+    /// The core pipeline for these flags; each field is set only from its own flags.
+    fn pipeline<P: ReadProvider>(&self, provider: &P) -> Result<Pipeline, CliError> {
+        let address_map = if self.s12_map {
+            Some(AddressMap::Star12)
+        } else if self.s12x_map {
+            Some(AddressMap::Star12x)
+        } else if self.s08_map {
+            Some(AddressMap::Star08)
         } else {
-            for range in &self.fill_ranges {
-                let segment = self.wrap_error("/FR", random_fill_segment(*range))?;
-                hexfile.prepend_segment(segment);
-            }
-        }
+            self.remap.clone().map(AddressMap::Remap)
+        };
+        let fill = (!self.fill_ranges.is_empty()).then(|| Fill {
+            ranges: self.fill_ranges.clone(),
+            data: if self.fill_pattern_set {
+                FillData::Pattern(self.fill_pattern.clone())
+            } else {
+                FillData::Random {
+                    seed: random_seed(),
+                }
+            },
+        });
+        let merges = self
+            .merge_transparent
+            .iter()
+            .map(|merge| (merge, MergeMode::Preserve))
+            .chain(
+                self.merge_opaque
+                    .iter()
+                    .map(|merge| (merge, MergeMode::Overwrite)),
+            )
+            .map(|(merge, mode)| {
+                Ok(Merge {
+                    file: load_input(provider, &merge.file)?,
+                    options: MergeOptions {
+                        mode,
+                        offset: merge.offset.unwrap_or(0),
+                        range: merge.range,
+                    },
+                })
+            })
+            .collect::<Result<_, CliError>>()?;
+        let address_filter = if self.address_range_empty_output {
+            Some(Vec::new())
+        } else {
+            (!self.address_range.is_empty()).then(|| self.address_range.clone())
+        };
+        let checksums = if matches!(self.output_format, Some(OutputFormat::Porsche)) {
+            Vec::new()
+        } else {
+            (0..self.checksum_params().len())
+                .map(|index| {
+                    let (params, flag) = self.checksum_stage(index);
+                    Ok(ChecksumStage {
+                        options: checksum_options(params, &flag)?,
+                        placement: match params.target {
+                            ChecksumTarget::Place(placement) => Some(placement),
+                            ChecksumTarget::None | ChecksumTarget::File(_) => None,
+                        },
+                    })
+                })
+                .collect::<Result<_, CliError>>()?
+        };
 
-        hexfile.cut_ranges(&self.cut_ranges);
-
-        for merge in &self.merge_transparent {
-            let other = load_input(provider, &merge.file)?;
-            let options = MergeOptions {
-                mode: MergeMode::Preserve,
-                offset: merge.offset.unwrap_or(0),
-                range: merge.range,
-            };
-            self.wrap_error("/MT", hexfile.merge(&other, &options))?;
-        }
-        for merge in &self.merge_opaque {
-            let other = load_input(provider, &merge.file)?;
-            let options = MergeOptions {
-                mode: MergeMode::Overwrite,
-                offset: merge.offset.unwrap_or(0),
-                range: merge.range,
-            };
-            self.wrap_error("/MO", hexfile.merge(&other, &options))?;
-        }
-
-        if self.address_range_empty_output {
-            hexfile.filter_ranges(&[]);
-        } else if !self.address_range.is_empty() {
-            hexfile.filter_ranges(&self.address_range);
-        }
-
-        if let Some(ref path) = self.log_file {
-            let content = provider
-                .read_string(path)
-                .map_err(|e| CliError::Other(format!("/L: {e}")))?;
-            execute_log(hexfile, &content)?;
-        }
-
-        if self.fill_all {
-            self.wrap_error(
-                "/FA",
-                hexfile.fill_gaps(self.align_fill, crate::DEFAULT_DENSE_SPAN_LIMIT),
-            )?;
-        }
-
-        if let Some(alignment) = self.align_address {
-            let options = AlignOptions {
+        Ok(Pipeline {
+            address_map,
+            dspic_expand: self.dspic_expand.clone(),
+            dspic_shrink: self.dspic_shrink.clone(),
+            dspic_clear_ghost: self.dspic_clear_ghost.clone(),
+            fill,
+            cut: self.cut_ranges.clone(),
+            merges,
+            address_filter,
+            fill_gaps: self.fill_all.then_some(self.align_fill),
+            align: self.align_address.map(|alignment| AlignOptions {
                 alignment,
                 fill_byte: self.align_fill,
-                align_length: false,
-            };
-            self.wrap_error("/AD/AL", hexfile.align(&options))?;
-            if self.align_length {
-                let options = AlignOptions {
-                    alignment,
-                    fill_byte: self.align_fill,
-                    align_length: true,
-                };
-                self.wrap_error("/AD/AL", hexfile.align(&options))?;
+                align_length: self.align_length,
+            }),
+            split: self.split_block_size,
+            swap_word: self.swap_word,
+            swap_dword: self.swap_long,
+            checksums,
+            sign: self
+                .data_processing
+                .as_ref()
+                .map(sign_options)
+                .transpose()?,
+            verify: self
+                .signature_verify
+                .as_ref()
+                .map(verify_options)
+                .transpose()?,
+        })
+    }
+
+    /// Compat side effects between stages: `/L` runs after `/AR`, and checksum and
+    /// signature file targets are written as soon as their bytes exist.
+    fn after_stage<P: ReadProvider>(
+        &self,
+        stage: Stage,
+        hexfile: &mut HexFile,
+        output: &PipelineOutput,
+        provider: &P,
+    ) -> Result<(), CliError> {
+        match stage {
+            Stage::AddressFilter => {
+                if let Some(ref path) = self.log_file {
+                    let content = provider
+                        .read_string(path)
+                        .map_err(|e| CliError::Other(format!("/L: {e}")))?;
+                    execute_log(hexfile, &content)?;
+                }
             }
+            Stage::Checksum(index) => {
+                let (params, flag) = self.checksum_stage(index);
+                if let (ChecksumTarget::File(path), Some(bytes)) =
+                    (&params.target, output.checksums.get(index))
+                {
+                    write_checksum_text(path, bytes)
+                        .map_err(|e| CliError::Other(format!("{flag}: {e}")))?;
+                }
+            }
+            Stage::Sign => {
+                if let (Some(dp), Some(signature)) = (&self.data_processing, &output.signature)
+                    && let Some(path) = &dp.output_file
+                {
+                    std::fs::write(path, signature)
+                        .map_err(|e| CliError::Other(format!("/DP{}: {e}", dp.method)))?;
+                }
+            }
+            _ => {}
         }
-
-        if let Some(size) = self.split_block_size {
-            hexfile.split(size);
-        }
-
-        if self.swap_word {
-            hexfile.swap_bytes(SwapMode::Word);
-        }
-        if self.swap_long {
-            hexfile.swap_bytes(SwapMode::DWord);
-        }
-
         Ok(())
     }
 
-    fn load_hexfile<P: ReadProvider>(&self, provider: &P) -> Result<crate::HexFile, CliError> {
+    /// The flag named in errors from `stage`.
+    fn stage_flag(&self, stage: Stage) -> String {
+        let flag = match stage {
+            Stage::AddressMap if self.s12_map => "/S12MAP",
+            Stage::AddressMap if self.s12x_map => "/S12XMAP",
+            Stage::AddressMap if self.s08_map => "/S08MAP",
+            Stage::AddressMap => "/REMAP",
+            Stage::DspicExpand => "/CDSPX",
+            Stage::DspicShrink => "/CDSPS",
+            Stage::DspicClearGhost => "/CDSPG",
+            Stage::Fill => "/FR",
+            Stage::Cut => "/CR",
+            Stage::Merge if self.merge_transparent.is_empty() => "/MO",
+            Stage::Merge => "/MT",
+            Stage::AddressFilter => "/AR",
+            Stage::FillGaps => "/FA",
+            Stage::Align => "/AD/AL",
+            Stage::Split => "/SB",
+            Stage::Swap => "/SWAPWORD/SWAPLONG",
+            Stage::Checksum(index) => return self.checksum_stage(index).1,
+            Stage::Sign => {
+                let method = self.data_processing.as_ref().map_or(0, |dp| dp.method);
+                return format!("/DP{method}");
+            }
+            Stage::Verify => {
+                let method = self.signature_verify.as_ref().map_or(0, |sv| sv.method);
+                return format!("/SV{method}");
+            }
+        };
+        flag.to_owned()
+    }
+
+    /// `/CS` and `/CSM` are exclusive, so checksum stages come from one of them.
+    fn checksum_params(&self) -> &[ChecksumParams] {
+        self.checksum
+            .as_ref()
+            .map_or(self.checksum_multi.as_slice(), std::slice::from_ref)
+    }
+
+    /// Parameters and flag name of checksum stage `index`.
+    fn checksum_stage(&self, index: usize) -> (&ChecksumParams, String) {
+        let params = &self.checksum_params()[index];
+        let base = match (self.checksum.is_some(), params.little_endian) {
+            (true, false) => "/CS",
+            (true, true) => "/CSR",
+            (false, false) => "/CSM",
+            (false, true) => "/CSMR",
+        };
+        (params, format!("{base}{}", params.algorithm))
+    }
+
+    fn load_hexfile<P: ReadProvider>(&self, provider: &P) -> Result<HexFile, CliError> {
         if let Some(ref import) = self.import_binary {
             return load_binary_input(provider, &import.file, import.offset);
         }
@@ -279,97 +324,15 @@ impl Args {
             || !self.merge_transparent.is_empty()
             || !self.merge_opaque.is_empty()
         {
-            return Ok(crate::HexFile::new());
+            return Ok(HexFile::new());
         }
         Err(ParseArgError::MissingInputFile.into())
     }
-
-    fn apply_checksums(&self, hexfile: &mut crate::HexFile) -> Result<Option<Vec<u8>>, CliError> {
-        let mut legacy_bytes = None;
-        if let Some(cs_params) = self.checksum.as_ref() {
-            legacy_bytes = Some(self.run_checksum(hexfile, cs_params, false)?);
-        }
-        for cs_params in &self.checksum_multi {
-            self.run_checksum(hexfile, cs_params, true)?;
-        }
-        Ok(legacy_bytes)
-    }
-
-    fn run_checksum(
-        &self,
-        hexfile: &mut crate::HexFile,
-        cs_params: &ChecksumParams,
-        is_multi: bool,
-    ) -> Result<Vec<u8>, CliError> {
-        let opt_base = if is_multi {
-            if cs_params.little_endian {
-                "/CSMR"
-            } else {
-                "/CSM"
-            }
-        } else if cs_params.little_endian {
-            "/CSR"
-        } else {
-            "/CS"
-        };
-        let opt = format!("{opt_base}{}", cs_params.algorithm);
-        let options = checksum_options(cs_params)?;
-        let placement = match cs_params.target {
-            ChecksumTarget::Place(placement) => Some(placement),
-            ChecksumTarget::None | ChecksumTarget::File(_) => None,
-        };
-        let result = self.wrap_error(&opt, hexfile.checksum(&options, placement))?;
-        if let ChecksumTarget::File(path) = &cs_params.target {
-            self.wrap_error(&opt, write_checksum_text(path, &result))?;
-        }
-        Ok(result)
-    }
-
-    fn apply_data_processing(
-        &self,
-        hexfile: &mut crate::HexFile,
-    ) -> Result<Option<Vec<u8>>, CliError> {
-        let Some(ref params) = self.data_processing else {
-            return Ok(None);
-        };
-        apply_data_processing(hexfile, params)
-    }
-
-    fn apply_signature_verification(&self, hexfile: &crate::HexFile) -> Result<(), CliError> {
-        let Some(ref params) = self.signature_verify else {
-            return Ok(());
-        };
-        apply_signature_verification(hexfile, params)
-    }
-
-    fn write_outputs<P: ReadProvider>(
-        &self,
-        hexfile: &crate::HexFile,
-        provider: &P,
-    ) -> Result<(), CliError> {
-        write_output_for_args(self, hexfile, provider)
-    }
 }
 
-fn random_fill_segment(range: crate::AddressRange) -> Result<Segment, crate::OpsError> {
-    let len = u32::try_from(range.length()).map_err(|_| crate::OpsError::AddressOverflow {
-        address: range.start(),
-    })?;
-
-    let now = SystemTime::now()
+/// `/FR` without `/FP` fills with fresh random bytes on every run.
+fn random_seed() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    let mut state = {
-        let seed = now ^ ((range.start() as u64) << 32) ^ range.length();
-        if seed == 0 { 0x9E3779B97F4A7C15 } else { seed }
-    };
-
-    let data = (0..len)
-        .map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            (state >> 32) as u8
-        })
-        .collect();
-    Ok(Segment::new(range.start(), data)?)
+        .map_or(0, |d| d.as_nanos() as u64)
 }

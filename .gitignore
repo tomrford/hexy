@@ -9,3 +9,5 @@ scratchpad
 .venv
 **/.venv
 validation/
+**/*.pyd
+**/*.pdb

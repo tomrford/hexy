@@ -1,8 +1,10 @@
 //! Cleanroom slash-compatible CLI argument parsing and execution.
 //!
 //! Parser boundary: this module parses HexView-style argv into `Args`; execution
-//! maps `Args` onto typed `hexy-core` operations. `hexy-core` does not depend on
-//! slash syntax.
+//! builds a `hexy_core::Pipeline` from `Args` and runs its stages in order. The core
+//! pipeline owns the stage order (steps 5-18 below, except /L); compat loads inputs,
+//! runs /L after the /AR stage, writes checksum and signature files after their
+//! stages, and exports. `hexy-core` does not depend on slash syntax.
 //!
 //! Processing order matches the cleanroom compatibility target (implemented subset):
 //! 1. Read input file

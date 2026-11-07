@@ -9,8 +9,6 @@ Library consumers choose the algorithm, key source, signature source, and
 placement explicitly:
 
 ```rust
-use std::path::Path;
-
 use hexy_core::{
     HexFile, SignatureBytesSource, SignatureError, SignatureKeySource,
     SignatureMethod, SignatureSignOptions, SignatureVerifyOptions,
@@ -22,14 +20,14 @@ fn sign_and_verify(hexfile: &mut HexFile) -> Result<(), SignatureError> {
     };
     let signature = hexfile.sign(&SignatureSignOptions {
         method,
-        key_source: SignatureKeySource::File(Path::new("private.pem")),
+        key_source: SignatureKeySource::File("private.pem".into()),
         placement: None,
     })?;
 
     hexfile.verify_signature(&SignatureVerifyOptions {
         method,
-        key_source: SignatureKeySource::File(Path::new("public.pem")),
-        signature_source: SignatureBytesSource::Bytes(&signature),
+        key_source: SignatureKeySource::File("public.pem".into()),
+        signature_source: SignatureBytesSource::Bytes(signature),
     })
 }
 ```
@@ -82,7 +80,8 @@ tab, `:`, `-`, or `_`) leaves an even-length hexadecimal value. Any other value
 is a file path, including an unprefixed value such as `deadbeef`.
 
 After classification, compat constructs `SignatureSignOptions` or
-`SignatureVerifyOptions` and calls the core operation. Consumers reproducing a
+`SignatureVerifyOptions` and sets them as the `sign` or `verify` stage of the
+core `Pipeline`, which runs them after the checksum stages. Consumers reproducing a
 compat workflow can apply the table and classification rules at their input
 boundary, then use the same typed core requests. Core does not expose the `/DP`
 or `/SV` numbers.

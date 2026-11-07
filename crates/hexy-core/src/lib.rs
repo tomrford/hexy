@@ -1,6 +1,7 @@
 pub mod hexfile;
 pub mod io;
 pub mod ops;
+pub mod pipeline;
 pub mod range;
 pub mod segment;
 pub mod signature;
@@ -16,6 +17,10 @@ pub use io::{
 pub use ops::{
     AlignOptions, BankedMapOptions, ChecksumAlgorithm, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT,
     FillOptions, ForcedRange, MergeMode, MergeOptions, OpsError, RemapOptions, SwapMode,
+};
+pub use pipeline::{
+    AddressMap, ChecksumStage, DspicOp, Fill, FillData, Merge, Pipeline, PipelineError,
+    PipelineOutput, Stage,
 };
 pub use range::{AddressRange, AddressRangeError, merge_ranges, parse_compat_ranges, parse_ranges};
 pub use segment::{Segment, SegmentError};

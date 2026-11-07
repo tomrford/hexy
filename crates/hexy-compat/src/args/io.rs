@@ -337,7 +337,10 @@ pub(super) fn write_porsche_output(
     output_path: &Path,
 ) -> Result<(), CliError> {
     let checksum_params = porsche_checksum_params(args)?;
-    let options = checksum_options(checksum_params)?;
+    let options = checksum_options(
+        checksum_params,
+        &format!("/CS{}", checksum_params.algorithm),
+    )?;
     let mut normalized = hexfile.normalized();
     let fill = args.align_fill;
     normalized
@@ -369,7 +372,10 @@ pub(super) fn validate_porsche_output_args(args: &Args) -> Result<(), CliError> 
     }
 
     let checksum_params = porsche_checksum_params(args)?;
-    checksum_options(checksum_params)?;
+    checksum_options(
+        checksum_params,
+        &format!("/CS{}", checksum_params.algorithm),
+    )?;
     Ok(())
 }
 
@@ -384,11 +390,13 @@ fn porsche_checksum_params(args: &Args) -> Result<&ChecksumParams, CliError> {
     })
 }
 
+/// Core checksum options for `params`; `flag` labels an unsupported algorithm error.
 pub(super) fn checksum_options(
     params: &ChecksumParams,
+    flag: &str,
 ) -> Result<crate::ChecksumOptions, CliError> {
     let algorithm = crate::ChecksumAlgorithm::try_from(params.algorithm)
-        .map_err(|e| CliError::Other(format!("/CS{}: {e}", params.algorithm)))?;
+        .map_err(|e| CliError::Other(format!("{flag}: {e}")))?;
     Ok(crate::ChecksumOptions {
         algorithm,
         range: params.range,

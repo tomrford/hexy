@@ -173,62 +173,51 @@ def test_single_range_apis_reject_multiple_ranges_in_one_string():
         raise AssertionError("expected multiple ranges to be rejected")
 
 
-def test_pipeline_uses_compat_operation_order():
-    hf = hexy.HexFile.from_binary(b"\x00\x01\x02\x03", 0x1000)
+def _pat(length, seed):
+    return bytes((seed + i * 7) & 0xFF for i in range(length))
+
+
+def _from_pats(*segments):
+    return hexy.HexFile.from_segments(
+        [hexy.Segment(start, _pat(length, seed)) for start, length, seed in segments]
+    )
+
+
+def test_pipeline_matches_hexview_multistage_checksum():
+    # HexView 1.15.2: gaps.hex /CS9:cs.txt /SWAPWORD /SB:0x40 /AL /AD:0x40 /AF:00
+    # /AR:0x0F00-0x1FFF /MT:merge.hex;0x100 /CR:0x1010-0x101F /FP:A55A /FR:0x0F00-0x0F3F
+    # writes 0x4E, 0x5E, 0x64, 0x5E. Stages are configured in reverse order on purpose.
+    source = _from_pats(
+        (0x1000, 0x100, 1), (0x1180, 0x80, 2), (0x1301, 0x3E, 3), (0x2000, 6, 4)
+    )
+    merge = _from_pats((0x10F0, 0x40, 9), (0x1500, 0x10, 10))
     pipeline = hexy.Pipeline()
+    pipeline.checksum(9)
     pipeline.swap("word")
-    pipeline.fill(["0x1001-0x1002"], pattern=b"\xff", overwrite=True)
+    pipeline.split(0x40)
+    pipeline.align(0x40, fill=0x00, length=True)
+    pipeline.filter(["0x0F00-0x1FFF"])
+    pipeline.merge(merge, mode="preserve", offset=0x100)
+    pipeline.cut(["0x1010-0x101F"])
+    pipeline.fill(["0x0F00-0x0F3F"], pattern=b"\xa5\x5a")
 
-    out = pipeline.apply(hf)
+    result = pipeline.apply(source)
 
-    assert out.read(0x1000, 4) == b"\x00\xff\xff\x03"
+    assert result.checksums == [b"\x4e\x5e\x64\x5e"]
+    assert result.hexfile.read(0x0F00, 4) == b"\x5a\xa5\x5a\xa5"
+    assert source.read(0x0F00, 1) is None
 
 
-def test_pipeline_orders_align_before_swap_even_when_called_late():
-    hf = hexy.HexFile.from_binary(b"\x01\x02\x03", 0x1001)
+def test_pipeline_places_checksums_in_order():
     pipeline = hexy.Pipeline()
-    pipeline.swap("word")
-    pipeline.align(4, fill=0x00, length=True)
+    pipeline.checksum(0, placement="append")
+    pipeline.checksum(0, placement=0x2000, reverse=True)
 
-    out = pipeline.apply(hf)
+    result = pipeline.apply(hexy.HexFile.from_binary(b"\x01\x02\x03\x04", 0x1000))
 
-    assert out.read(0x1000, 4) == b"\x01\x00\x03\x02"
-
-
-def test_pipeline_orders_mapping_variants_before_remap():
-    hf = hexy.HexFile.from_binary(b"\xaa", 0x4000)
-    pipeline = hexy.Pipeline()
-    pipeline.remap(0x104000, 0x104000, 0x200000, 0x1000, 0x1000)
-    pipeline.map_star08()
-
-    out = pipeline.apply(hf)
-
-    assert out.read(0x200000, 1) == b"\xaa"
-
-
-def test_pipeline_orders_dspic_expand_before_shrink():
-    hf = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
-    pipeline = hexy.Pipeline()
-    pipeline.dspic_shrink("0x2000-0x2003", 0x3000)
-    pipeline.dspic_expand("0x1000-0x1001", 0x2000)
-
-    out = pipeline.apply(hf)
-
-    assert out.read(0x3000, 2) == b"\x01\x02"
-
-
-def test_compat_pipeline_rejects_mixed_merge_modes():
-    first = hexy.HexFile.from_binary(b"\xaa", 0x1000)
-    second = hexy.HexFile.from_binary(b"\xbb", 0x1001)
-    pipeline = hexy.Pipeline()
-    pipeline.merge(first, mode="preserve")
-
-    try:
-        pipeline.merge(second, mode="overwrite")
-    except ValueError as error:
-        assert "cannot combine preserve and overwrite merges" in str(error)
-    else:
-        raise AssertionError("expected mixed merge modes to be rejected")
+    assert result.checksums == [b"\x00\x0a", b"\x14\x00"]
+    assert result.hexfile.read(0x1004, 2) == b"\x00\x0a"
+    assert result.hexfile.read(0x2000, 2) == b"\x14\x00"
 
 
 def test_dspic_and_mapping_surfaces_are_available():
