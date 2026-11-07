@@ -130,6 +130,43 @@ fn test_cli_remap_s08map_conflict() {
 }
 
 #[test]
+fn test_cli_dspic_error_precedes_loading_merge_inputs() {
+    let dir = temp_dir("cli_dspic_before_merge");
+    let input = dir.join("input.bin");
+    write_file(&input, &[1, 2, 3, 4]);
+
+    let output = run_hexy(&[
+        format!("/IN:{};0", input.display()),
+        "/CDSPX:0-2;0x10".to_owned(),
+        format!("/MO:{}", dir.join("missing.hex").display()),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/CDSPX"));
+}
+
+#[test]
+fn test_cli_merge_error_precedes_loading_later_merge_inputs() {
+    let dir = temp_dir("cli_merge_before_later_merge");
+    let input = dir.join("input.bin");
+    let merge = dir.join("merge.bin");
+    write_file(&input, &[1]);
+    write_file(&merge, &[0xAA, 0xBB]);
+
+    let output = run_hexy(&[
+        format!("/IN:{};0", input.display()),
+        format!(
+            "/MO:{};0xFFFFFFFF+{}",
+            merge.display(),
+            dir.join("missing.bin").display()
+        ),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/MO: address overflow"));
+}
+
+#[test]
 fn test_cli_log_file_open_relative_path_is_rejected_with_raw_path() {
     let dir = temp_dir("cli_log_open_relative_rejected");
     let log = dir.join("commands.log");

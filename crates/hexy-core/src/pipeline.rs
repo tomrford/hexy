@@ -57,7 +57,8 @@ pub struct ChecksumStage {
     pub placement: Option<Placement>,
 }
 
-/// Stage identifiers in execution order. `Checksum(i)` is `checksums[i]`.
+/// Stage identifiers in execution order. `Merge(i)` and `Checksum(i)` address their
+/// respective pipeline entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     AddressMap,
@@ -66,7 +67,7 @@ pub enum Stage {
     DspicClearGhost,
     Fill,
     Cut,
-    Merge,
+    Merge(usize),
     AddressFilter,
     FillGaps,
     Align,
@@ -77,20 +78,30 @@ pub enum Stage {
     Verify,
 }
 
-const BEFORE_CHECKSUMS: [Stage; 12] = [
-    Stage::AddressMap,
-    Stage::DspicExpand,
-    Stage::DspicShrink,
-    Stage::DspicClearGhost,
-    Stage::Fill,
-    Stage::Cut,
-    Stage::Merge,
-    Stage::AddressFilter,
-    Stage::FillGaps,
-    Stage::Align,
-    Stage::Split,
-    Stage::Swap,
-];
+impl Stage {
+    /// Every stage in execution order, including stages that have not been configured.
+    pub fn in_order(merge_count: usize, checksum_count: usize) -> impl Iterator<Item = Self> {
+        [
+            Self::AddressMap,
+            Self::DspicExpand,
+            Self::DspicShrink,
+            Self::DspicClearGhost,
+            Self::Fill,
+            Self::Cut,
+        ]
+        .into_iter()
+        .chain((0..merge_count).map(Self::Merge))
+        .chain([
+            Self::AddressFilter,
+            Self::FillGaps,
+            Self::Align,
+            Self::Split,
+            Self::Swap,
+        ])
+        .chain((0..checksum_count).map(Self::Checksum))
+        .chain([Self::Sign, Self::Verify])
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -135,10 +146,7 @@ pub struct Pipeline {
 impl Pipeline {
     /// Every stage of this pipeline in execution order, configured or not.
     pub fn stages(&self) -> impl Iterator<Item = Stage> + use<> {
-        BEFORE_CHECKSUMS
-            .into_iter()
-            .chain((0..self.checksums.len()).map(Stage::Checksum))
-            .chain([Stage::Sign, Stage::Verify])
+        Stage::in_order(self.merges.len(), self.checksums.len())
     }
 
     /// Apply all stages to `hexfile` in order.
@@ -198,8 +206,8 @@ impl Pipeline {
                 None => {}
             },
             Stage::Cut => hexfile.cut_ranges(&self.cut),
-            Stage::Merge => {
-                for merge in &self.merges {
+            Stage::Merge(index) => {
+                if let Some(merge) = self.merges.get(index) {
                     hexfile.merge(&merge.file, &merge.options)?;
                 }
             }

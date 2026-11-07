@@ -96,9 +96,16 @@ impl Args {
         validate_porsche_output_args(self)?;
 
         let mut hexfile = self.load_hexfile(provider)?;
-        let pipeline = self.pipeline(provider)?;
+        let mut pipeline = self.pipeline();
         let mut output = PipelineOutput::default();
-        for stage in pipeline.stages() {
+        let checksum_count = if matches!(self.output_format, Some(OutputFormat::Porsche)) {
+            0
+        } else {
+            self.checksum_params().len()
+        };
+        let merge_count = self.merge_transparent.len() + self.merge_opaque.len();
+        for stage in Stage::in_order(merge_count, checksum_count) {
+            self.before_stage(stage, &mut pipeline, provider)?;
             pipeline
                 .run_stage(stage, &mut hexfile, &mut output)
                 .map_err(|e| CliError::Other(format!("{}: {e}", self.stage_flag(stage))))?;
@@ -108,7 +115,7 @@ impl Args {
     }
 
     /// The core pipeline for these flags; each field is set only from its own flags.
-    fn pipeline<P: ReadProvider>(&self, provider: &P) -> Result<Pipeline, CliError> {
+    fn pipeline(&self) -> Pipeline {
         let address_map = if self.s12_map {
             Some(AddressMap::Star12)
         } else if self.s12x_map {
@@ -128,56 +135,18 @@ impl Args {
                 }
             },
         });
-        let merges = self
-            .merge_transparent
-            .iter()
-            .map(|merge| (merge, MergeMode::Preserve))
-            .chain(
-                self.merge_opaque
-                    .iter()
-                    .map(|merge| (merge, MergeMode::Overwrite)),
-            )
-            .map(|(merge, mode)| {
-                Ok(Merge {
-                    file: load_input(provider, &merge.file)?,
-                    options: MergeOptions {
-                        mode,
-                        offset: merge.offset.unwrap_or(0),
-                        range: merge.range,
-                    },
-                })
-            })
-            .collect::<Result<_, CliError>>()?;
         let address_filter = if self.address_range_empty_output {
             Some(Vec::new())
         } else {
             (!self.address_range.is_empty()).then(|| self.address_range.clone())
         };
-        let checksums = if matches!(self.output_format, Some(OutputFormat::Porsche)) {
-            Vec::new()
-        } else {
-            (0..self.checksum_params().len())
-                .map(|index| {
-                    let (params, flag) = self.checksum_stage(index);
-                    Ok(ChecksumStage {
-                        options: checksum_options(params, &flag)?,
-                        placement: match params.target {
-                            ChecksumTarget::Place(placement) => Some(placement),
-                            ChecksumTarget::None | ChecksumTarget::File(_) => None,
-                        },
-                    })
-                })
-                .collect::<Result<_, CliError>>()?
-        };
-
-        Ok(Pipeline {
+        Pipeline {
             address_map,
             dspic_expand: self.dspic_expand.clone(),
             dspic_shrink: self.dspic_shrink.clone(),
             dspic_clear_ghost: self.dspic_clear_ghost.clone(),
             fill,
             cut: self.cut_ranges.clone(),
-            merges,
             address_filter,
             fill_gaps: self.fill_all.then_some(self.align_fill),
             align: self.align_address.map(|alignment| AlignOptions {
@@ -188,18 +157,60 @@ impl Args {
             split: self.split_block_size,
             swap_word: self.swap_word,
             swap_dword: self.swap_long,
-            checksums,
-            sign: self
-                .data_processing
-                .as_ref()
-                .map(sign_options)
-                .transpose()?,
-            verify: self
-                .signature_verify
-                .as_ref()
-                .map(verify_options)
-                .transpose()?,
-        })
+            ..Default::default()
+        }
+    }
+
+    /// Resolve fallible inputs when their stage is reached, after earlier side effects.
+    fn before_stage<P: ReadProvider>(
+        &self,
+        stage: Stage,
+        pipeline: &mut Pipeline,
+        provider: &P,
+    ) -> Result<(), CliError> {
+        match stage {
+            Stage::Merge(index) => {
+                let (params, mode) = if self.merge_transparent.is_empty() {
+                    (&self.merge_opaque[index], MergeMode::Overwrite)
+                } else {
+                    (&self.merge_transparent[index], MergeMode::Preserve)
+                };
+                pipeline.merges.push(Merge {
+                    file: load_input(provider, &params.file)?,
+                    options: MergeOptions {
+                        mode,
+                        offset: params.offset.unwrap_or(0),
+                        range: params.range,
+                    },
+                });
+            }
+            Stage::Checksum(index) => {
+                let (params, flag) = self.checksum_stage(index);
+                pipeline.checksums.push(ChecksumStage {
+                    options: checksum_options(params, &flag)?,
+                    placement: match params.target {
+                        ChecksumTarget::Place(placement) => Some(placement),
+                        ChecksumTarget::None | ChecksumTarget::File(_) => None,
+                    },
+                });
+            }
+            Stage::Sign => {
+                pipeline.sign = self
+                    .data_processing
+                    .as_ref()
+                    .map(sign_options)
+                    .transpose()?;
+            }
+            Stage::Verify => {
+                pipeline.verify = self
+                    .signature_verify
+                    .as_ref()
+                    .map(verify_options)
+                    .transpose()?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Compat side effects between stages: `/L` runs after `/AR`, and checksum and
@@ -254,8 +265,8 @@ impl Args {
             Stage::DspicClearGhost => "/CDSPG",
             Stage::Fill => "/FR",
             Stage::Cut => "/CR",
-            Stage::Merge if self.merge_transparent.is_empty() => "/MO",
-            Stage::Merge => "/MT",
+            Stage::Merge(_) if self.merge_transparent.is_empty() => "/MO",
+            Stage::Merge(_) => "/MT",
             Stage::AddressFilter => "/AR",
             Stage::FillGaps => "/FA",
             Stage::Align => "/AD/AL",
