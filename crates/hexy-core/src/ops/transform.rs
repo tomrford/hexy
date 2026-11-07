@@ -55,15 +55,6 @@ pub struct BankedMapOptions {
 /// Single-segment `/SWAPLONG` spans of at least this many bytes take the large-span quirk.
 const SWAPLONG_LARGE_SPAN_LIMIT: usize = 0x100_0000;
 
-fn align_up(len: u32, alignment: u32) -> u32 {
-    let rem = len % alignment;
-    if rem == 0 {
-        len
-    } else {
-        len.checked_add(alignment - rem).unwrap_or(len)
-    }
-}
-
 impl HexFile {
     /// Align all segment start addresses to multiples of alignment.
     /// Prepends fill bytes as needed. Optionally aligns lengths too.
@@ -87,12 +78,12 @@ impl HexFile {
             }
 
             if options.align_length {
-                let end_addr = segment.end_address().saturating_add(1);
-                let aligned_end = align_up(end_addr, alignment);
-                if aligned_end > end_addr {
+                let end_addr = u64::from(segment.end_address()) + 1;
+                let aligned_end = end_addr.next_multiple_of(u64::from(alignment));
+                if aligned_end > end_addr && aligned_end <= u64::from(u32::MAX) + 1 {
                     let fill_len = (aligned_end - end_addr) as usize;
                     result.prepend_segment(Segment::from_valid(
-                        end_addr,
+                        end_addr as u32,
                         vec![options.fill_byte; fill_len],
                     ));
                 }
@@ -590,6 +581,22 @@ mod tests {
         // 1 prepended + 2 data + 1 appended = 4
         assert_eq!(hf.segments()[0].len(), 4);
         assert_eq!(hf.segments()[0].data, vec![0xFF, 0xAA, 0xBB, 0xFF]);
+    }
+
+    #[test]
+    fn test_align_length_can_fill_last_address() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(u32::MAX - 3, vec![0xAA]).unwrap()]);
+        let options = AlignOptions {
+            alignment: 4,
+            align_length: true,
+            ..Default::default()
+        };
+
+        hf.align(&options).unwrap();
+        assert_eq!(hf.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
+
+        hf.align(&options).unwrap();
+        assert_eq!(hf.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
     }
 
     #[test]
