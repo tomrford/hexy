@@ -21,13 +21,11 @@ pub(crate) fn materialized_len(range: AddressRange) -> Result<usize, OpsError> {
 }
 
 /// `len` bytes of `pattern` repeated, starting `phase` bytes into the pattern.
-pub(crate) fn pattern_bytes(pattern: &[u8], phase: usize, len: usize) -> Vec<u8> {
+pub(crate) fn pattern_bytes(
+    pattern: &[u8],
+    phase: usize,
+    len: usize,
+) -> impl Iterator<Item = u8> + '_ {
     let skip = phase.checked_rem(pattern.len()).unwrap_or(0);
-    pattern
-        .iter()
-        .cycle()
-        .skip(skip)
-        .take(len)
-        .copied()
-        .collect()
+    pattern.iter().cycle().skip(skip).take(len).copied()
 }

@@ -321,6 +321,12 @@ impl HexFile {
     /// Divide all addresses by divisor. Errors if any address not evenly divisible.
     /// If validation fails, no segments are modified (transactional).
     pub fn unscale_addresses(&mut self, divisor: u32) -> Result<(), OpsError> {
+        if divisor == 0 {
+            return Err(OpsError::AddressNotDivisible {
+                address: 0,
+                divisor,
+            });
+        }
         self.relocate(|segment| match segment.start_address.checked_rem(divisor) {
             Some(0) => Ok(Some(segment.start_address / divisor)),
             _ => Err(OpsError::AddressNotDivisible {
@@ -934,9 +940,15 @@ mod tests {
 
     #[test]
     fn test_unscale_by_zero() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA]).unwrap()]);
-        let result = hf.unscale_addresses(0);
-        assert!(result.is_err());
+        for mut hf in [
+            HexFile::new(),
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA]).unwrap()]),
+        ] {
+            assert!(matches!(
+                hf.unscale_addresses(0),
+                Err(OpsError::AddressNotDivisible { divisor: 0, .. })
+            ));
+        }
     }
 
     #[test]

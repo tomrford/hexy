@@ -116,7 +116,7 @@ impl HexFile {
             };
             for gap in gaps {
                 let phase = (gap.start() - range.start()) as usize;
-                let data = pattern_bytes(&options.pattern, phase, gap.length() as usize);
+                let data = pattern_bytes(&options.pattern, phase, gap.length() as usize).collect();
                 self.append_segment(Segment::from_valid(gap.start(), data));
             }
         }
