@@ -6,8 +6,8 @@ use crate::HexFile;
 
 use super::{
     BinaryWriteOptions, HexAsciiWriteOptions, IntelHexWriteOptions, ParseError,
-    SRecordWriteOptions, parse_binary, parse_intel_hex, parse_srec, write_binary, write_hex_ascii,
-    write_intel_hex, write_srec,
+    SRecordWriteOptions, WriteError, parse_binary, parse_intel_hex, parse_srec, write_binary,
+    write_hex_ascii, write_intel_hex, write_srec,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +23,8 @@ pub enum FileIoError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Parse(#[from] ParseError),
+    #[error(transparent)]
+    Write(#[from] WriteError),
 }
 
 pub fn detect_format(data: &[u8]) -> AutoFormat {
@@ -145,7 +147,7 @@ mod tests {
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("out.hex");
 
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD])]);
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD]).unwrap()]);
         hexfile.write_intel_hex_file(&path, &IntelHexWriteOptions::default())?;
         let parsed = HexFile::from_file(&path)?;
         assert_eq!(

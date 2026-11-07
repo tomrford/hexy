@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
+
 mod common;
 mod common_lines;
 
@@ -41,8 +43,8 @@ fn test_cli_hex_ascii_basic() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/XA:16".to_string(),
-        "-o".to_string(),
+        "/XA:16".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -71,8 +73,8 @@ fn test_cli_hex_ascii_separator() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/XA:16:, ".to_string(),
-        "-o".to_string(),
+        "/XA:16:, ".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -100,8 +102,8 @@ fn test_cli_hex_ascii_long_line() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/XA:0xffffffff".to_string(),
-        "-o".to_string(),
+        "/XA:0xffffffff".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -121,8 +123,8 @@ fn test_cli_intel_hex_reclen() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/XI:16".to_string(),
-        "-o".to_string(),
+        "/XI:16".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -150,8 +152,8 @@ fn test_cli_intel_hex_reclen_zero_defaults() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/XI:0".to_string(),
-        "-o".to_string(),
+        "/XI:0".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -180,8 +182,8 @@ fn test_cli_intel_hex_forced_modes() {
 
     let args_linear = vec![
         format!("/IN:{};0x12000", input.display()),
-        "/XI:16:1".to_string(),
-        "-o".to_string(),
+        "/XI:16:1".to_owned(),
+        "-o".to_owned(),
         out_linear.display().to_string(),
     ];
     let output = run_hexy(&args_linear);
@@ -191,8 +193,8 @@ fn test_cli_intel_hex_forced_modes() {
 
     let args_segment = vec![
         format!("/IN:{};0x12000", input.display()),
-        "/XI:16:2".to_string(),
-        "-o".to_string(),
+        "/XI:16:2".to_owned(),
+        "-o".to_owned(),
         out_segment.display().to_string(),
     ];
     let output = run_hexy(&args_segment);
@@ -210,14 +212,14 @@ fn test_cli_intel_hex_forced_extended_segment_rejects_high_address() {
 
     let args = vec![
         format!("/IN:{};0x100000", input.display()),
-        "/XI:16:2".to_string(),
-        "-o".to_string(),
+        "/XI:16:2".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("extended segment mode"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("extended segment"));
 }
 
 #[test]
@@ -232,8 +234,8 @@ fn test_cli_intel_hex_auto_modes() {
 
     let args_seg = vec![
         format!("/IN:{};0x12000", input_seg.display()),
-        "/XI:16".to_string(),
-        "-o".to_string(),
+        "/XI:16".to_owned(),
+        "-o".to_owned(),
         out_seg.display().to_string(),
     ];
     let output = run_hexy(&args_seg);
@@ -243,8 +245,8 @@ fn test_cli_intel_hex_auto_modes() {
 
     let args_lin = vec![
         format!("/IN:{};0x120000", input_lin.display()),
-        "/XI:16".to_string(),
-        "-o".to_string(),
+        "/XI:16".to_owned(),
+        "-o".to_owned(),
         out_lin.display().to_string(),
     ];
     let output = run_hexy(&args_lin);
@@ -268,8 +270,8 @@ fn test_cli_srec_auto_and_forced() {
 
     let args_small = vec![
         format!("/IN:{};0x0100", input_small.display()),
-        "/XS:16".to_string(),
-        "-o".to_string(),
+        "/XS:16".to_owned(),
+        "-o".to_owned(),
         out_small.display().to_string(),
     ];
     let output = run_hexy(&args_small);
@@ -279,8 +281,8 @@ fn test_cli_srec_auto_and_forced() {
 
     let args_mid = vec![
         format!("/IN:{};0x10000", input_mid.display()),
-        "/XS:16".to_string(),
-        "-o".to_string(),
+        "/XS:16".to_owned(),
+        "-o".to_owned(),
         out_mid.display().to_string(),
     ];
     let output = run_hexy(&args_mid);
@@ -290,8 +292,8 @@ fn test_cli_srec_auto_and_forced() {
 
     let args_large = vec![
         format!("/IN:{};0x1000000", input_large.display()),
-        "/XS:16".to_string(),
-        "-o".to_string(),
+        "/XS:16".to_owned(),
+        "-o".to_owned(),
         out_large.display().to_string(),
     ];
     let output = run_hexy(&args_large);
@@ -301,8 +303,8 @@ fn test_cli_srec_auto_and_forced() {
 
     let forced_s1 = vec![
         format!("/IN:{};0x0100", input_small.display()),
-        "/XS:16:0".to_string(),
-        "-o".to_string(),
+        "/XS:16:0".to_owned(),
+        "-o".to_owned(),
         out_mid.display().to_string(),
     ];
     let output = run_hexy(&forced_s1);
@@ -321,8 +323,8 @@ fn test_cli_srec_reclen() {
 
     let args = vec![
         format!("/IN:{};0x0100", input.display()),
-        "/XS:8".to_string(),
-        "-o".to_string(),
+        "/XS:8".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -357,8 +359,8 @@ fn test_cli_srec_rectype_without_reclen_uses_default_length() {
 
     let args = vec![
         format!("/IN:{};0x01000000", input.display()),
-        "/XS:16:2".to_string(),
-        "-o".to_string(),
+        "/XS:16:2".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -369,8 +371,8 @@ fn test_cli_srec_rectype_without_reclen_uses_default_length() {
 
     let args_alias = vec![
         format!("/IN:{};0x01000000", input.display()),
-        "/XS:16:3".to_string(),
-        "-o".to_string(),
+        "/XS:16:3".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args_alias);
@@ -388,8 +390,8 @@ fn test_cli_intel_hex_rectype_requires_reclen() {
 
     let args = vec![
         format!("/IN:{};0x0100", input.display()),
-        "/XI::2".to_string(),
-        "-o".to_string(),
+        "/XI::2".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -406,8 +408,8 @@ fn test_cli_srec_reclen_zero_defaults() {
 
     let args = vec![
         format!("/IN:{};0x0100", input.display()),
-        "/XS:0".to_string(),
-        "-o".to_string(),
+        "/XS:0".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -438,8 +440,8 @@ fn test_cli_binary_and_separate_binary() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x2000", merge.display()),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -451,8 +453,8 @@ fn test_cli_binary_and_separate_binary() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x2000", merge.display()),
-        "/XSB".to_string(),
-        "-o".to_string(),
+        "/XSB".to_owned(),
+        "-o".to_owned(),
         out_sep.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -466,8 +468,8 @@ fn test_cli_binary_and_separate_binary() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x2000", merge.display()),
-        "/XSB".to_string(),
-        "-o".to_string(),
+        "/XSB".to_owned(),
+        "-o".to_owned(),
         out_sep_dat.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -518,8 +520,8 @@ fn test_cli_binary_address_order() {
     let args = vec![
         format!("/IN:{};0x2000", base.display()),
         format!("/MO:{};0x1000", merge.display()),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -537,8 +539,8 @@ fn test_cli_porsche_requires_checksum_without_partial_output() {
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
-        "/XP".to_string(),
-        "-o".to_string(),
+        "/XP".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -560,10 +562,10 @@ fn test_cli_porsche_rejects_checksum_multi_before_signature_sidecar() {
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
-        "/XP".to_string(),
-        "/CSM0:@append".to_string(),
+        "/XP".to_owned(),
+        "/CSM0:@append".to_owned(),
         format!("/DP46:{};{}", private_key.display(), signature.display()),
-        "-o".to_string(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -587,10 +589,10 @@ fn test_cli_porsche_appends_selected_checksum_over_dense_filled_output() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x1004", merge.display()),
-        "/AF:00".to_string(),
-        "/CS0".to_string(),
-        "/XP".to_string(),
-        "-o".to_string(),
+        "/AF:00".to_owned(),
+        "/CS0".to_owned(),
+        "/XP".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -612,16 +614,16 @@ fn test_cli_porsche_rejects_large_sparse_span_without_partial_output() {
     let args = vec![
         format!("/IN:{};0x0", base.display()),
         format!("/MO:{};0x20000000", merge.display()),
-        "/CS0".to_string(),
-        "/XP".to_string(),
-        "-o".to_string(),
+        "/CS0".to_owned(),
+        "/XP".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("dense materialization span too large"));
+    assert!(stderr.contains("dense span"));
     assert!(!out.exists());
 }
 
@@ -637,9 +639,9 @@ fn test_cli_fill_all_rejects_large_sparse_span_without_partial_output() {
     let args = vec![
         format!("/IN:{};0x0", base.display()),
         format!("/MO:{};0x20000000", merge.display()),
-        "/FA".to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/FA".to_owned(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -647,7 +649,7 @@ fn test_cli_fill_all_rejects_large_sparse_span_without_partial_output() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("/FA"));
-    assert!(stderr.contains("dense materialization span too large"));
+    assert!(stderr.contains("dense span"));
     assert!(!out.exists());
 }
 
@@ -660,9 +662,9 @@ fn test_cli_output_option_exclusive() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/XA:16".to_string(),
-        "/XI:16".to_string(),
-        "-o".to_string(),
+        "/XA:16".to_owned(),
+        "/XI:16".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -675,7 +677,7 @@ fn test_cli_unsupported_output_rejected_without_output_file() {
     let input = dir.join("input.bin");
     write_file(&input, &[0x01, 0x02]);
 
-    let args = vec![format!("/IN:{};0x0", input.display()), "/XV".to_string()];
+    let args = vec![format!("/IN:{};0x0", input.display()), "/XV".to_owned()];
     let output = run_hexy(&args);
 
     assert!(!output.status.success());

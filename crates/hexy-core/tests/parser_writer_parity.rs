@@ -45,7 +45,8 @@ fn srecord_input_does_not_scan_past_header_text() -> Result<(), ParseError> {
 #[test]
 fn intel_hex_writer_formats_u32_ceiling_as_extended_linear()
 -> Result<(), std::string::FromUtf8Error> {
-    let hexfile = HexFile::with_segments(vec![Segment::new(0xFFFF_FFFE, vec![0xAA, 0xBB])]);
+    let hexfile =
+        HexFile::with_segments(vec![Segment::new(0xFFFF_FFFE, vec![0xAA, 0xBB]).unwrap()]);
 
     let output = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
 
@@ -62,15 +63,15 @@ fn intel_hex_parser_rejects_records_that_cross_u32_ceiling() {
 
     let result = parse_intel_hex(input);
 
-    assert!(matches!(result, Err(ParseError::AddressOverflow(_))));
+    assert!(matches!(result, Err(ParseError::AddressOverflow { .. })));
 }
 
 #[test]
 fn binary_writer_serializes_normalized_blocks_without_sparse_padding() {
     let hexfile = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0x01, 0x02, 0x03]),
-        Segment::new(0x1001, vec![0xAA]),
-        Segment::new(0x2000, vec![0xBB, 0xCC]),
+        Segment::new(0x1000, vec![0x01, 0x02, 0x03]).unwrap(),
+        Segment::new(0x1001, vec![0xAA]).unwrap(),
+        Segment::new(0x2000, vec![0xBB, 0xCC]).unwrap(),
     ]);
 
     let output = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();

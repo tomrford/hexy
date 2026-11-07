@@ -337,11 +337,11 @@ pub(super) fn write_porsche_output(
     output_path: &Path,
 ) -> Result<(), CliError> {
     let checksum_params = porsche_checksum_params(args)?;
-    let options = porsche_checksum_options(checksum_params)?;
+    let options = checksum_options(checksum_params)?;
     let mut normalized = hexfile.normalized();
     let fill = args.align_fill;
     normalized
-        .fill_gaps_bounded(fill, crate::DEFAULT_DENSE_SPAN_LIMIT)
+        .fill_gaps(fill, crate::DEFAULT_DENSE_SPAN_LIMIT)
         .map_err(|e| CliError::Other(format!("/XP: {e}")))?;
 
     let checksum = normalized
@@ -369,7 +369,7 @@ pub(super) fn validate_porsche_output_args(args: &Args) -> Result<(), CliError> 
     }
 
     let checksum_params = porsche_checksum_params(args)?;
-    let _ = porsche_checksum_options(checksum_params)?;
+    checksum_options(checksum_params)?;
     Ok(())
 }
 
@@ -384,27 +384,22 @@ fn porsche_checksum_params(args: &Args) -> Result<&ChecksumParams, CliError> {
     })
 }
 
-fn porsche_checksum_options(params: &ChecksumParams) -> Result<crate::ChecksumOptions, CliError> {
-    let algorithm = crate::ChecksumAlgorithm::from_index(params.algorithm)
+pub(super) fn checksum_options(
+    params: &ChecksumParams,
+) -> Result<crate::ChecksumOptions, CliError> {
+    let algorithm = crate::ChecksumAlgorithm::try_from(params.algorithm)
         .map_err(|e| CliError::Other(format!("/CS{}: {e}", params.algorithm)))?;
-    let forced_range = params
-        .forced_range
-        .as_ref()
-        .map(|forced| crate::ForcedRange {
-            range: forced.range,
-            pattern: forced.pattern.clone(),
-        });
     Ok(crate::ChecksumOptions {
         algorithm,
         range: params.range,
         little_endian_output: params.little_endian,
-        forced_range,
+        forced_range: params.forced_range.clone(),
         exclude_ranges: params.exclude_ranges.clone(),
-        target_exclude: None,
     })
 }
 
-fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+/// Write checksum bytes as the `0xAA, 0xBB` text HexView produces for file targets.
+pub(super) fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     let formatted = bytes
         .iter()
         .map(|b| format!("0x{b:02X}"))
@@ -563,9 +558,7 @@ fn normalize_crlf(text: &str) -> String {
 
 fn compute_ford_checksum(hexfile: &HexFile) -> u16 {
     let mut sum: u16 = 0;
-    let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(Segment::start_address);
-    for segment in segments {
+    for segment in hexfile.normalized().into_segments() {
         for &byte in segment.data() {
             sum = sum.wrapping_add(byte as u16);
         }
@@ -574,11 +567,8 @@ fn compute_ford_checksum(hexfile: &HexFile) -> u16 {
 }
 
 fn format_erase_sectors(hexfile: &HexFile, alignment: Option<u32>) -> String {
-    let mut segments = hexfile.normalized().into_segments();
-    segments.sort_by_key(Segment::start_address);
     let mut parts = Vec::new();
-
-    for segment in segments {
+    for segment in hexfile.normalized().into_segments() {
         let start = segment.start_address();
         let len = segment.len() as u32;
         let (aligned_start, aligned_len) = if let Some(align) = alignment.filter(|a| *a > 0) {
@@ -652,11 +642,7 @@ fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError>
 
 fn separate_binary_segments(hexfile: &HexFile) -> Vec<Segment> {
     let all_segments = hexfile.segments();
-    let mut indexed_segments: Vec<(usize, &Segment)> = all_segments
-        .iter()
-        .enumerate()
-        .filter(|(_, segment)| !segment.is_empty())
-        .collect();
+    let mut indexed_segments: Vec<(usize, &Segment)> = all_segments.iter().enumerate().collect();
     indexed_segments.sort_by_key(|(_, segment)| segment.start_address());
 
     let mut output = Vec::new();
@@ -743,8 +729,8 @@ mod tests {
         let dir = unique_temp_dir();
         let output = dir.join("out.bin");
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB]),
-            Segment::new(0x2000, vec![0xCC]),
+            Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap(),
+            Segment::new(0x2000, vec![0xCC]).unwrap(),
         ]);
 
         write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None).unwrap();
@@ -762,10 +748,10 @@ mod tests {
         let dir = unique_temp_dir();
         let output = dir.join("out.bin");
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x00, 0x01, 0x02, 0x03]),
-            Segment::new(0x1004, vec![0x04, 0x05, 0x06, 0x07]),
-            Segment::new(0x2000, vec![0x10, 0x11, 0x12, 0x13]),
-            Segment::new(0x2002, vec![0xAA, 0xBB]),
+            Segment::new(0x1000, vec![0x00, 0x01, 0x02, 0x03]).unwrap(),
+            Segment::new(0x1004, vec![0x04, 0x05, 0x06, 0x07]).unwrap(),
+            Segment::new(0x2000, vec![0x10, 0x11, 0x12, 0x13]).unwrap(),
+            Segment::new(0x2002, vec![0xAA, 0xBB]).unwrap(),
         ]);
 
         write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
@@ -794,9 +780,9 @@ mod tests {
         let dir = unique_temp_dir();
         let output = dir.join("out.bin");
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02, 0x03]),
-            Segment::new(0x1001, vec![0xAA]),
-            Segment::new(0x2000, vec![0xBB, 0xCC]),
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03]).unwrap(),
+            Segment::new(0x1001, vec![0xAA]).unwrap(),
+            Segment::new(0x2000, vec![0xBB, 0xCC]).unwrap(),
         ]);
 
         write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
@@ -823,7 +809,7 @@ mod tests {
             bytes_per_line: Some(16),
             ..Args::default()
         };
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02])]);
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02]).unwrap()]);
         let provider = FsProvider;
 
         write_ford_ihex_output(&args, &hexfile, &output, &provider).unwrap();
@@ -850,7 +836,7 @@ mod tests {
             ini_file: Some(ini_path),
             ..Args::default()
         };
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01]).unwrap()]);
         let provider = FsProvider;
         let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
         assert!(result.is_ok(), "{result:?}");
@@ -884,7 +870,7 @@ mod tests {
             ini_file: Some(missing_ini),
             ..Args::default()
         };
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01]).unwrap()]);
         let provider = FsProvider;
         let result = write_ford_ihex_output(&args, &hexfile, &output, &provider);
         assert!(result.is_ok(), "{result:?}");
@@ -906,7 +892,7 @@ mod tests {
         let dir = unique_temp_dir();
         let output = dir.join("porsche.bin");
         let args = Args::default();
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01])]);
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01]).unwrap()]);
 
         let result = write_porsche_output(&args, &hexfile, &output);
         assert!(result.is_err());
@@ -932,8 +918,8 @@ mod tests {
             ..Args::default()
         };
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02]),
-            Segment::new(0x1004, vec![0x03]),
+            Segment::new(0x1000, vec![0x01, 0x02]).unwrap(),
+            Segment::new(0x1004, vec![0x03]).unwrap(),
         ]);
 
         write_porsche_output(&args, &hexfile, &output).unwrap();
@@ -962,8 +948,8 @@ mod tests {
             ..Args::default()
         };
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0, vec![0x01]),
-            Segment::new((crate::DEFAULT_DENSE_SPAN_LIMIT as u32) + 1, vec![0x02]),
+            Segment::new(0, vec![0x01]).unwrap(),
+            Segment::new((crate::DEFAULT_DENSE_SPAN_LIMIT as u32) + 1, vec![0x02]).unwrap(),
         ]);
 
         let result = write_porsche_output(&args, &hexfile, &output);

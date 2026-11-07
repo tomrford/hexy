@@ -1,5 +1,6 @@
 use super::super::types::ChecksumTarget;
 use super::*;
+use crate::Placement;
 
 #[test]
 fn test_output_record_type_requires_length() {
@@ -56,7 +57,7 @@ fn test_parse_dp_signature_subset_option() {
     parse_option(&mut args, "DP32:@append:key.pem;sig.bin").unwrap();
     let dp = args.data_processing.expect("data processing parsed");
     assert_eq!(dp.method, 32);
-    assert!(matches!(dp.placement, Some(ChecksumTarget::Append)));
+    assert!(matches!(dp.placement, Some(Placement::Append)));
     assert_eq!(dp.key_info, "key.pem");
 }
 
@@ -223,12 +224,12 @@ fn test_parse_checksum_multi_repeated() {
     assert_eq!(args.checksum_multi.len(), 2);
     assert!(matches!(
         args.checksum_multi[0].target,
-        ChecksumTarget::Append
+        ChecksumTarget::Place(Placement::Append)
     ));
     assert!(args.checksum_multi[1].little_endian);
     assert!(matches!(
         args.checksum_multi[1].target,
-        ChecksumTarget::Address(0x1000)
+        ChecksumTarget::Place(Placement::Address(0x1000))
     ));
 }
 

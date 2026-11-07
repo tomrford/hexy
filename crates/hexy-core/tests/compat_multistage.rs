@@ -3,14 +3,14 @@
 //! Focus: multi-stage operations and command semantics.
 
 use hexy_core::{
-    AddressRange, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumTarget, FillOptions,
-    HexFile, MergeMode, MergeOptions, Segment,
+    AddressRange, AlignOptions, ChecksumAlgorithm, ChecksumOptions, FillOptions, HexFile,
+    MergeMode, MergeOptions, Placement, Segment,
 };
 
 #[test]
 fn test_fill_region_preserves_existing_data() {
     // /FR with /FP should fill gaps and preserve existing bytes.
-    let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 8])]);
+    let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 8]).unwrap()]);
 
     hf.fill(
         AddressRange::from_start_end(0x1004, 0x100B).unwrap(),
@@ -35,8 +35,10 @@ fn test_fill_region_preserves_existing_data() {
 #[test]
 fn test_merge_range_then_offset_transparent() {
     // /MT: range applies before offset; transparent merge preserves existing data.
-    let mut base = HexFile::with_segments(vec![Segment::new(0x1011, vec![0xEE, 0xEE])]);
-    let merge = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x10, 0x11, 0x12, 0x13])]);
+    let mut base = HexFile::with_segments(vec![Segment::new(0x1011, vec![0xEE, 0xEE]).unwrap()]);
+    let merge = HexFile::with_segments(vec![
+        Segment::new(0x1000, vec![0x10, 0x11, 0x12, 0x13]).unwrap(),
+    ]);
 
     base.merge(
         &merge,
@@ -59,8 +61,10 @@ fn test_merge_range_then_offset_transparent() {
 #[test]
 fn test_merge_range_then_offset_opaque() {
     // /MO: range applies before offset; opaque merge overwrites existing data.
-    let mut base = HexFile::with_segments(vec![Segment::new(0x1011, vec![0xEE, 0xEE])]);
-    let merge = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x10, 0x11, 0x12, 0x13])]);
+    let mut base = HexFile::with_segments(vec![Segment::new(0x1011, vec![0xEE, 0xEE]).unwrap()]);
+    let merge = HexFile::with_segments(vec![
+        Segment::new(0x1000, vec![0x10, 0x11, 0x12, 0x13]).unwrap(),
+    ]);
 
     base.merge(
         &merge,
@@ -82,10 +86,9 @@ fn test_merge_range_then_offset_opaque() {
 #[test]
 fn test_compat_multistage_order() {
     // /FR -> /CR -> /MO -> /AR -> /AD /AL -> /CS
-    let mut hf = HexFile::with_segments(vec![Segment::new(
-        0x1000,
-        vec![0x10, 0x11, 0x12, 0x13, 0x14, 0x15],
-    )]);
+    let mut hf = HexFile::with_segments(vec![
+        Segment::new(0x1000, vec![0x10, 0x11, 0x12, 0x13, 0x14, 0x15]).unwrap(),
+    ]);
 
     hf.fill(
         AddressRange::from_start_end(0x1003, 0x1007).unwrap(),
@@ -98,7 +101,9 @@ fn test_compat_multistage_order() {
 
     hf.cut(AddressRange::from_start_end(0x1001, 0x1001).unwrap());
 
-    let merge = HexFile::with_segments(vec![Segment::new(0x2000, vec![0x20, 0x21, 0x22, 0x23])]);
+    let merge = HexFile::with_segments(vec![
+        Segment::new(0x2000, vec![0x20, 0x21, 0x22, 0x23]).unwrap(),
+    ]);
     hf.merge(
         &merge,
         &MergeOptions {
@@ -124,7 +129,7 @@ fn test_compat_multistage_order() {
         little_endian_output: false,
         ..Default::default()
     };
-    hf.checksum(&cs_options, &ChecksumTarget::Append).unwrap();
+    hf.checksum(&cs_options, Some(Placement::Append)).unwrap();
 
     let norm = hf.normalized();
     assert_eq!(norm.segments()[0].start_address(), 0x0FFF);

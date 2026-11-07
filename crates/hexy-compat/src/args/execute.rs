@@ -1,14 +1,12 @@
-use crate::{
-    AlignOptions, ChecksumAlgorithm, FillOptions, MergeMode, MergeOptions, RemapOptions, Segment,
-    SwapMode, parse_log_commands,
-};
-use hexy_core::ops::{LogCommand, LogCommandKind};
+use crate::{AlignOptions, FillOptions, MergeMode, MergeOptions, RemapOptions, Segment, SwapMode};
 
 use super::error::{CliError, ExecuteOutput};
 use super::io::{
-    FsProvider, ReadProvider, load_binary_input, load_hex_ascii_input, load_input,
-    load_intel_hex_16bit_input, validate_porsche_output_args, write_output_for_args,
+    FsProvider, ReadProvider, checksum_options, load_binary_input, load_hex_ascii_input,
+    load_input, load_intel_hex_16bit_input, validate_porsche_output_args, write_checksum_text,
+    write_output_for_args,
 };
+use super::log::execute_log;
 use super::signature::{
     apply_data_processing, apply_signature_verification, is_supported_data_processing_method,
     is_supported_signature_verify_method,
@@ -173,8 +171,8 @@ impl Args {
             self.wrap_error("/FR", hexfile.fill_ranges(&self.fill_ranges, &options))?;
         } else {
             for range in &self.fill_ranges {
-                let data = self.wrap_error("/FR", random_fill_bytes(*range))?;
-                hexfile.prepend_segment(Segment::new(range.start(), data));
+                let segment = self.wrap_error("/FR", random_fill_segment(*range))?;
+                hexfile.prepend_segment(segment);
             }
         }
 
@@ -209,15 +207,13 @@ impl Args {
             let content = provider
                 .read_string(path)
                 .map_err(|e| CliError::Other(format!("/L: {e}")))?;
-            let commands =
-                parse_log_commands(&content).map_err(|e| CliError::Other(format!("/L: {e}")))?;
-            execute_compat_log_commands(hexfile, &commands)?;
+            execute_log(hexfile, &content)?;
         }
 
         if self.fill_all {
             self.wrap_error(
                 "/FA",
-                hexfile.fill_gaps_bounded(self.align_fill, crate::DEFAULT_DENSE_SPAN_LIMIT),
+                hexfile.fill_gaps(self.align_fill, crate::DEFAULT_DENSE_SPAN_LIMIT),
             )?;
         }
 
@@ -243,10 +239,10 @@ impl Args {
         }
 
         if self.swap_word {
-            self.wrap_error("/SWAPWORD", hexfile.swap_bytes(SwapMode::Word))?;
+            hexfile.swap_bytes(SwapMode::Word);
         }
         if self.swap_long {
-            self.wrap_error("/SWAPLONG", hexfile.swap_bytes(SwapMode::DWord))?;
+            hexfile.swap_bytes(SwapMode::DWord);
         }
 
         Ok(())
@@ -317,56 +313,16 @@ impl Args {
             "/CS"
         };
         let opt = format!("{opt_base}{}", cs_params.algorithm);
-        let algorithm =
-            self.wrap_error(&opt, ChecksumAlgorithm::from_index(cs_params.algorithm))?;
-        let forced_range = cs_params
-            .forced_range
-            .as_ref()
-            .map(|forced| crate::ForcedRange {
-                range: forced.range,
-                pattern: forced.pattern.clone(),
-            });
-        let options = crate::ChecksumOptions {
-            algorithm,
-            range: cs_params.range,
-            little_endian_output: cs_params.little_endian,
-            forced_range,
-            exclude_ranges: cs_params.exclude_ranges.clone(),
-            target_exclude: None,
+        let options = checksum_options(cs_params)?;
+        let placement = match cs_params.target {
+            ChecksumTarget::Place(placement) => Some(placement),
+            ChecksumTarget::None | ChecksumTarget::File(_) => None,
         };
-        let target = self.resolve_checksum_target(hexfile, &cs_params.target);
-        let result = self.wrap_error(&opt, hexfile.checksum(&options, &target))?;
+        let result = self.wrap_error(&opt, hexfile.checksum(&options, placement))?;
         if let ChecksumTarget::File(path) = &cs_params.target {
-            let formatted = result
-                .iter()
-                .map(|b| format!("0x{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(", ");
-            self.wrap_error(&opt, std::fs::write(path, formatted))?;
+            self.wrap_error(&opt, write_checksum_text(path, &result))?;
         }
         Ok(result)
-    }
-
-    fn resolve_checksum_target(
-        &self,
-        hexfile: &crate::HexFile,
-        target: &ChecksumTarget,
-    ) -> crate::ChecksumTarget {
-        match target {
-            ChecksumTarget::None => crate::ChecksumTarget::None,
-            ChecksumTarget::Address(addr) => crate::ChecksumTarget::Address(*addr),
-            ChecksumTarget::Append => crate::ChecksumTarget::Append,
-            ChecksumTarget::Begin => {
-                if let Some(start) = hexfile.min_address() {
-                    crate::ChecksumTarget::Address(start)
-                } else {
-                    crate::ChecksumTarget::Append
-                }
-            }
-            ChecksumTarget::Prepend => crate::ChecksumTarget::Prepend,
-            ChecksumTarget::OverwriteEnd => crate::ChecksumTarget::OverwriteEnd,
-            ChecksumTarget::File(path) => crate::ChecksumTarget::File(path.clone()),
-        }
     }
 
     fn apply_data_processing(
@@ -395,33 +351,10 @@ impl Args {
     }
 }
 
-fn execute_compat_log_commands(
-    hexfile: &mut crate::HexFile,
-    commands: &[LogCommand],
-) -> Result<(), CliError> {
-    for command in commands {
-        match &command.kind {
-            LogCommandKind::FileOpen(path) => {
-                return Err(CliError::Unsupported(format!(
-                    "/L: FileOpen is not supported for command-line export (line {}): {}",
-                    command.line,
-                    path.display()
-                )));
-            }
-            LogCommandKind::FileClose | LogCommandKind::FileNew => {
-                *hexfile = crate::HexFile::new();
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn random_fill_bytes(range: crate::AddressRange) -> Result<Vec<u8>, crate::OpsError> {
-    let len = materialized_range_len(range, "random fill range")?;
-    if len == 0 {
-        return Ok(Vec::new());
-    }
+fn random_fill_segment(range: crate::AddressRange) -> Result<Segment, crate::OpsError> {
+    let len = u32::try_from(range.length()).map_err(|_| crate::OpsError::AddressOverflow {
+        address: range.start(),
+    })?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -432,36 +365,11 @@ fn random_fill_bytes(range: crate::AddressRange) -> Result<Vec<u8>, crate::OpsEr
         if seed == 0 { 0x9E3779B97F4A7C15 } else { seed }
     };
 
-    let mut out = Vec::with_capacity(len);
-    for _ in 0..len {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        out.push((state >> 32) as u8);
-    }
-    Ok(out)
-}
-
-fn materialized_range_len(
-    range: crate::AddressRange,
-    context: &str,
-) -> Result<usize, crate::OpsError> {
-    if range.extends_past_address_space() {
-        return Err(crate::OpsError::AddressOverflow(format!(
-            "{context} {:#X}-{:#X} requests end {:#X} beyond u32 address space",
-            range.start(),
-            range.end(),
-            range.requested_end()
-        )));
-    }
-    if range.length() > u32::MAX as u64 {
-        return Err(crate::OpsError::AddressOverflow(format!(
-            "{context} length {} cannot be materialized",
-            range.length()
-        )));
-    }
-    usize::try_from(range.length()).map_err(|_| {
-        crate::OpsError::AddressOverflow(format!(
-            "{context} length {} exceeds usize",
-            range.length()
-        ))
-    })
+    let data = (0..len)
+        .map(|_| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 32) as u8
+        })
+        .collect();
+    Ok(Segment::new(range.start(), data)?)
 }

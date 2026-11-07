@@ -1,14 +1,33 @@
 mod checksum;
 mod error;
 mod filter;
-mod log;
 mod transform;
 
-pub use checksum::{ChecksumAlgorithm, ChecksumJob, ChecksumOptions, ChecksumTarget, ForcedRange};
+pub use checksum::{ChecksumAlgorithm, ChecksumOptions, ForcedRange};
 pub use error::OpsError;
 pub use filter::{DEFAULT_DENSE_SPAN_LIMIT, FillOptions, MergeMode, MergeOptions};
-pub use log::{
-    LogCommand, LogCommandKind, LogError, execute_log_commands, execute_log_file,
-    parse_log_commands,
-};
 pub use transform::{AlignOptions, BankedMapOptions, RemapOptions, SwapMode};
+
+use crate::AddressRange;
+
+/// Length of `range` as an allocation size; a range covering the whole 4 GiB address
+/// space cannot be held in one segment.
+pub(crate) fn materialized_len(range: AddressRange) -> Result<usize, OpsError> {
+    u32::try_from(range.length())
+        .map(|len| len as usize)
+        .map_err(|_| OpsError::AddressOverflow {
+            address: range.start(),
+        })
+}
+
+/// `len` bytes of `pattern` repeated, starting `phase` bytes into the pattern.
+pub(crate) fn pattern_bytes(pattern: &[u8], phase: usize, len: usize) -> Vec<u8> {
+    let skip = phase.checked_rem(pattern.len()).unwrap_or(0);
+    pattern
+        .iter()
+        .cycle()
+        .skip(skip)
+        .take(len)
+        .copied()
+        .collect()
+}

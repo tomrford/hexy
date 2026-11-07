@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
+
 mod common;
 
 use common::{assert_success, run_hexy, temp_dir, write_file};
@@ -11,9 +13,9 @@ fn run_checksum_hex(input: &[u8], cs_arg: &str) -> hexy_core::HexFile {
 
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
-        cs_arg.to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        cs_arg.to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_path.display().to_string(),
     ];
 
@@ -150,9 +152,9 @@ fn test_cli_checksum_forced_range_keeps_real_data_outside_range_virtual() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x2000", merge.display()),
-        "/CS0:@append;!0x1000-0x1001#FF".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CS0:@append;!0x1000-0x1001#FF".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_path.display().to_string(),
     ];
 
@@ -242,7 +244,7 @@ fn test_cli_checksum_invalid_forced_pattern() {
 
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
-        "/CS0:@append;!0x1000-0x1001#F".to_string(),
+        "/CS0:@append;!0x1000-0x1001#F".to_owned(),
     ];
 
     let output = run_hexy(&args);
@@ -258,10 +260,10 @@ fn test_cli_checksum_multi_sequential_dependency() {
 
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
-        "/CSM0:@0x1000".to_string(),
-        "/CSM0:@append".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CSM0:@0x1000".to_owned(),
+        "/CSM0:@append".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_path.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -286,11 +288,11 @@ fn test_cli_checksum_multi_mixed_targets_with_file() {
 
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
-        "/CSM0:@0x1000".to_string(),
-        "/CSM0:@append".to_string(),
+        "/CSM0:@0x1000".to_owned(),
+        "/CSM0:@append".to_owned(),
         format!("/CSMR0:{}", csum_path.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_path.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -315,8 +317,8 @@ fn test_cli_checksum_reject_mix_legacy_and_multi() {
 
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
-        "/CS0:@append".to_string(),
-        "/CSM0:@append".to_string(),
+        "/CS0:@append".to_owned(),
+        "/CSM0:@append".to_owned(),
     ];
     let output = run_hexy(&args);
     assert!(!output.status.success());

@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use crate::types::PySegment;
 use crate::util::{
-    parse_error, parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_range_arg,
-    parse_ranges_arg, parse_srec_type, parse_swap_mode, py_bytes, value_error,
+    parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_range_arg, parse_ranges_arg,
+    parse_srec_type, parse_swap_mode, py_bytes, value_error,
 };
 
 #[pyclass(name = "HexFile", skip_from_py_object)]
@@ -40,7 +40,7 @@ impl PyHexFile {
     #[pyo3(signature = (data, base_address=None))]
     fn from_binary(data: &[u8], base_address: Option<u32>) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_binary(data, base_address.unwrap_or(0)).map_err(parse_error)?,
+            inner: parse_binary(data, base_address.unwrap_or(0)).map_err(value_error)?,
         })
     }
 
@@ -48,28 +48,28 @@ impl PyHexFile {
     #[pyo3(signature = (data, base_address=None))]
     fn from_hex_ascii(data: &[u8], base_address: Option<u32>) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_hex_ascii(data, base_address.unwrap_or(0)).map_err(parse_error)?,
+            inner: parse_hex_ascii(data, base_address.unwrap_or(0)).map_err(value_error)?,
         })
     }
 
     #[staticmethod]
     fn from_intel_hex(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_intel_hex(data).map_err(parse_error)?,
+            inner: parse_intel_hex(data).map_err(value_error)?,
         })
     }
 
     #[staticmethod]
     fn from_intel_hex_16bit(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_intel_hex_16bit(data).map_err(parse_error)?,
+            inner: parse_intel_hex_16bit(data).map_err(value_error)?,
         })
     }
 
     #[staticmethod]
     fn from_srec(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_srec(data).map_err(parse_error)?,
+            inner: parse_srec(data).map_err(value_error)?,
         })
     }
 
@@ -83,7 +83,7 @@ impl PyHexFile {
     #[staticmethod]
     fn from_file_bytes(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: HexFile::from_file_bytes(data).map_err(parse_error)?,
+            inner: HexFile::from_file_bytes(data).map_err(value_error)?,
         })
     }
 
@@ -163,16 +163,18 @@ impl PyHexFile {
     }
 
     #[pyo3(signature = (*, fill=0xFF))]
-    fn to_bytes(&self, py: Python<'_>, fill: u8) -> Option<Py<PyBytes>> {
-        self.inner
-            .as_contiguous(fill)
-            .map(|segment| py_bytes(py, segment.data()))
+    fn to_bytes(&self, py: Python<'_>, fill: u8) -> PyResult<Option<Py<PyBytes>>> {
+        let contiguous = self
+            .inner
+            .as_contiguous(fill, u64::MAX)
+            .map_err(value_error)?;
+        Ok(contiguous.map(|segment| py_bytes(py, segment.data())))
     }
 
     #[pyo3(signature = (*, fill_gaps=None))]
     fn to_binary(&self, py: Python<'_>, fill_gaps: Option<u8>) -> PyResult<Py<PyBytes>> {
         let data =
-            write_binary(&self.inner, &BinaryWriteOptions { fill_gaps }).map_err(parse_error)?;
+            write_binary(&self.inner, &BinaryWriteOptions { fill_gaps }).map_err(value_error)?;
         Ok(py_bytes(py, &data))
     }
 
@@ -190,7 +192,7 @@ impl PyHexFile {
                 mode: parse_intel_mode(mode)?,
             },
         )
-        .map_err(parse_error)?;
+        .map_err(value_error)?;
         Ok(py_bytes(py, &data))
     }
 
@@ -208,7 +210,7 @@ impl PyHexFile {
                 record_type: parse_srec_type(record_type)?,
             },
         )
-        .map_err(parse_error)?;
+        .map_err(value_error)?;
         Ok(py_bytes(py, &data))
     }
 
@@ -320,7 +322,7 @@ impl PyHexFile {
 
     #[pyo3(signature = (*, fill=0xFF))]
     fn fill_gaps(&mut self, fill: u8) -> PyResult<()> {
-        self.inner.fill_gaps(fill).map_err(value_error)
+        self.inner.fill_gaps(fill, u64::MAX).map_err(value_error)
     }
 
     #[pyo3(signature = (other, *, mode=None, offset=0, range=None))]
@@ -361,9 +363,8 @@ impl PyHexFile {
     }
 
     fn swap(&mut self, mode: &str) -> PyResult<()> {
-        self.inner
-            .swap_bytes(parse_swap_mode(mode)?)
-            .map_err(value_error)
+        self.inner.swap_bytes(parse_swap_mode(mode)?);
+        Ok(())
     }
 
     #[pyo3(signature = (range, target=None))]

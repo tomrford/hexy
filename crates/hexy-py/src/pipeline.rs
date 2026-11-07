@@ -68,13 +68,16 @@ fn apply_op(hexfile: &mut HexFile, op: &PipelineOp) -> PyResult<()> {
             hexfile.filter_ranges(ranges);
             Ok(())
         }
-        PipelineOp::FillGaps(fill) => hexfile.fill_gaps(*fill).map_err(value_error),
+        PipelineOp::FillGaps(fill) => hexfile.fill_gaps(*fill, u64::MAX).map_err(value_error),
         PipelineOp::Align(options) => hexfile.align(options).map_err(value_error),
         PipelineOp::Split(size) => {
             hexfile.split(*size);
             Ok(())
         }
-        PipelineOp::Swap(mode) => hexfile.swap_bytes(*mode).map_err(value_error),
+        PipelineOp::Swap(mode) => {
+            hexfile.swap_bytes(*mode);
+            Ok(())
+        }
     }
 }
 

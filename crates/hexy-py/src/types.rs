@@ -70,16 +70,6 @@ impl PyAddressRange {
         self.inner.length()
     }
 
-    #[getter]
-    fn addressable_length(&self) -> u64 {
-        self.inner.addressable_length()
-    }
-
-    #[getter]
-    fn extends_past_address_space(&self) -> bool {
-        self.inner.extends_past_address_space()
-    }
-
     fn contains(&self, addr: u32) -> bool {
         self.inner.contains(addr)
     }
@@ -100,7 +90,7 @@ impl PySegment {
     #[new]
     fn new(start: u32, data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: Segment::try_new(start, data.to_vec()).map_err(value_error)?,
+            inner: Segment::new(start, data.to_vec()).map_err(value_error)?,
         })
     }
 

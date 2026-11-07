@@ -1,18 +1,7 @@
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::expect_used,
-        clippy::panic,
-        clippy::str_to_string,
-        clippy::todo,
-        clippy::unimplemented,
-        clippy::unwrap_used
-    )
-)]
+#![allow(clippy::print_stderr)] // the CLI reports errors on stderr
 
 use std::process::ExitCode;
 
-pub use hexy_core::ops::{LogError, execute_log_commands, parse_log_commands};
 pub use hexy_core::*;
 
 mod args;
