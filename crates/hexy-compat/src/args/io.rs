@@ -349,8 +349,16 @@ pub(super) fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::
 }
 
 /// Write bytes as the `0xAA ,0xBB` text HexView produces for `/DP` output files.
-pub(super) fn write_data_processing_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    std::fs::write(path, hex_list(bytes, " ,"))
+pub(super) fn write_data_processing_text(
+    path: &Path,
+    bytes: &[u8],
+    crlf: bool,
+) -> Result<(), std::io::Error> {
+    let mut text = hex_list(bytes, " ,");
+    if crlf {
+        text.push_str("\r\n");
+    }
+    std::fs::write(path, text)
 }
 
 fn hex_list(bytes: &[u8], separator: &str) -> String {

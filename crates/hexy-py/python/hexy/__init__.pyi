@@ -15,6 +15,11 @@ SignatureMethod = Literal[
     "rsa-pkcs1v15-sha256", "rsa-pss-sha256", "ed25519ph", "ed25519-sha512"
 ]
 Key = bytes | str
+MacMethod = Literal[
+    "hmac-md5", "hmac-sha1", "hmac-ripemd160", "hmac-sha256", "cmac-aes128"
+]
+AesMode = Literal["ecb", "cbc", "ctr", "gcm"]
+AesPadding = Literal["pkcs7", "ansix923", "rfc1321"]
 
 class AddressRange:
     def __init__(
@@ -158,6 +163,50 @@ class HexFile:
         it: HIS or PKCS #1 hex text, PKCS #8 or PKCS #1 PEM or DER for RSA; a hex
         seed or PKCS #8 PEM or DER for Ed25519. With `placement`, the signature is
         also written into the image."""
+    def mac(
+        self,
+        method: MacMethod,
+        key: bytes,
+        *,
+        metadata: bool = False,
+        placement: int | Placement | None = None,
+    ) -> bytes:
+        """HMAC or CMAC over the block data, as `sign` covers it (`/DP`). HMAC uses
+        at most the first 64 bytes of `key`; CMAC needs a 16-byte key."""
+    def xor(self, key: bytes | None = None) -> None:
+        """XOR the data with `key`, repeated across the blocks; without a key, invert
+        the data (`/DP1`)."""
+    def encrypt(
+        self,
+        mode: AesMode,
+        key: bytes,
+        *,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+        aad: bytes | None = None,
+        placement: int | Placement | None = None,
+    ) -> bytes | None:
+        """Encrypt with AES as HexView does (`/DP`); the key length picks AES-128,
+        -192 or -256. ECB, CBC and CTR encrypt each block on its own, after adding
+        `padding`; without `iv`, CBC and CTR take the first 16 bytes of the first
+        block as the IV and leave them in place. GCM encrypts all blocks as one
+        stream with `iv` as the nonce and `aad` as additional data, and returns the
+        tag, which `placement` also writes into the image; each block takes the
+        whole 16-byte units done by its end and the last block the rest."""
+    def decrypt(
+        self,
+        mode: AesMode,
+        key: bytes,
+        *,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+        aad: bytes | None = None,
+        tag: bytes | RangeLike | None = None,
+    ) -> None:
+        """Reverse `encrypt` (`/DP`); padding is checked and removed, except after
+        CTR. GCM checks `tag`, given as bytes or as an image range at the start or
+        end of a block that stays in place; on a mismatch it raises `ValueError`,
+        and the data stays decrypted."""
     def verify_signature(
         self,
         method: SignatureMethod,
@@ -177,13 +226,14 @@ class PipelineResult:
     def checksums(self) -> list[bytes]: ...
     @property
     def data_processing(self) -> bytes | None:
-        """The data processing output, such as a signature."""
+        """The data processing output: a signature, MAC or AES-GCM tag."""
 
 class Pipeline:
     """HexView-ordered recipe: each method configures one stage, and `apply` runs
     the configured stages in HexView order, whatever order they were set in.
-    Methods for single stages replace earlier settings; `dspic_*`, `cut`, `merge`
-    and `checksum` add to their stage. Configured data stages join adjacent data
+    Methods for single stages replace earlier settings; `sign`, `mac`, `xor`,
+    `encrypt` and `decrypt` share the data processing stage; `dspic_*`, `cut`,
+    `merge` and `checksum` add to their stage. Configured data stages join adjacent data
     into one block; pass `source.normalized()` to also join it on input, as
     HexView does when it loads a file."""
 
@@ -242,6 +292,39 @@ class Pipeline:
         placement: int | Placement | None = None,
     ) -> None:
         """Sign after the checksum stages (`/DP`); see `HexFile.sign`."""
+    def mac(
+        self,
+        method: MacMethod,
+        key: bytes,
+        *,
+        metadata: bool = False,
+        placement: int | Placement | None = None,
+    ) -> None:
+        """MAC after the checksum stages (`/DP`); see `HexFile.mac`."""
+    def xor(self, key: bytes | None = None) -> None:
+        """XOR after the checksum stages (`/DP`); see `HexFile.xor`."""
+    def encrypt(
+        self,
+        mode: AesMode,
+        key: bytes,
+        *,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+        aad: bytes | None = None,
+        placement: int | Placement | None = None,
+    ) -> None:
+        """Encrypt after the checksum stages (`/DP`); see `HexFile.encrypt`."""
+    def decrypt(
+        self,
+        mode: AesMode,
+        key: bytes,
+        *,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+        aad: bytes | None = None,
+        tag: bytes | RangeLike | None = None,
+    ) -> None:
+        """Decrypt after the checksum stages (`/DP`); see `HexFile.decrypt`."""
     def verify(
         self,
         method: SignatureMethod,

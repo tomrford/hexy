@@ -15,7 +15,7 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Expect numeric values to accept decimal, `0x` hex, trailing `h` hex, `0b` or trailing `b` binary, and `_` or `.` separators. `/XI`, `/XS`, `/XA`, `/SB` and `/RB` values follow HexView instead: `0x` hex or decimal digits up to the first other character, and no digits reads as 0.
 - If several output format flags are given, the last one wins.
 - Ranges that are empty or reach past `0xFFFFFFFF` are skipped and a reversed range ends a range list, as in HexView; malformed range text is an error.
-- Data is kept as blocks: adjacent data forms one block after every stage that changes data, except that `/SB` pieces stay separate blocks until a checksum or signature is placed. `/RB`, `/XSB` and `/DP` metadata work on blocks.
+- Data is kept as blocks: adjacent data forms one block after every stage that changes data, except that `/SB` pieces stay separate blocks until a checksum or data processing output is placed. `/RB`, `/XSB` and `/DP` work on blocks.
 
 ## Execution order
 
@@ -38,7 +38,7 @@ The external compatibility target also supports additional proprietary or OEM-sp
 15. Swap bytes with `/SWAPWORD` or `/SWAPLONG`.
 16. Remove small blocks with `/RB`.
 17. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
-18. Apply supported data processing (signing) with `/DP`.
+18. Apply supported data processing (signing, MACs, XOR, AES) with `/DP`.
 19. Apply supported signature verification with `/SV`.
 20. Export with `/X...` and `-o`.
 
@@ -205,19 +205,22 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 - Add `;!forced_range[#fill]` to force bytes to exist over a range before calculating.
 - Add `/exclude_range` after the limited range to subtract specific sub-ranges.
 
-## Signing and verification
+## Data processing and verification
 
 `/DPn[:@placement]:[param1][,param2,param3][;param4][#NAME=value]...`
-- Run after checksum operations. Supported methods are `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`, `/DP47`, `/DP48`, `/DP49`; other HexView methods are rejected before any output is written, and unknown numbers fail when the stage runs.
-- param1 is the key: hex text inline (for example a HIS `FF49...` key or an Ed25519 seed), `file,section,key` to read it from an INI file, or a key file (hex text, PEM or DER). See [data processing](../../../docs/signatures.md) for the key formats.
-- param4 is the output file. Without it, the signature goes to HexView's default file, such as `SignD_SHA256.RSA` for `/DP32`. The file holds `0xAA ,0xBB` text.
-- Everything after the first `#` is options (`#SALT=`, `#IV=`, `#AUTH=`, `#TAG=`, `#LZSS=`), so `key#IV=00;sig.txt` has no param4. The signing methods ignore these options with a warning; `#SALT` with `/DP38` and `/DP39` is not supported yet.
+- Run after checksum operations. Supported methods: `/DP0` (no action), `/DP1` (XOR), AES `/DP2`/`/DP3` (ECB), `/DP11`/`/DP12` (CBC), `/DP53`/`/DP54` (CTR) and `/DP55`/`/DP56` (GCM), HMAC `/DP4`-`/DP7`, `/DP13`, `/DP14`, `/DP30`, `/DP31`, CMAC `/DP44`, `/DP45`, and signatures `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`-`/DP49`. Other HexView methods are rejected before any output is written, and unknown numbers fail when the stage runs. See [data processing](../../../docs/data-processing.md) for the method table.
+- param1 is the key: hex text inline (for example a HIS `FF49...` RSA key, a HIS `FF5B...` MAC key, an AES key or an Ed25519 seed), `file,section,key` to read it from an INI file, or a key file (hex text, PEM or DER; symmetric keys must be hex text). See [data processing](../../../docs/data-processing.md) for the key formats.
+- For signatures and MACs, param4 is the output file. Without it, the output goes to HexView's default file, such as `SignD_SHA256.RSA` for `/DP32` or `SignD_SHA1.txt` for `/DP4`. The file holds `0xAA ,0xBB` text.
+- Everything after the first `#` is options (`#SALT=`, `#IV=`, `#AUTH=`, `#TAG=`, `#LZSS=`), so `key#IV=00;sig.txt` has no param4. Methods ignore options they do not use, with a warning; `#SALT` with `/DP38` and `/DP39` is not supported yet.
+- `/DP1` XORs the data with param1, repeated across the blocks; without a hex key it inverts the data.
+- AES: the key length picks AES-128, -192 or -256. param4 is the padding (`PKCS7`, `ANSIX.923` or `RFC1321`; the first four letters count). ECB, CBC and CTR process and pad each block on its own; without padding, ECB and CBC need each block to be a multiple of 16 bytes. `#IV=hex` is the CBC or CTR IV, padded with zeros; without it the first 16 bytes of the first block are the IV and stay unencrypted.
+- AES-GCM encrypts all blocks as one stream: `#IV` (required) is the nonce, `#AUTH=hex` or a binary file adds authenticated data, and `/DP55` writes the 16-byte tag to `#TAG=file` and to `@placement`. `/DP56` checks `#TAG=hex` or `#TAG=@address,length`, image bytes at the start or end of a block that stay in place.
 - Relative paths, including the output file, resolve against the input file's folder, or the working directory without a positional input file.
-- The metadata methods (`/DP33`, `/DP39`, `/DP47`, `/DP49`) sign each block's big-endian start address and length followed by its data.
-- A failed `/DP` is reported, but the remaining stages still run and the export is still written; the exit status is non-zero.
+- The metadata methods (`/DP5`, `/DP7`, `/DP14`, `/DP31`, `/DP33`, `/DP39`, `/DP45`, `/DP47`, `/DP49`) cover each block's big-endian start address and length followed by its data.
+- A failed `/DP` is reported, but the remaining stages still run and the export is still written; the exit status is non-zero. A cipher that fails keeps the blocks it already processed.
 
 `placement`
-- Use the same placement targets as checksums except file targets are invalid for in-image placement. The output file is written as well.
+- Use the same placement targets as checksums except file targets are invalid for in-image placement. The output file is written as well. XOR and AES ECB, CBC and CTR have no output, so they ignore placement.
 
 `/SVn:keyinfo!signatureinfo`
 - Verify a signature after `/DP`, so a placed signature is part of the verified data. Supported methods are `/SV4` through `/SV11`.

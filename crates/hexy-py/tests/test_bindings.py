@@ -329,3 +329,43 @@ def test_signing_rejects_empty_ed25519_key_material():
                 source.sign(method, key, placement="append")
     assert source.read(0x1000, 2) == b"\x01\x02"
     assert source.total_bytes == 2
+
+
+AES_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
+
+
+def test_symmetric_methods_match_hexview():
+    gaps = _from_pats(
+        (0x1000, 0x100, 1), (0x1180, 0x80, 2), (0x1301, 0x3E, 3), (0x2000, 6, 4)
+    )
+    # HexView 1.15.2 /DP4 and /DP44 over gaps.hex.
+    assert gaps.mac("hmac-sha1", AES_KEY) == bytes.fromhex(
+        "3A8E6287A8443A03FC254B861702942BDB06E871"
+    )
+    assert gaps.mac("cmac-aes128", AES_KEY) == bytes.fromhex(
+        "8609A186AB2B6FA9165CBFEC95D179DF"
+    )
+
+    # HexView 1.15.2 /DP11 without #IV: the first 16 bytes stay as the IV.
+    source = _from_pats((0x1000, 0x40, 1), (0x2000, 0x20, 2))
+    encrypted = source.copy()
+    encrypted.encrypt("cbc", AES_KEY, padding="pkcs7")
+    assert encrypted.read(0x1010, 16) == bytes.fromhex(
+        "f436b5ea403cd5018f7ae5880ebae1b2"
+    )
+    assert encrypted.read(0x2000, 16) == bytes.fromhex(
+        "d5c6df82d76aa57c6438b5b074c613e7"
+    )
+    encrypted.decrypt("cbc", AES_KEY, padding="pkcs7")
+    assert encrypted.read(0x1000, 0x40) == source.read(0x1000, 0x40)
+    assert encrypted.read(0x2000, 0x20) == source.read(0x2000, 0x20)
+
+    pipeline = hexy.Pipeline()
+    pipeline.encrypt("gcm", AES_KEY, iv=bytes(12), aad=b"AB", placement="append")
+    result = pipeline.apply(source)
+    tagged = result.hexfile
+    assert tagged.read(0x2020, 16) == result.data_processing
+    tagged.decrypt("gcm", AES_KEY, iv=bytes(12), aad=b"AB", tag="0x2020-0x202F")
+    assert tagged.read(0x2000, 0x20) == source.read(0x2000, 0x20)
+    with pytest.raises(ValueError):
+        tagged.decrypt("gcm", AES_KEY, iv=bytes(12), tag=bytes(16))

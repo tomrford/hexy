@@ -2,7 +2,7 @@
 //!
 //! Each key type has `from_key_file`, which takes the content of a key file or key
 //! text: hex text (see [`decode_hex_text`]), PEM, or binary DER. Some DER forms are
-//! accepted here that HexView rejects; `docs/signatures.md` lists them.
+//! accepted here that HexView rejects; `docs/data-processing.md` lists them.
 
 use base64ct::{Base64, Encoding};
 use ed25519_dalek::{SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
@@ -350,9 +350,92 @@ impl Ed25519PublicKey {
     }
 }
 
+/// The bytes of hex text; HexView reads symmetric keys only from hex text.
+fn hex_key(content: &[u8], kind: &str) -> Result<Vec<u8>, ProcessingError> {
+    decode_hex_text(content)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| invalid_key(kind))
+}
+
+/// A HIS MAC key: `FF59` or `FF5B`, an ASN.1 length, then tag `D3`, an ASN.1 length and
+/// the key. `None` when the bytes do not start with a whole HIS item, so that they are
+/// read as a plain key.
+fn his_mac_key(bytes: &[u8]) -> Option<Result<Vec<u8>, ProcessingError>> {
+    let Some((0xFF, rest)) = bytes.split_first() else {
+        return None;
+    };
+    let (0x59 | 0x5B, value, rest) = read_tlv(rest)? else {
+        return None;
+    };
+    Some(match read_tlv(value) {
+        Some((0xD3, key, [])) if rest.is_empty() && !key.is_empty() => Ok(key.to_vec()),
+        _ => Err(invalid_key("HIS MAC key")),
+    })
+}
+
+/// A key for HMAC or CMAC.
+#[derive(Debug, Clone)]
+pub struct MacKey(pub(super) Vec<u8>);
+
+impl MacKey {
+    pub fn new(key: &[u8]) -> Result<Self, ProcessingError> {
+        if key.is_empty() {
+            return Err(invalid_key("empty MAC key"));
+        }
+        Ok(Self(key.to_vec()))
+    }
+
+    /// A HIS MAC key in hex text, or any other hex text as the key bytes.
+    pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
+        let bytes = hex_key(content, "MAC key")?;
+        his_mac_key(&bytes).unwrap_or(Ok(bytes)).map(Self)
+    }
+}
+
+/// An AES-128, AES-192 or AES-256 key.
+#[derive(Debug, Clone)]
+pub struct AesKey(pub(super) Vec<u8>);
+
+impl AesKey {
+    /// A 16, 24 or 32-byte key.
+    pub fn new(key: &[u8]) -> Result<Self, ProcessingError> {
+        if !matches!(key.len(), 16 | 24 | 32) {
+            return Err(ProcessingError::InvalidKey(format!(
+                "AES key must be 16, 24 or 32 bytes, not {}",
+                key.len()
+            )));
+        }
+        Ok(Self(key.to_vec()))
+    }
+
+    /// The key in hex text.
+    pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
+        Self::new(&hex_key(content, "AES key")?)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RsaPrivateKey, decode_hex_text};
+    use super::{MacKey, RsaPrivateKey, decode_hex_text};
+
+    /// HexView 1.15.2 `/DP4` keys: a whole `FF59`/`FF5B` item is a HIS key, a longer
+    /// length makes the text a plain key, and a malformed HIS item fails.
+    #[test]
+    fn test_mac_key_reads_his_keys() {
+        let key = |text: &str| MacKey::from_key_file(text.as_bytes()).map(|key| key.0);
+        let plain = "00112233445566778899aabbccddeeff";
+        let bytes = decode_hex_text(plain.as_bytes()).unwrap();
+        assert_eq!(key(&format!("FF5B12D310{plain}")).unwrap(), bytes);
+        assert_eq!(key(&format!("FF5912D310{plain}")).unwrap(), bytes);
+        let overlong = format!("FF5B13D310{plain}");
+        assert_eq!(
+            key(&overlong).unwrap(),
+            decode_hex_text(overlong.as_bytes()).unwrap()
+        );
+        assert!(key(&format!("FF5B12D310{plain}AABB")).is_err());
+        assert!(key(&format!("FF5B12D410{plain}")).is_err());
+        assert!(key("").is_err());
+    }
 
     /// HexView reads PEM with base64 lines of any length (probed with 76 columns).
     #[test]

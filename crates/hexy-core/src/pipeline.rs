@@ -190,7 +190,8 @@ impl Pipeline {
         hexfile: &mut HexFile,
         output: &mut PipelineOutput,
     ) -> Result<(), PipelineError> {
-        self.apply(stage, hexfile, output)?;
+        // A failed data processing stage can leave data it already replaced.
+        let result = self.apply(stage, hexfile, output);
         let places_data = match stage {
             Stage::Split | Stage::RemoveSmallBlocks | Stage::Swap | Stage::Verify => false,
             Stage::AddressMap => self.address_map.is_some(),
@@ -207,15 +208,14 @@ impl Pipeline {
                 .checksums
                 .get(index)
                 .is_some_and(|stage| stage.placement.is_some()),
-            Stage::DataProcessing => self
-                .data_processing
-                .as_ref()
-                .is_some_and(|stage| stage.placement.is_some()),
+            Stage::DataProcessing => self.data_processing.as_ref().is_some_and(|stage| {
+                stage.placement.is_some() || stage.operation.transforms_data()
+            }),
         };
         if places_data {
             hexfile.normalize();
         }
-        Ok(())
+        result
     }
 
     fn apply(

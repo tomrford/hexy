@@ -156,7 +156,8 @@ impl Args {
                     .data_processing
                     .as_ref()
                     .map(|params| data_processing_stage(params, dir, provider))
-                    .transpose()?;
+                    .transpose()?
+                    .flatten();
             }
             Stage::Verify => {
                 pipeline.verify = self
@@ -281,9 +282,9 @@ impl Args {
             }
             Stage::DataProcessing => {
                 if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing)
-                    && let Some(path) = data_processing_output(dp, dir)
+                    && let Some((path, crlf)) = data_processing_output(dp, dir)
                 {
-                    write_data_processing_text(&path, bytes)
+                    write_data_processing_text(&path, bytes, crlf)
                         .map_err(|e| CliError::Other(format!("/DP{}: {e}", dp.method)))?;
                 }
             }

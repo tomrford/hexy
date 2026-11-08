@@ -65,10 +65,10 @@ Compat flags execute in a fixed pipeline order, not in argument order. Steps 2-1
 7. Address range filter (`/AR`)
 8. Collapse (`/FA`), align (`/AD`, `/AL`, `/AF`), split (`/SB`), swap (`/SWAPWORD`, `/SWAPLONG`), remove small blocks (`/RB`)
 9. Checksum (`/CS`, `/CSR`, `/CSM`, `/CSMR`)
-10. Signing (`/DP`) and verification (`/SV`)
+10. Data processing (`/DP`: signing, MACs, XOR and AES) and verification (`/SV`)
 11. Export (`/XI`, `/XS`, `/XN`, `/XSB`, `/XA`, `/XC`, `/XF`, `/XP`) to `-o`, or to the input name with the format's extension; without an export flag nothing is written
 
-The pipeline keeps the image as HexView keeps its blocks: adjacent data forms one block after every stage that changes data, while `/SB` pieces stay separate blocks until a checksum or signature is placed. `/RB`, `/XSB` and the `/DP` metadata methods work on these blocks (`HexFile::blocks`).
+The pipeline keeps the image as HexView keeps its blocks: adjacent data forms one block after every stage that changes data, while `/SB` pieces stay separate blocks until a checksum or data processing output is placed. `/RB`, `/XSB` and `/DP` work on these blocks (`HexFile::blocks`).
 
 See [cli-reference.md](skill/hexy-compat/references/cli-reference.md) for flag syntax and examples.
 
@@ -99,8 +99,8 @@ let pipeline = Pipeline {
 let output = pipeline.run(&mut hf)?;
 ```
 
-See [data processing](docs/signatures.md) for the typed signing and verification API,
-the key formats, and the mapping from compat `/DP` and `/SV` methods.
+See [data processing](docs/data-processing.md) for the typed signing, MAC, XOR, AES and
+verification API, the key formats, and the mapping from compat `/DP` and `/SV` methods.
 
 ## Scope
 
@@ -110,7 +110,7 @@ The repo is structured so additional frontends can consume `hexy-core` without f
 
 ## Python bindings
 
-The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, the main memory operations used by the compat CLI, checksums through `Pipeline`, and signing and verification. Some export formats are core-only today — see [known divergences](docs/known-divergences.md).
+The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, the main memory operations used by the compat CLI, checksums through `Pipeline`, and data processing: signing and verification, MACs, XOR and AES. Some export formats are core-only today — see [known divergences](docs/known-divergences.md).
 
 ```python
 import hexy
@@ -121,7 +121,7 @@ hf.cut(["0x1080-0x108f"])
 hf.write_srec("output.s19")
 ```
 
-Use `Pipeline` for reusable recipes. It wraps `hexy_core::Pipeline`, so it applies stages in the same order as the CLI, not in the order methods are called. `apply` leaves the source unchanged and returns the processed `hexfile` with the `checksums` in stage order and the `data_processing` output, such as a signature. For custom operation ordering, call methods directly on `HexFile`.
+Use `Pipeline` for reusable recipes. It wraps `hexy_core::Pipeline`, so it applies stages in the same order as the CLI, not in the order methods are called. `apply` leaves the source unchanged and returns the processed `hexfile` with the `checksums` in stage order and the `data_processing` output, such as a signature or MAC. For custom operation ordering, call methods directly on `HexFile`.
 
 ```python
 import hexy
