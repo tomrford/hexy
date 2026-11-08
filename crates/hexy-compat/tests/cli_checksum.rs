@@ -311,7 +311,10 @@ fn test_cli_checksum_multi_mixed_targets_with_file() {
 
 #[test]
 fn test_cli_checksum_file_survives_a_later_stage_error() {
-    for (checksum_flag, later_flag) in [("CSM0", "/CSM23"), ("CS0", "/SV4:missing-key.pem!0xF")] {
+    for (checksum_flag, later_flag, exports) in [
+        ("CSM0", "/CSM23", false),
+        ("CS0", "/SV4:missing-key.pem!0xF", true),
+    ] {
         let dir = temp_dir("cli_checksum_before_error");
         let input = dir.join("input.bin");
         let checksum = dir.join("checksum.txt");
@@ -329,7 +332,7 @@ fn test_cli_checksum_file_survives_a_later_stage_error() {
 
         assert!(!output.status.success());
         assert_eq!(std::fs::read_to_string(checksum).unwrap(), "0x00, 0x0A");
-        assert!(!out.exists());
+        assert_eq!(out.exists(), exports);
     }
 }
 

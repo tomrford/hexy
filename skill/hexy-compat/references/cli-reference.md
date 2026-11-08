@@ -38,7 +38,7 @@ The external compatibility target also supports additional proprietary or OEM-sp
 15. Swap bytes with `/SWAPWORD` or `/SWAPLONG`.
 16. Remove small blocks with `/RB`.
 17. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
-18. Apply supported signing with `/DP`.
+18. Apply supported data processing (signing) with `/DP`.
 19. Apply supported signature verification with `/SV`.
 20. Export with `/X...` and `-o`.
 
@@ -207,20 +207,23 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 
 ## Signing and verification
 
-`/DPn[:@placement]:keyinfo[;outfilename]`
-- Run the supported signing subset after checksum operations.
-- Pass the signing key as `keyinfo`; compatibility-target trailing metadata fields are not needed for normal `hexy` use.
-- Supported methods are `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`, `/DP47`, `/DP48`, `/DP49`.
+`/DPn[:@placement]:[param1][,param2,param3][;param4][#NAME=value]...`
+- Run after checksum operations. Supported methods are `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`, `/DP47`, `/DP48`, `/DP49`; other HexView methods are rejected before any output is written, and unknown numbers fail when the stage runs.
+- param1 is the key: hex text inline (for example a HIS `FF49...` key or an Ed25519 seed), `file,section,key` to read it from an INI file, or a key file (hex text, PEM or DER). See [data processing](../../../docs/signatures.md) for the key formats.
+- param4 is the output file. Without it, the signature goes to HexView's default file, such as `SignD_SHA256.RSA` for `/DP32`. The file holds `0xAA ,0xBB` text.
+- Everything after the first `#` is options (`#SALT=`, `#IV=`, `#AUTH=`, `#TAG=`, `#LZSS=`), so `key#IV=00;sig.txt` has no param4. The signing methods ignore these options with a warning; `#SALT` with `/DP38` and `/DP39` is not supported yet.
+- Relative paths, including the output file, resolve against the input file's folder, or the working directory without a positional input file.
+- The metadata methods (`/DP33`, `/DP39`, `/DP47`, `/DP49`) sign each block's big-endian start address and length followed by its data.
+- A failed `/DP` is reported, but the remaining stages still run and the export is still written; the exit status is non-zero.
 
 `placement`
-- Use the same placement targets as checksums except file targets are invalid for in-image placement.
-- Use `;outfilename` to write the signature as `0xAA ,0xBB` text, as HexView does.
-- The metadata methods (`/DP33`, `/DP39`, `/DP47`, `/DP49`) sign each block's big-endian start address and length followed by its data.
+- Use the same placement targets as checksums except file targets are invalid for in-image placement. The output file is written as well.
 
 `/SVn:keyinfo!signatureinfo`
-- Verify a signature after all prior transforms. A signature file may hold raw bytes or `/DP` outfile text.
-- Do not combine `/SV` with a placed `/DP` in the same command; write and verify the signature as separate steps instead.
-- Supported methods are `/SV4` through `/SV11`.
+- Verify a signature after `/DP`, so a placed signature is part of the verified data. Supported methods are `/SV4` through `/SV11`.
+- `keyinfo` takes the `/DP` param1 forms; a private key gives its public key.
+- `signatureinfo` is hex text inline, or a file of hex text such as a `/DP` output file.
+- A failed verification is reported like a failed `/DP`.
 
 ## Output and export
 

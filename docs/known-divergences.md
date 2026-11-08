@@ -18,7 +18,7 @@ Hexy has three public surfaces:
 - binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, C-code writing, and auto-detected file helpers
 - filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, address scaling, banked mapping, and remap operations
 - checksum calculation and writeback through `ChecksumOptions` and a `Placement`
-- signature signing and verification primitives
+- data processing (signing) and signature verification, with typed key readers for HexView's key formats
 - `Pipeline`, the HexView stage order with typed parameters per stage, which the compat CLI and `hexy-py` both drive
 
 ### `hexy-compat`
@@ -30,10 +30,10 @@ Hexy has three public surfaces:
 - address range filtering (`/AR`), cut (`/CR`), fill (`/FR` + `/FP`), merge (`/MO`, `/MT`), fill-all (`/FA`), alignment (`/AD`, `/AL`, `/AF`), split (`/SB`), small-block removal (`/RB`), byte swap (`/SWAPWORD`, `/SWAPLONG`), remap, S08/S12/S12X mapping, and dsPIC transforms
 - checksum methods 0-22 through `/CS*` and `/CSR*`, including the `expdatproc.ini` constant (`/CS16`)
 - additional feature: sequential multi-checksum execution through `/CSM*` and `/CSMR*`
-- signing and verification through the supported `/DP` and `/SV` subset
+- signing and verification through the supported `/DP` and `/SV` subset, with HexView's full `/DP` parameter grammar
 - output through Intel HEX (`/XI`), S-Record (`/XS`), binary (`/XN`), HEX ASCII (`/XA`), C code (`/XC`), Ford Intel HEX (`/XF`), Porsche (`/XP`), and separate binaries (`/XSB`)
 
-`hexy-compat` does not expose every `hexy-core` operation as an independent CLI feature. Library-only surface includes segment append/prepend, arbitrary sparse reads, `to_bytes`-style contiguous inspection, standalone address scaling/unscaling APIs, direct banked-map configuration, direct C-code writer options, and direct signature/key source types.
+`hexy-compat` does not expose every `hexy-core` operation as an independent CLI feature. Library-only surface includes segment append/prepend, arbitrary sparse reads, `to_bytes`-style contiguous inspection, standalone address scaling/unscaling APIs, direct banked-map configuration, direct C-code writer options, and the typed key readers.
 
 ### `hexy-py`
 
@@ -42,9 +42,10 @@ Hexy has three public surfaces:
 - `HexFile`, `Segment`, and `AddressRange`
 - binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file input, in-memory serializers, and file writers for binary, Intel HEX, S-Record, and HEX ASCII
 - segment inspection, sparse reads, contiguous byte export, direct byte writes, normalization, append/prepend segment operations, filter, cut, fill, gap fill, merge, offset, align, split, small-block removal, byte swap, dsPIC transforms, remap, and S08/S12/S12X mapping
-- `Pipeline`, which applies stages in hexy CLI order, including checksum calculation and writeback
+- `Pipeline`, which applies stages in hexy CLI order, including checksum calculation and writeback, signing and verification
+- signing and verification on `HexFile`
 
-`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, signing, verification, C-code export, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
+`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, C-code export, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
 
 ## HexView Compatibility Limits
 
@@ -80,7 +81,15 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 - forced S1 or S2 records (`/XS:len:0`, `/XS:len:1`) for addresses that do not fit: HexView truncates the addresses; hexy rejects the export
 - `/XI` and `/XS` record lengths above 255 crash HexView; hexy rejects them
 - `/CS16` `HexDataString` values with characters other than hex digits: HexView's parse is irregular; hexy rejects them
-- `/DP` without an outfile: HexView's expdatproc also writes the signature text to a default file such as `SignDAL_SHA256.RSA`; hexy does not
+- `/DP` and `/SV` key formats HexView rejects but hexy reads: RSA public keys as SPKI PEM, binary DER or X.509 certificates; RSA private keys as binary PKCS #1 DER; Ed25519 keys with the standard `id-Ed25519` OID, as SPKI, as binary DER or from certificates (see [data processing](signatures.md))
+- `/DP` hex key files of 2999 bytes or more: HexView fails to read them; hexy reads them
+- `/DP` key text with stray characters, such as `12x34`: HexView reads some of them as zero bytes; hexy rejects the text
+- `/DP` option values that are not valid, such as `#IV=00;sig.txt`: HexView ignores options a method does not use; hexy rejects them
+- `/DP` with more than one `;`, or `@placement` without a following `:`: HexView fails the stage and still exports; hexy rejects the command
+- `/DP` output file in a folder that does not exist: HexView writes the default output file instead; hexy fails
+- `/DP` ignores `#IV`, `#AUTH`, `#TAG`, `#LZSS` and `#SALT` for methods that do not use them, as HexView does; hexy also warns. `#SALT` with `/DP38` and `/DP39` is not supported yet
+- `/DP38`, `/DP39`: HexView's RSA-PSS salt is reproducible between runs; hexy uses a random salt, so only verification matches
+- `/DP48`, `/DP49`: HexView signs the SHA-512 digest with Ed25519ph; hexy signs it with plain Ed25519
 - `/CSM*` and `/CSMR*` are hexy extensions; HexView ignores them
 - wildcards (`?`, `*`) in `/MO` and `/MT` file names are not supported
 - `/IA` or `/II2` with a positional input file: HexView ignores the import with a warning; hexy adds `/IA` data to the input and rejects `/II2`

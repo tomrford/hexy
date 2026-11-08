@@ -6,6 +6,7 @@ use crate::{
 };
 
 use super::parse::parse_option;
+use super::processing::{DataProcessingParams, SignatureVerifyParams};
 
 #[derive(Debug, Default)]
 pub struct Args {
@@ -74,7 +75,7 @@ pub struct Args {
     // Multi-checksum: /CSMx[:target] or /CSMRx[:target] (repeatable, ordered)
     pub checksum_multi: Vec<ChecksumParams>,
 
-    // Data processing (signature subset): /DPn[:@placement]:param[,section,key][;outfilename]
+    // Data processing: /DPn[:@placement]:param1[,param2,param3][;param4][#NAME=value]...
     pub data_processing: Option<DataProcessingParams>,
     // Signature verification: /SVn:keyinfo!signatureinfo
     pub signature_verify: Option<SignatureVerifyParams>,
@@ -125,21 +126,6 @@ pub enum ChecksumTarget {
     None,
     Place(Placement),
     File(PathBuf),
-}
-
-#[derive(Debug, Clone)]
-pub struct DataProcessingParams {
-    pub method: u8,
-    pub placement: Option<Placement>,
-    pub key_info: String,
-    pub output_file: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SignatureVerifyParams {
-    pub method: u8,
-    pub key_info: String,
-    pub signature_info: String,
 }
 
 #[derive(Debug, Clone)]

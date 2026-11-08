@@ -15,8 +15,11 @@ File writers mirror the in-memory serializers:
 `Pipeline` is the reusable operation recipe API over `hexy_core::Pipeline`. It
 applies stages in the same order as the compat CLI, not in the order methods are
 called, and `apply` returns the processed `hexfile` with the `checksums` in stage
-order. Signing stages are not exposed yet. For ad-hoc custom ordering, call
-methods directly on `HexFile`.
+order and the `data_processing` output (the signature from `sign`). For ad-hoc
+custom ordering, call methods directly on `HexFile`.
+
+`sign` and `verify_signature` take a key file's content (bytes) or key text (str)
+and read it as HexView does; see `docs/signatures.md` for the key formats.
 
 Range-taking Python APIs use one range string for single-range operations and a
 list of range strings for operations that accept multiple ranges. Each string

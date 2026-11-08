@@ -8,6 +8,7 @@ description = "Core library for hex-file parsing, transforms, and export."
 keywords = ["hex", "intel-hex", "srec", "firmware"]
 
 [dependencies]
+base64ct.workspace = true
 crc.workspace = true
 ed25519-dalek.workspace = true
 md-5.workspace = true

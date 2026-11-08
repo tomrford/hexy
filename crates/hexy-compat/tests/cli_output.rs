@@ -3,17 +3,6 @@
 mod common;
 
 use common::{assert_success, run_hexy, temp_dir, write_file};
-use ed25519_dalek::SigningKey as EdSigningKey;
-use ed25519_dalek::pkcs8::EncodePrivateKey as EdEncodePrivateKey;
-
-fn write_ed25519_private_key(dir: &std::path::Path, prefix: &str) -> std::path::PathBuf {
-    let secret = [0x42u8; 32];
-    let signing = EdSigningKey::from_bytes(&secret);
-    let private_path = dir.join(format!("{prefix}_private.der"));
-    let private_der = signing.to_pkcs8_der().unwrap();
-    write_file(&private_path, private_der.as_bytes());
-    private_path
-}
 
 #[test]
 fn test_cli_intel_hex_forced_extended_segment_rejects_high_address() {
@@ -313,14 +302,13 @@ fn test_cli_porsche_rejects_checksum_multi_before_signature_sidecar() {
     let input = dir.join("input.bin");
     let out = dir.join("out.bin");
     let signature = dir.join("sig.bin");
-    let private_key = write_ed25519_private_key(&dir, "ed");
     write_file(&input, &[0x01, 0x02]);
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
         "/XP".to_owned(),
         "/CSM0:@append".to_owned(),
-        format!("/DP46:{};{}", private_key.display(), signature.display()),
+        format!("/DP46:{};{}", "42".repeat(32), signature.display()),
         "-o".to_owned(),
         out.display().to_string(),
     ];

@@ -2,9 +2,9 @@ pub mod hexfile;
 pub mod io;
 pub mod ops;
 pub mod pipeline;
+pub mod processing;
 pub mod range;
 pub mod segment;
-pub mod signature;
 
 pub use hexfile::{HexFile, Placement};
 pub use io::{
@@ -21,12 +21,12 @@ pub use ops::{
     SwapMode,
 };
 pub use pipeline::{
-    AddressMap, ChecksumStage, DspicOp, Fill, FillData, Merge, Pipeline, PipelineError,
-    PipelineOutput, Stage,
+    AddressMap, ChecksumStage, DataProcessingStage, DspicOp, Fill, FillData, Merge, Pipeline,
+    PipelineError, PipelineOutput, Stage, VerifyStage,
+};
+pub use processing::{
+    DataProcessing, Ed25519PrivateKey, Ed25519PublicKey, ProcessingError, RsaPrivateKey,
+    RsaPublicKey, SignatureMethod, SignatureScheme, SigningKey, VerifyingKey, decode_hex_text,
 };
 pub use range::{AddressRange, AddressRangeError, merge_ranges, parse_compat_ranges, parse_ranges};
 pub use segment::{Segment, SegmentError};
-pub use signature::{
-    SignatureBytesSource, SignatureError, SignatureKeySource, SignatureMethod,
-    SignatureSignOptions, SignatureVerifyOptions,
-};

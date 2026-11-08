@@ -6,10 +6,11 @@ use crate::{
 };
 
 use super::parse_util::{
-    parse_checksum, parse_data_processing_params, parse_dspic_op, parse_hex_bytes,
-    parse_import_param, parse_lenient_number, parse_lenient_ranges, parse_merge_params,
-    parse_number, parse_remap, parse_signature_verify_params, split_option, strip_quotes,
+    parse_checksum, parse_dspic_op, parse_hex_bytes, parse_import_param, parse_lenient_number,
+    parse_lenient_ranges, parse_merge_params, parse_number, parse_remap, split_option,
+    strip_quotes,
 };
+use super::processing::{parse_data_processing, parse_signature_verify};
 use super::types::{Args, MergeParam, OutputFormat, ParseArgError};
 
 type ValueParser = fn(&mut Args, &str, &str) -> Result<bool, ParseArgError>;
@@ -323,7 +324,7 @@ fn parse_data_processing_option(
         let method = method_str
             .parse::<u8>()
             .map_err(|_| ParseArgError::InvalidNumber(method_str.to_owned()))?;
-        args.data_processing = Some(parse_data_processing_params(method, value)?);
+        args.data_processing = Some(parse_data_processing(method, value)?);
         return Ok(true);
     }
     Ok(false)
@@ -338,7 +339,7 @@ fn parse_signature_verify_option(
         let method = method_str
             .parse::<u8>()
             .map_err(|_| ParseArgError::InvalidNumber(method_str.to_owned()))?;
-        args.signature_verify = Some(parse_signature_verify_params(method, value)?);
+        args.signature_verify = Some(parse_signature_verify(method, value));
         return Ok(true);
     }
     Ok(false)
@@ -530,6 +531,12 @@ pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<(), ParseArgErr
     } else {
         let opt_upper = opt.to_ascii_uppercase();
         if parse_output_option(args, &opt_upper, None)? {
+            return Ok(());
+        }
+        // `/DPn` and `/SVn` without parameters fail when their stage runs.
+        if parse_data_processing_option(args, &opt_upper, "")?
+            || parse_signature_verify_option(args, &opt_upper, "")?
+        {
             return Ok(());
         }
         if !parse_simple_flag(args, &opt_upper) {

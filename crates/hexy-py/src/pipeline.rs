@@ -1,6 +1,7 @@
 use hexy_core::{
-    AddressMap, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, DspicOp, Fill,
-    FillData, ForcedRange, Merge, MergeOptions, Pipeline, RemapOptions, SwapMode,
+    AddressMap, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, DataProcessing,
+    DataProcessingStage, DspicOp, Fill, FillData, ForcedRange, Merge, MergeOptions, Pipeline,
+    RemapOptions, SwapMode, VerifyStage,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -8,8 +9,8 @@ use pyo3::types::PyBytes;
 
 use crate::hexfile::PyHexFile;
 use crate::util::{
-    parse_fill_pattern, parse_merge_mode, parse_placement, parse_range_arg, parse_ranges_arg,
-    parse_swap_mode, py_bytes, value_error,
+    key_content, parse_fill_pattern, parse_merge_mode, parse_placement, parse_range_arg,
+    parse_ranges_arg, parse_signature_method, parse_swap_mode, py_bytes, value_error,
 };
 
 /// A `hexy_core::Pipeline`: each method configures one stage, and `apply` runs the
@@ -26,6 +27,8 @@ pub(crate) struct PyPipelineResult {
     hexfile: Py<PyHexFile>,
     #[pyo3(get)]
     checksums: Vec<Py<PyBytes>>,
+    #[pyo3(get)]
+    data_processing: Option<Py<PyBytes>>,
 }
 
 #[pymethods]
@@ -41,6 +44,7 @@ impl PyPipeline {
         Ok(PyPipelineResult {
             hexfile: Py::new(py, PyHexFile { inner: hexfile })?,
             checksums: output.checksums.iter().map(|c| py_bytes(py, c)).collect(),
+            data_processing: output.data_processing.map(|bytes| py_bytes(py, &bytes)),
         })
     }
 
@@ -217,6 +221,46 @@ impl PyPipeline {
                     .unwrap_or_default(),
             },
             placement: placement.map(parse_placement).transpose()?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
+    fn sign(
+        &mut self,
+        method: &str,
+        key: &Bound<'_, PyAny>,
+        metadata: bool,
+        placement: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let method = parse_signature_method(method, metadata)?;
+        let key = method
+            .scheme
+            .signing_key(&key_content(key)?)
+            .map_err(value_error)?;
+        self.inner.data_processing = Some(DataProcessingStage {
+            operation: DataProcessing::Sign { method, key },
+            placement: placement.map(parse_placement).transpose()?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (method, key, signature, *, metadata=false))]
+    fn verify(
+        &mut self,
+        method: &str,
+        key: &Bound<'_, PyAny>,
+        signature: &[u8],
+        metadata: bool,
+    ) -> PyResult<()> {
+        let method = parse_signature_method(method, metadata)?;
+        self.inner.verify = Some(VerifyStage {
+            method,
+            key: method
+                .scheme
+                .verifying_key(&key_content(key)?)
+                .map_err(value_error)?,
+            signature: signature.to_vec(),
         });
         Ok(())
     }

@@ -1,5 +1,5 @@
 use hexy_core::{
-    AlignOptions, BinaryWriteOptions, FillOptions, HexAsciiWriteOptions, HexFile,
+    AlignOptions, BinaryWriteOptions, DataProcessing, FillOptions, HexAsciiWriteOptions, HexFile,
     IntelHexWriteOptions, MergeOptions, RemapOptions, SRecordWriteOptions, parse_binary,
     parse_hex_ascii, parse_intel_hex, parse_intel_hex_16bit, parse_srec, write_binary,
     write_hex_ascii, write_intel_hex, write_srec,
@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 use crate::types::PySegment;
 use crate::util::{
-    parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_range_arg, parse_ranges_arg,
-    parse_srec_type, parse_swap_mode, py_bytes, value_error,
+    key_content, parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_placement,
+    parse_range_arg, parse_ranges_arg, parse_signature_method, parse_srec_type, parse_swap_mode,
+    py_bytes, value_error,
 };
 
 #[pyclass(name = "HexFile", skip_from_py_object)]
@@ -413,6 +414,48 @@ impl PyHexFile {
 
     fn map_star08(&mut self) -> PyResult<()> {
         self.inner.map_star08().map_err(value_error)
+    }
+
+    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
+    fn sign(
+        &mut self,
+        py: Python<'_>,
+        method: &str,
+        key: &Bound<'_, PyAny>,
+        metadata: bool,
+        placement: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyBytes>> {
+        let method = parse_signature_method(method, metadata)?;
+        let key = method
+            .scheme
+            .signing_key(&key_content(key)?)
+            .map_err(value_error)?;
+        let output = self
+            .inner
+            .process_data(
+                &DataProcessing::Sign { method, key },
+                placement.map(parse_placement).transpose()?,
+            )
+            .map_err(value_error)?;
+        Ok(py_bytes(py, &output.unwrap_or_default()))
+    }
+
+    #[pyo3(signature = (method, key, signature, *, metadata=false))]
+    fn verify_signature(
+        &self,
+        method: &str,
+        key: &Bound<'_, PyAny>,
+        signature: &[u8],
+        metadata: bool,
+    ) -> PyResult<()> {
+        let method = parse_signature_method(method, metadata)?;
+        let key = method
+            .scheme
+            .verifying_key(&key_content(key)?)
+            .map_err(value_error)?;
+        self.inner
+            .verify_signature(method, &key, signature)
+            .map_err(value_error)
     }
 
     fn __repr__(&self) -> String {

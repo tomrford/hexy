@@ -82,7 +82,7 @@ hf.cut(AddressRange::from_start_end(0x800, 0x8FF)?);
 let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 ```
 
-`Pipeline` reproduces a CLI run: set the stages its flags configure, in any order, and `run` applies them in HexView order. It returns the checksum and signature bytes for the caller to write.
+`Pipeline` reproduces a CLI run: set the stages its flags configure, in any order, and `run` applies them in HexView order. It returns the checksum and data processing bytes for the caller to write.
 
 ```rust
 use hexy_core::{AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, Pipeline};
@@ -99,8 +99,8 @@ let pipeline = Pipeline {
 let output = pipeline.run(&mut hf)?;
 ```
 
-See [signatures](docs/signatures.md) for the typed signing and verification API,
-including the mapping from compat `/DP` and `/SV` methods.
+See [data processing](docs/signatures.md) for the typed signing and verification API,
+the key formats, and the mapping from compat `/DP` and `/SV` methods.
 
 ## Scope
 
@@ -110,7 +110,7 @@ The repo is structured so additional frontends can consume `hexy-core` without f
 
 ## Python bindings
 
-The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, the main memory operations used by the compat CLI, and checksums through `Pipeline`. Signing and some export formats are core-only today — see [known divergences](docs/known-divergences.md).
+The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, the main memory operations used by the compat CLI, checksums through `Pipeline`, and signing and verification. Some export formats are core-only today — see [known divergences](docs/known-divergences.md).
 
 ```python
 import hexy
@@ -121,7 +121,7 @@ hf.cut(["0x1080-0x108f"])
 hf.write_srec("output.s19")
 ```
 
-Use `Pipeline` for reusable recipes. It wraps `hexy_core::Pipeline`, so it applies stages in the same order as the CLI, not in the order methods are called. `apply` leaves the source unchanged and returns the processed `hexfile` with the `checksums` in stage order. For custom operation ordering, call methods directly on `HexFile`.
+Use `Pipeline` for reusable recipes. It wraps `hexy_core::Pipeline`, so it applies stages in the same order as the CLI, not in the order methods are called. `apply` leaves the source unchanged and returns the processed `hexfile` with the `checksums` in stage order and the `data_processing` output, such as a signature. For custom operation ordering, call methods directly on `HexFile`.
 
 ```python
 import hexy
@@ -135,10 +135,12 @@ pipeline.fill(["0x1000-0x10ff"], pattern=b"\xff")
 pipeline.filter(["0x0000-0x1fff"])
 pipeline.align(16, fill=0xff, length=True)
 pipeline.checksum(9, placement="append")  # CRC-32, like /CS9:@append
+# RSA PKCS #1 v1.5 over address, length and data, like /DP33:@append:key.txt
+pipeline.sign("rsa-pkcs1v15-sha256", open("key.txt").read(), metadata=True, placement="append")
 
 result = pipeline.apply(source)
 result.hexfile.write_intel_hex("patched.hex")
-print(result.checksums[0].hex())
+print(result.checksums[0].hex(), result.data_processing.hex())
 ```
 
 Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span. In `hexy-compat`, `/FA` and `/XP` reject dense spans above 256 MiB.
