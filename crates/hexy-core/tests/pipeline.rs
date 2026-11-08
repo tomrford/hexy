@@ -1,8 +1,9 @@
 #![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
 
 use hexy_core::{
-    AddressRange, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, Fill, FillData,
-    HexFile, Merge, MergeMode, MergeOptions, Pipeline, Segment, SwapMode,
+    AddressRange, AesKey, AesMode, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage,
+    DataProcessing, DataProcessingStage, Fill, FillData, HexFile, Merge, MergeMode, MergeOptions,
+    Pipeline, Placement, Segment, SwapMode,
 };
 
 /// Bytes `(seed + 7 * i) & 0xFF`, the harness fixture pattern.
@@ -104,6 +105,55 @@ fn test_unconfigured_stages_keep_split_blocks() {
     };
     pipeline.run(&mut file).unwrap();
     assert!(file.is_empty());
+}
+
+#[test]
+fn test_failed_checksum_placement_keeps_split_blocks() {
+    let mut file = hexfile(&[(0x1000, 32, 1)]);
+    file.split(16);
+    let before = file.blocks();
+    let pipeline = Pipeline {
+        checksums: vec![ChecksumStage {
+            options: ChecksumOptions::default(),
+            placement: Some(Placement::Address(u32::MAX)),
+        }],
+        ..Default::default()
+    };
+
+    assert!(pipeline.run(&mut file).is_err());
+    assert_eq!(file.blocks(), before);
+}
+
+#[test]
+fn test_partially_failed_cipher_normalizes_replaced_blocks() {
+    let mut file = HexFile::with_segments(vec![
+        Segment::new(0x1000, vec![0; 32]).unwrap(),
+        Segment::new(0x2000, vec![0xAA]).unwrap(),
+    ]);
+    file.split(16);
+    let pipeline = Pipeline {
+        data_processing: Some(DataProcessingStage {
+            operation: DataProcessing::Encrypt {
+                key: AesKey::new(&[0; 16]).unwrap(),
+                mode: AesMode::Ecb,
+                padding: None,
+            },
+            placement: None,
+        }),
+        ..Default::default()
+    };
+
+    assert!(pipeline.run(&mut file).is_err());
+    let blocks = file.blocks();
+    // AES-128 with an all-zero key and plaintext: the first two blocks were encrypted.
+    let ciphertext = [
+        0x66, 0xE9, 0x4B, 0xD4, 0xEF, 0x8A, 0x2C, 0x3B, 0x88, 0x4C, 0xFA, 0x59, 0xCA, 0x34, 0x2B,
+        0x2E,
+    ];
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].data(), ciphertext.repeat(2));
+    assert_eq!(blocks[1].start_address(), 0x2000);
+    assert_eq!(blocks[1].data(), [0xAA]);
 }
 
 #[test]

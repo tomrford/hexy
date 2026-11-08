@@ -158,8 +158,8 @@ The compat CLI owns the method numbers and the `/DP` parameter grammar.
 | `/DP53`, `/DP54` | `Encrypt`, `Decrypt` with `AesMode::Ctr` | |
 | `/DP55`, `/DP56` | `EncryptGcm`, `DecryptGcm` | |
 
-The second method of each pair includes metadata. `/SV4` to `/SV11` verify `/DP32`,
-`/DP33`, `/DP38`, `/DP39` and `/DP46` to `/DP49`.
+The second method of each signature or MAC pair includes metadata. `/SV4` to `/SV11`
+verify `/DP32`, `/DP33`, `/DP38`, `/DP39` and `/DP46` to `/DP49`.
 
 `/DPn[:@placement]:[param1][,param2,param3][;param4][#NAME=value]...`:
 

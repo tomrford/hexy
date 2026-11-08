@@ -192,6 +192,15 @@ impl Pipeline {
     ) -> Result<(), PipelineError> {
         // A failed data processing stage can leave data it already replaced.
         let result = self.apply(stage, hexfile, output);
+        if result.is_err()
+            && !(stage == Stage::DataProcessing
+                && self
+                    .data_processing
+                    .as_ref()
+                    .is_some_and(|stage| stage.operation.transforms_data()))
+        {
+            return result;
+        }
         let places_data = match stage {
             Stage::Split | Stage::RemoveSmallBlocks | Stage::Swap | Stage::Verify => false,
             Stage::AddressMap => self.address_map.is_some(),
