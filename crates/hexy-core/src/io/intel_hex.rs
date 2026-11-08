@@ -179,15 +179,17 @@ pub fn parse_intel_hex_16bit(input: &[u8]) -> Result<HexFile, ParseError> {
 
 /// Write Intel-HEX output. CLI: /XI.
 ///
-/// One extended address record type is used for the whole file: the forced mode, or in
-/// auto mode segment records up to 1 MiB and linear records above. An extended address
+/// Records follow the blocks ([`HexFile::blocks`]), so adjacent blocks start new
+/// records, as HexView writes them. One extended address record type is used for the
+/// whole file: the forced mode, or in auto mode segment records up to 1 MiB and linear
+/// records above. An extended address
 /// record is written only where the upper address differs from the previous one, which
 /// starts at zero.
 pub fn write_intel_hex(
     hexfile: &HexFile,
     options: &IntelHexWriteOptions,
 ) -> Result<Vec<u8>, WriteError> {
-    let segments = hexfile.normalized().into_segments();
+    let segments = hexfile.blocks();
     let bytes_per_line = match options.bytes_per_line {
         0 => DEFAULT_INTEL_HEX_BYTES_PER_LINE,
         n => n,

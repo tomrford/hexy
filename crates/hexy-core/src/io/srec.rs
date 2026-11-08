@@ -118,10 +118,15 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
     Ok(builder.finish())
 }
 
-/// Write Motorola S-Record output. CLI: /XS.
+/// Write Motorola S-Record output, starting new records at each block
+/// ([`HexFile::blocks`]) as HexView does. CLI: /XS.
 pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Vec<u8>, WriteError> {
-    let normalized = hexfile.normalized();
-    let max_addr = normalized.max_address().unwrap_or(0);
+    let blocks = hexfile.blocks();
+    let max_addr = blocks
+        .iter()
+        .map(|block| block.end_address())
+        .max()
+        .unwrap_or(0);
 
     let record_type = match options.record_type {
         Some(t) if max_addr > t.max_address() => {
@@ -151,7 +156,7 @@ pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Ve
     } as usize;
 
     let mut out = Vec::new();
-    for segment in normalized.segments() {
+    for segment in &blocks {
         let mut addr = segment.start_address;
         for chunk in segment.data.chunks(bytes_per_line) {
             push_record(&mut out, data_digit, addr, addr_len, chunk);

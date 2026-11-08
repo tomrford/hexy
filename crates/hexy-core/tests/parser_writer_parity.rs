@@ -1,6 +1,6 @@
 use hexy_core::{
-    AutoFormat, BinaryWriteOptions, HexFile, IntelHexWriteOptions, ParseError, Segment,
-    detect_format, parse_auto, parse_intel_hex, write_binary, write_intel_hex,
+    AutoFormat, BinaryWriteOptions, HexFile, IntelHexWriteOptions, ParseError, SRecordWriteOptions,
+    Segment, detect_format, parse_auto, parse_intel_hex, write_binary, write_intel_hex, write_srec,
 };
 
 #[test]
@@ -77,4 +77,30 @@ fn binary_writer_serializes_normalized_blocks_without_sparse_padding() {
     let output = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
 
     assert_eq!(output, vec![0x01, 0xAA, 0x03, 0xBB, 0xCC]);
+}
+
+#[test]
+fn intel_hex_writers_keep_split_blocks() {
+    let mut image = HexFile::with_segments(vec![Segment::new(0x1000, vec![1, 2, 3, 4]).unwrap()]);
+    image.split(3);
+
+    let output = write_intel_hex(&image, &IntelHexWriteOptions::default()).unwrap();
+
+    assert_eq!(
+        output,
+        b":03100000010203E7\r\n:0110030004E8\r\n:00000001FF\r\n"
+    );
+}
+
+#[test]
+fn srecord_writers_keep_split_blocks() {
+    let mut image = HexFile::with_segments(vec![Segment::new(0x1000, vec![1, 2, 3, 4]).unwrap()]);
+    image.split(3);
+
+    let output = write_srec(&image, &SRecordWriteOptions::default()).unwrap();
+
+    assert_eq!(
+        output,
+        b"S1061000010203E3\r\nS104100304E4\r\nS9030000FC\r\n"
+    );
 }
