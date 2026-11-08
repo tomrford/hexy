@@ -92,6 +92,29 @@ fn test_cli_import_default_path_keeps_custom_suffix_and_explicit_output() {
     assert!(!dir.join("firmware.s19").exists());
 }
 
+#[test]
+fn test_cli_export_without_primary_input_requires_output_path() {
+    let dir = temp_dir("cli_export_no_primary");
+    write_file(&dir.join("merge.hex"), b":01100000AA45\r\n:00000001FF\r\n");
+    write_file(&dir.join(".hex"), b"keep existing file");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hexy"))
+        .current_dir(&dir)
+        .args(["/MO:merge.hex", "/XI"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("-o"));
+    assert_eq!(
+        std::fs::read(dir.join(".hex")).unwrap(),
+        b"keep existing file"
+    );
+
+    run_in(&dir, &["/MO:merge.hex", "/XI", "-o", "result.hex"]);
+    let image =
+        hexy_core::parse_intel_hex(&std::fs::read(dir.join("result.hex")).unwrap()).unwrap();
+    assert_eq!(image.read_byte(0x1000), Some(0xAA));
+}
+
 /// HexView 1.15.2 writes the separator verbatim after every byte that does not end a line.
 #[test]
 fn test_cli_hex_ascii_matches_hexview() {

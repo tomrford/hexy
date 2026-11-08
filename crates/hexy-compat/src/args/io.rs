@@ -108,14 +108,19 @@ pub(super) fn write_output_for_args(
     let Some(format) = &args.output_format else {
         return Ok(());
     };
-    let path = args.output_file.clone().unwrap_or_else(|| {
-        let mut name = primary_input_path(args)
-            .map(|input| input.with_extension(""))
-            .unwrap_or_default()
-            .into_os_string();
-        name.push(format.default_suffix());
-        PathBuf::from(name)
-    });
+    let path = match &args.output_file {
+        Some(path) => path.clone(),
+        None => {
+            let input = primary_input_path(args).ok_or_else(|| {
+                CliError::Other(
+                    "export without a primary input requires an output path; use -o".to_owned(),
+                )
+            })?;
+            let mut name = input.with_extension("").into_os_string();
+            name.push(format.default_suffix());
+            PathBuf::from(name)
+        }
+    };
     match format {
         OutputFormat::IntelHex(options) => hexfile.write_intel_hex_file(&path, options)?,
         OutputFormat::SRecord(options) => hexfile.write_srec_file(&path, options)?,

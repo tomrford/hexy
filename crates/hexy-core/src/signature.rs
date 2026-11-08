@@ -147,9 +147,23 @@ fn resolve_signature_bytes(source: &SignatureBytesSource) -> Result<Vec<u8>, Sig
     match source {
         SignatureBytesSource::Bytes(bytes) => Ok(bytes.clone()),
         SignatureBytesSource::File(path) => {
-            std::fs::read(path).map_err(|e| SignatureError::InvalidSignatureBytes(e.to_string()))
+            let content = std::fs::read(path)
+                .map_err(|e| SignatureError::InvalidSignatureBytes(e.to_string()))?;
+            Ok(decode_signature_text(&content).unwrap_or(content))
         }
     }
+}
+
+/// Bytes of `/DP` outfile text (`0xAA ,0xBB`), or `None` for any other content.
+pub fn decode_signature_text(content: &[u8]) -> Option<Vec<u8>> {
+    std::str::from_utf8(content)
+        .ok()?
+        .split(',')
+        .map(|item| {
+            let hex = item.trim().strip_prefix("0x")?;
+            (hex.len() == 2).then(|| u8::from_str_radix(hex, 16).ok())?
+        })
+        .collect()
 }
 
 fn sign_payload(
