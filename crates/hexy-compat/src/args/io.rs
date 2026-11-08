@@ -109,9 +109,7 @@ pub(super) fn write_output_for_args(
         return Ok(());
     };
     let path = args.output_file.clone().unwrap_or_else(|| {
-        let mut name = args
-            .input_file
-            .as_deref()
+        let mut name = primary_input_path(args)
             .map(|input| input.with_extension(""))
             .unwrap_or_default()
             .into_os_string();

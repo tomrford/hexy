@@ -49,6 +49,49 @@ fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     output
 }
 
+#[test]
+fn test_cli_imports_supply_the_default_export_path() {
+    for (flag, name, contents) in [
+        ("IN", "firmware.bin", [1, 2].as_slice()),
+        ("IA", "firmware.asc", b"0102".as_slice()),
+        (
+            "II2",
+            "firmware.hex",
+            b":020000000102FB\r\n:00000001FF\r\n".as_slice(),
+        ),
+    ] {
+        let dir = temp_dir("cli_import_default_path");
+        let nested = dir.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        write_file(&nested.join(name), contents);
+
+        run_in(&dir, &[&format!("/{flag}:nested/{name}"), "/XS"]);
+
+        assert_eq!(
+            std::fs::read(nested.join("firmware.s19")).unwrap(),
+            b"S10500000102F7\r\nS9030000FC\r\n"
+        );
+        assert!(!dir.join(".s19").exists());
+    }
+}
+
+#[test]
+fn test_cli_import_default_path_keeps_custom_suffix_and_explicit_output() {
+    let dir = temp_dir("cli_import_suffix");
+    write_file(&dir.join("firmware.bin"), &[1, 2]);
+
+    run_in(&dir, &["/IN:firmware.bin", "/XF"]);
+    assert!(dir.join("firmware_f.hex").exists());
+    assert!(!dir.join("_f.hex").exists());
+
+    run_in(&dir, &["/IN:firmware.bin", "/XS", "-o", "chosen.s19"]);
+    assert_eq!(
+        std::fs::read(dir.join("chosen.s19")).unwrap(),
+        b"S10500000102F7\r\nS9030000FC\r\n"
+    );
+    assert!(!dir.join("firmware.s19").exists());
+}
+
 /// HexView 1.15.2 writes the separator verbatim after every byte that does not end a line.
 #[test]
 fn test_cli_hex_ascii_matches_hexview() {
