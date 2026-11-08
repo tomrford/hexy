@@ -232,6 +232,24 @@ pub fn write_validation_c(
         None => format!("\tunsigned char  {name}[{len}];\r\n"),
     };
     let tag_suffix = |len: usize| if len == 4 { "ul" } else { "u" };
+    let tag_value = |value: u32, len: usize| {
+        if scalar(len).is_some() {
+            return format!("0x{value:X}{}", tag_suffix(len));
+        }
+        let bytes = value.to_be_bytes();
+        let elements: Vec<String> = (0..len)
+            .map(|index| {
+                let remaining = len - index;
+                let byte = if remaining <= bytes.len() {
+                    bytes[bytes.len() - remaining]
+                } else {
+                    0
+                };
+                format!("0x{byte:02X}")
+            })
+            .collect();
+        format!("{{{}}}", elements.join(", "))
+    };
     let count_bytes = if structure.wide && !options.one_byte_count {
         2
     } else {
@@ -251,9 +269,8 @@ pub fn write_validation_c(
     if !options.tag_begin.is_empty() {
         let _ = write!(
             c,
-            "\t0x{:X}{},\t\t/* Magic Tag begin */\r\n",
-            names.tag_begin_value,
-            tag_suffix(options.tag_begin.len())
+            "\t{},\t\t/* Magic Tag begin */\r\n",
+            tag_value(names.tag_begin_value, options.tag_begin.len())
         );
     }
     let mut needs_comma = false;
@@ -318,9 +335,8 @@ pub fn write_validation_c(
         let separator = if needs_comma { "," } else { "" };
         let _ = write!(
             c,
-            "\t{separator}0x{:X}{}\t\t/* Magic Tag end */\r\n",
-            names.tag_end_value,
-            tag_suffix(options.tag_end.len())
+            "\t{separator}{}\t\t/* Magic Tag end */\r\n",
+            tag_value(names.tag_end_value, options.tag_end.len())
         );
         needs_comma = true;
     }
