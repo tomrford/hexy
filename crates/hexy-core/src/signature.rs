@@ -117,22 +117,20 @@ impl HexFile {
     }
 }
 
+/// The block data in address order; with metadata, each block is preceded by its start
+/// address and length as big-endian `u32`s.
 fn signature_payload(hexfile: &HexFile, with_metadata: bool) -> Result<Vec<u8>, SignatureError> {
-    let normalized = hexfile.normalized();
-    let mut data = Vec::new();
-    for seg in normalized.segments() {
-        data.extend_from_slice(&seg.data);
+    let mut payload = Vec::new();
+    for block in hexfile.blocks() {
+        if with_metadata {
+            let len =
+                u32::try_from(block.len()).map_err(|_| SignatureError::PayloadLengthOverflow)?;
+            payload.extend_from_slice(&block.start_address.to_be_bytes());
+            payload.extend_from_slice(&len.to_be_bytes());
+        }
+        payload.extend_from_slice(&block.data);
     }
-    if !with_metadata {
-        return Ok(data);
-    }
-    let start = normalized.min_address().unwrap_or(0);
-    let len = u32::try_from(data.len()).map_err(|_| SignatureError::PayloadLengthOverflow)?;
-    let mut out = Vec::with_capacity(8 + data.len());
-    out.extend_from_slice(&start.to_be_bytes());
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(&data);
-    Ok(out)
+    Ok(payload)
 }
 
 fn resolve_key_material(source: &SignatureKeySource) -> Result<Vec<u8>, SignatureError> {
@@ -326,4 +324,33 @@ fn extract_spki_from_certificate(key_material: &[u8]) -> Option<Vec<u8>> {
         return cert.tbs_certificate.subject_public_key_info.to_der().ok();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Segment;
+
+    /// HexView 1.15.2 `/DP33` hashes each block as big-endian start, big-endian length
+    /// and data; split pieces count as blocks (verified against its RSA signatures).
+    #[test]
+    fn test_metadata_payload_lists_each_block() {
+        let mut file = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0xAA; 0x180]).unwrap(),
+            Segment::new(0x2000, vec![0xBB]).unwrap(),
+        ]);
+        file.split(0x100);
+        let payload = signature_payload(&file, true).unwrap();
+        let mut expected = Vec::new();
+        for (start, data) in [
+            (0x1000u32, [0xAA; 0x100].as_slice()),
+            (0x1100, &[0xAA; 0x80]),
+            (0x2000, &[0xBB]),
+        ] {
+            expected.extend_from_slice(&start.to_be_bytes());
+            expected.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            expected.extend_from_slice(data);
+        }
+        assert_eq!(payload, expected);
+    }
 }

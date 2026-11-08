@@ -93,3 +93,15 @@ fn test_random_fill_is_seeded_and_fills_only_gaps() {
     assert_eq!(first.read_bytes_contiguous(0x1004, 4).unwrap(), pat(4, 1));
     assert_eq!(first.total_bytes(), 0x10);
 }
+
+#[test]
+fn test_unconfigured_stages_keep_split_blocks() {
+    let mut file = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 0x200]).unwrap()]);
+    file.split(0x100);
+    let pipeline = Pipeline {
+        remove_small_blocks: Some(0x101),
+        ..Default::default()
+    };
+    pipeline.run(&mut file).unwrap();
+    assert!(file.is_empty());
+}

@@ -445,74 +445,52 @@ fn test_cli_address_range_length_form_keeps_u32_max_boundary() {
     assert_eq!(norm.segments()[0].data(), vec![0xFC, 0xFD, 0xFE, 0xFF]);
 }
 
+/// HexView 1.15.2 ignores ranges reaching past the address space: /AR keeps all data
+/// and /CR cuts nothing.
 #[test]
-fn test_cli_address_range_overflowing_length_form_filters_to_u32_max() {
-    let dir = temp_dir("cli_ar_overflow_len");
+fn test_cli_overflowing_ranges_are_ignored() {
+    let dir = temp_dir("cli_range_overflow");
     let input = dir.join("input.bin");
-    let out = dir.join("out.hex");
     write_file(&input, &[0xFC, 0xFD, 0xFE, 0xFF]);
-
-    let args = vec![
-        format!("/IN:{};0xFFFFFFFC", input.display()),
-        "/AR:0xFFFFFFFC,0x8".to_owned(),
-        "/XI".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-
-    let hexfile = run_hex_output(args, &out);
-    let norm = hexfile.normalized();
-    assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address(), 0xFFFF_FFFC);
-    assert_eq!(norm.segments()[0].data(), vec![0xFC, 0xFD, 0xFE, 0xFF]);
+    for flag in ["/AR:0xFFFFFFFC,0x8", "/CR:0xFFFFFFFC,0x8"] {
+        let out = dir.join("out.hex");
+        let args = vec![
+            format!("/IN:{};0xFFFFFFFC", input.display()),
+            flag.to_owned(),
+            "/XI".to_owned(),
+            "-o".to_owned(),
+            out.display().to_string(),
+        ];
+        let hexfile = run_hex_output(args, &out);
+        assert_eq!(hexfile.normalized().total_bytes(), 4, "{flag}");
+    }
 }
 
+/// HexView 1.15.2 `/SWAPLONG` repeats the second swapped word across a block of 16 MiB.
 #[test]
-fn test_cli_address_range_multiple_ranges() {
-    let dir = temp_dir("cli_ar_multi");
-    let base = dir.join("base.bin");
-    let merge = dir.join("merge.bin");
-    let out = dir.join("out.hex");
-    write_file(&base, &[0xAA, 0xAB, 0xAC, 0xAD]);
-    write_file(&merge, &[0xBA, 0xBB, 0xBC, 0xBD]);
-
+fn test_cli_swaplong_large_block_repeats_second_word() {
+    let dir = temp_dir("cli_swaplong_large");
+    let input = dir.join("input.bin");
+    let out = dir.join("out.bin");
+    let data: Vec<u8> = (0..0x100_0000u32)
+        .map(|i| (i * 7 + (i >> 8)) as u8)
+        .collect();
+    write_file(&input, &data);
     let args = vec![
-        format!("/IN:{};0x1000", base.display()),
-        format!("/MO:{};0x2000", merge.display()),
-        "/AR:0x1000,0x2:0x2000,0x2".to_owned(),
-        "/XI".to_owned(),
+        format!("/IN:{}", input.display()),
+        "/SWAPLONG".to_owned(),
+        "/XN".to_owned(),
         "-o".to_owned(),
         out.display().to_string(),
     ];
-
-    let output = run_hexy(&args);
-    assert_success(&output);
-    let text = std::fs::read_to_string(&out).unwrap();
-    assert_eq!(text.trim(), ":00000001FF");
-}
-
-#[test]
-fn test_cli_address_range_repeated_last_wins() {
-    let dir = temp_dir("cli_ar_last_wins");
-    let base = dir.join("base.bin");
-    let merge = dir.join("merge.bin");
-    let out = dir.join("out.hex");
-    write_file(&base, &[0xAA, 0xAB, 0xAC, 0xAD]);
-    write_file(&merge, &[0xBA, 0xBB, 0xBC, 0xBD]);
-
-    let args = vec![
-        format!("/IN:{};0x1000", base.display()),
-        format!("/MO:{};0x2000", merge.display()),
-        "/AR:0x1000,0x2".to_owned(),
-        "/AR:0x2000,0x2".to_owned(),
-        "/XI".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-
-    let hexfile = run_hex_output(args, &out);
-    let norm = hexfile.normalized();
-    assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address(), 0x2000);
-    assert_eq!(norm.segments()[0].data(), vec![0xBA, 0xBB]);
+    assert_success(&run_hexy(&args));
+    let swapped = std::fs::read(&out).unwrap();
+    assert_eq!(swapped.len(), data.len());
+    assert_eq!(
+        swapped[..12],
+        [
+            0x15, 0x0E, 0x07, 0x00, 0x31, 0x2A, 0x23, 0x1C, 0x31, 0x2A, 0x23, 0x1C
+        ]
+    );
+    assert_eq!(swapped[swapped.len() - 4..], [0x31, 0x2A, 0x23, 0x1C]);
 }

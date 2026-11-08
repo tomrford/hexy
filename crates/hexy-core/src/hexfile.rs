@@ -107,6 +107,44 @@ impl HexFile {
         }
     }
 
+    /// Normalize in place; a no-op when the segments are already sorted, separate and
+    /// non-adjacent.
+    pub fn normalize(&mut self) {
+        let normalized = self.segments.windows(2).all(|pair| {
+            pair[0]
+                .end_address()
+                .checked_add(1)
+                .is_some_and(|next| next < pair[1].start_address)
+        });
+        if !normalized {
+            *self = self.normalized();
+        }
+    }
+
+    /// The segments as blocks: sorted, with overlapping segments merged (last wins).
+    /// Adjacent segments stay separate blocks, as [`HexFile::split`] leaves them.
+    pub fn blocks(&self) -> Vec<Segment> {
+        let mut order: Vec<usize> = (0..self.segments.len()).collect();
+        order.sort_by_key(|&index| self.segments[index].start_address);
+        let mut blocks = Vec::with_capacity(order.len());
+        let mut run: Vec<usize> = Vec::new();
+        let mut run_end = 0;
+        for index in order {
+            let segment = &self.segments[index];
+            if !run.is_empty() && segment.start_address > run_end {
+                push_run(&self.segments, &mut run, &mut blocks);
+            }
+            run_end = if run.is_empty() {
+                segment.end_address()
+            } else {
+                run_end.max(segment.end_address())
+            };
+            run.push(index);
+        }
+        push_run(&self.segments, &mut run, &mut blocks);
+        blocks
+    }
+
     /// Count gaps between segments (after sorting).
     pub fn gap_count(&self) -> usize {
         self.normalized().segments.len().saturating_sub(1)
@@ -212,6 +250,21 @@ impl HexFile {
         }
         Ok(Some(Segment::from_valid(min, data)))
     }
+}
+
+/// Append the overlapping segments `run` (indices into `segments`) to `blocks` as one
+/// block, later segments winning, and clear `run`.
+fn push_run(segments: &[Segment], run: &mut Vec<usize>, blocks: &mut Vec<Segment>) {
+    match run.as_slice() {
+        [] => {}
+        [index] => blocks.push(segments[*index].clone()),
+        _ => {
+            run.sort_unstable();
+            let overlapping = run.iter().map(|&index| segments[index].clone()).collect();
+            blocks.extend(HexFile::with_segments(overlapping).normalized().segments);
+        }
+    }
+    run.clear();
 }
 
 fn merge_adjacent_segments(segments: Vec<Segment>) -> Vec<Segment> {

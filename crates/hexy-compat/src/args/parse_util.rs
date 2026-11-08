@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{AddressRange, DspicOp, ForcedRange, Placement, RemapOptions};
+use crate::{AddressRange, AddressRangeError, DspicOp, ForcedRange, Placement, RemapOptions};
 
 use super::types::{
     ChecksumParams, ChecksumTarget, DataProcessingParams, ImportParam, MergeParam, ParseArgError,
@@ -23,6 +23,37 @@ pub(super) fn strip_quotes(s: &str) -> &str {
 
 pub(super) fn parse_compat_ranges(s: &str) -> Result<Vec<AddressRange>, ParseArgError> {
     crate::parse_compat_ranges(s).map_err(|e| ParseArgError::InvalidRange(e.to_string()))
+}
+
+/// One range, or `None` for a range HexView ignores: reversed, empty, or reaching past
+/// the address space. Malformed text is an error.
+pub(super) fn parse_lenient_range(s: &str) -> Result<Option<AddressRange>, ParseArgError> {
+    match strip_quotes(s).parse::<AddressRange>() {
+        Ok(range) => Ok(Some(range)),
+        Err(
+            AddressRangeError::StartExceedsEnd { .. }
+            | AddressRangeError::ZeroLength { .. }
+            | AddressRangeError::PastAddressSpace { .. },
+        ) => Ok(None),
+        Err(e) => Err(ParseArgError::InvalidRange(e.to_string())),
+    }
+}
+
+/// `:`-separated ranges as HexView reads them: empty and overflowing ranges are
+/// skipped, and a reversed range ends the list. Malformed text is an error.
+pub(super) fn parse_lenient_ranges(s: &str) -> Result<Vec<AddressRange>, ParseArgError> {
+    let mut ranges = Vec::new();
+    for part in strip_quotes(s).split(':').filter(|part| !part.is_empty()) {
+        match strip_quotes(part).parse::<AddressRange>() {
+            Ok(range) => ranges.push(range),
+            Err(AddressRangeError::StartExceedsEnd { .. }) => break,
+            Err(
+                AddressRangeError::ZeroLength { .. } | AddressRangeError::PastAddressSpace { .. },
+            ) => {}
+            Err(e) => return Err(ParseArgError::InvalidRange(e.to_string())),
+        }
+    }
+    Ok(ranges)
 }
 
 fn parse_single_compat_range(s: &str, context: &str) -> Result<AddressRange, ParseArgError> {
@@ -158,8 +189,8 @@ fn split_merge_range(s: &str) -> Result<(&str, Option<AddressRange>), ParseArgEr
     let left = &s[..colon_pos];
     let right = &s[colon_pos + 1..];
 
-    match parse_single_compat_range(right, "merge range") {
-        Ok(range) => Ok((left, Some(range))),
+    match parse_lenient_range(right) {
+        Ok(range) => Ok((left, range)),
         Err(err) if merge_range_delimiter_is_unambiguous(s, colon_pos) => Err(err),
         Err(_) => Ok((s, None)),
     }
@@ -245,7 +276,9 @@ pub(super) fn parse_checksum(
             } else {
                 (forced, None)
             };
-            let range = parse_single_compat_range(range_str, "forced checksum range")?;
+            let Some(range) = parse_lenient_range(range_str)? else {
+                continue;
+            };
             let pattern = if let Some(pattern_str) = pattern_str {
                 let pattern_str = pattern_str.trim();
                 let pattern_str = pattern_str
@@ -273,14 +306,14 @@ pub(super) fn parse_checksum(
         let mut pieces = part.split('/');
         let range_part = pieces.next().unwrap_or_default();
         if !range_part.is_empty() {
-            range = Some(parse_single_compat_range(range_part, "checksum range")?);
+            match parse_lenient_range(range_part)? {
+                Some(limit) => range = Some(limit),
+                // HexView checksums nothing when the limiting range is invalid.
+                None => exclude_ranges.extend(AddressRange::from_start_end(0, u32::MAX).ok()),
+            }
         }
         for exclude in pieces {
-            if exclude.is_empty() {
-                continue;
-            }
-            let ranges = parse_compat_ranges(exclude)?;
-            exclude_ranges.extend(ranges);
+            exclude_ranges.extend(parse_lenient_ranges(exclude)?);
         }
     }
 
@@ -398,63 +431,19 @@ pub(super) fn parse_dspic_op(s: &str) -> Result<DspicOp, ParseArgError> {
     }
 }
 
-pub(super) fn parse_output_params(s: &str) -> Result<(Option<u8>, Option<u8>), ParseArgError> {
-    if s.is_empty() {
-        return Ok((None, None));
-    }
-
-    let parts: Vec<&str> = s.split(':').collect();
-    let len = if let Some(part) = parts.first().copied() {
-        if part.is_empty() {
-            None
-        } else {
-            let value = parse_number(part)?;
-            if value > u8::MAX as u32 {
-                return Err(ParseArgError::InvalidNumber(part.to_owned()));
-            }
-            Some(value as u8)
-        }
-    } else {
-        None
+/// HexView's lenient integer: `0x`-prefixed hex or decimal digits, read up to the first
+/// other character; no digits reads as 0.
+pub(super) fn parse_lenient_number(s: &str) -> u32 {
+    let (digits, radix) = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => (hex, 16),
+        None => (s, 10),
     };
-
-    let rec_type = if let Some(part) = parts.get(1).copied() {
-        if part.is_empty() {
-            None
-        } else {
-            let value = parse_number(part)?;
-            if value > u8::MAX as u32 {
-                return Err(ParseArgError::InvalidNumber(part.to_owned()));
-            }
-            Some(value as u8)
-        }
-    } else {
-        None
-    };
-
-    Ok((len, rec_type))
-}
-
-pub(super) fn parse_hex_ascii_params(
-    value: &str,
-) -> Result<(Option<u32>, Option<String>), ParseArgError> {
-    if value.is_empty() {
-        return Ok((None, None));
-    }
-
-    let mut parts = value.splitn(2, ':');
-    let len_part = parts.next().unwrap_or_default();
-    let sep_part = parts.next();
-
-    let line_length = if len_part.is_empty() {
-        None
-    } else {
-        Some(parse_number(len_part)?)
-    };
-
-    let separator = sep_part.map(|s| strip_quotes(s).to_owned());
-
-    Ok((line_length, separator))
+    digits
+        .chars()
+        .map_while(|c| c.to_digit(radix))
+        .fold(0u32, |acc, digit| {
+            acc.saturating_mul(radix).saturating_add(digit)
+        })
 }
 
 #[cfg(test)]
@@ -556,16 +545,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_merge_params_invalid_range() {
-        let result = parse_merge_params("file.hex:0x2000-0x1000");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_output_params_hex() {
-        let (len, rec_type) = parse_output_params("0x20:0x2").unwrap();
-        assert_eq!(len, Some(32));
-        assert_eq!(rec_type, Some(2));
+    fn test_parse_merge_params_ignores_reversed_range() {
+        // HexView 1.15.2 merges the whole file when the /MT range is reversed.
+        let params = parse_merge_params("file.hex:0x2000-0x1000").unwrap();
+        assert_eq!(params[0].file, PathBuf::from("file.hex"));
+        assert!(params[0].range.is_none());
     }
 
     #[test]

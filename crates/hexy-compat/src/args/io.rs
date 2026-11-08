@@ -5,12 +5,10 @@ use hexy_core::{HexFile, Segment};
 
 use super::error::CliError;
 use super::ini::load_ini;
-use super::parse_util::parse_number;
+use super::parse_util::{parse_lenient_number, parse_number};
 use super::types::Args;
 use super::types::ChecksumParams;
 use super::types::OutputFormat;
-
-const DEFAULT_SREC_BYTES_PER_LINE: u8 = 32;
 
 pub(super) trait ReadProvider {
     fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, std::io::Error>;
@@ -38,8 +36,9 @@ pub(super) fn load_input(provider: &impl ReadProvider, path: &Path) -> Result<He
 fn load_ini_or_empty(
     path: &Path,
     provider: &impl ReadProvider,
+    section: Option<&str>,
 ) -> Result<HashMap<String, String>, CliError> {
-    match load_ini(path, provider) {
+    match load_ini(path, provider, section) {
         Ok(ini) => Ok(ini),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
         Err(err) => Err(err.into()),
@@ -99,111 +98,40 @@ pub(super) fn load_intel_hex_16bit_input(
     Ok(hexfile)
 }
 
-pub(super) fn write_output(
-    hexfile: &HexFile,
-    path: &PathBuf,
-    format: &Option<OutputFormat>,
-    bytes_per_line: Option<u8>,
-) -> Result<(), CliError> {
-    let format = format
-        .as_ref()
-        .unwrap_or(&OutputFormat::IntelHex { record_type: None });
-
-    match format {
-        OutputFormat::IntelHex { record_type } => {
-            let mode = match record_type {
-                Some(1) => crate::IntelHexMode::ExtendedLinear,
-                Some(2) => crate::IntelHexMode::ExtendedSegment,
-                _ => crate::IntelHexMode::Auto,
-            };
-            let options = crate::IntelHexWriteOptions {
-                bytes_per_line: bytes_per_line.unwrap_or(32),
-                mode,
-            };
-            hexfile.write_intel_hex_file(path, &options)?;
-        }
-        OutputFormat::SRecord { record_type } => {
-            let record_type = match record_type {
-                None => None,
-                Some(0) => Some(crate::SRecordType::S1),
-                Some(1) => Some(crate::SRecordType::S2),
-                Some(2 | 3) => Some(crate::SRecordType::S3),
-                Some(other) => {
-                    return Err(CliError::Other(format!(
-                        "unsupported S-Record type {other}"
-                    )));
-                }
-            };
-            let options = crate::SRecordWriteOptions {
-                bytes_per_line: bytes_per_line.unwrap_or(DEFAULT_SREC_BYTES_PER_LINE),
-                record_type,
-            };
-            hexfile.write_srec_file(path, &options)?;
-        }
-        OutputFormat::Binary => {
-            let options = crate::BinaryWriteOptions::default();
-            hexfile.write_binary_file(path, &options)?;
-        }
-        OutputFormat::HexAscii {
-            line_length,
-            separator,
-        } => {
-            let options = crate::HexAsciiWriteOptions {
-                line_length: line_length.unwrap_or(16) as usize,
-                separator: separator.clone(),
-            };
-            hexfile.write_hex_ascii_file(path, &options)?;
-        }
-        OutputFormat::SeparateBinary => write_separate_binary(hexfile, path)?,
-        OutputFormat::CCode => {
-            return Err(CliError::Other(
-                "C-code output must be handled by caller".into(),
-            ));
-        }
-        OutputFormat::Porsche => {
-            return Err(CliError::Other(
-                "Porsche output must be handled by caller".into(),
-            ));
-        }
-        _ => {
-            return Err(CliError::Other(format!(
-                "Output format {:?} not yet implemented",
-                format
-            )));
-        }
-    }
-
-    Ok(())
-}
-
+/// Export to `-o`, or to the input file name with the format's suffix. Without an
+/// export flag nothing is written.
 pub(super) fn write_output_for_args(
     args: &Args,
     hexfile: &HexFile,
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
-    match args.output_format {
-        Some(OutputFormat::CCode) => {
-            let path = resolve_c_code_output_path(args)?;
-            write_c_code_output(args, hexfile, &path, provider)?;
-            Ok(())
+    let Some(format) = &args.output_format else {
+        return Ok(());
+    };
+    let path = args.output_file.clone().unwrap_or_else(|| {
+        let mut name = args
+            .input_file
+            .as_deref()
+            .map(|input| input.with_extension(""))
+            .unwrap_or_default()
+            .into_os_string();
+        name.push(format.default_suffix());
+        PathBuf::from(name)
+    });
+    match format {
+        OutputFormat::IntelHex(options) => hexfile.write_intel_hex_file(&path, options)?,
+        OutputFormat::SRecord(options) if options.bytes_per_line == 0 => {
+            HexFile::new().write_srec_file(&path, options)?;
         }
-        Some(OutputFormat::FordIntelHex) => {
-            let path = resolve_ford_output_path(args)?;
-            write_ford_ihex_output(args, hexfile, &path, provider)?;
-            Ok(())
-        }
-        Some(OutputFormat::Porsche) => {
-            let path = resolve_porsche_output_path(args)?;
-            write_porsche_output(args, hexfile, &path)?;
-            Ok(())
-        }
-        _ => {
-            if let Some(ref path) = args.output_file {
-                write_output(hexfile, path, &args.output_format, args.bytes_per_line)?;
-            }
-            Ok(())
-        }
+        OutputFormat::SRecord(options) => hexfile.write_srec_file(&path, options)?,
+        OutputFormat::Binary => hexfile.write_binary_file(&path, &Default::default())?,
+        OutputFormat::HexAscii(options) => hexfile.write_hex_ascii_file(&path, options)?,
+        OutputFormat::SeparateBinary => write_separate_binary(hexfile, &path)?,
+        OutputFormat::CCode => write_c_code_output(args, hexfile, &path, provider)?,
+        OutputFormat::FordIntelHex => write_ford_ihex_output(args, hexfile, &path, provider)?,
+        OutputFormat::Porsche => write_porsche_output(args, hexfile, &path, provider)?,
     }
+    Ok(())
 }
 
 pub(super) fn write_c_code_output(
@@ -213,7 +141,7 @@ pub(super) fn write_c_code_output(
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let ini_path = resolve_ini_path(args)?;
-    let ini = load_ini_or_empty(&ini_path, provider)?;
+    let ini = load_ini_or_empty(&ini_path, provider, None)?;
 
     let prefix = ini
         .get("prefix")
@@ -270,20 +198,6 @@ pub(super) fn write_c_code_output(
     Ok(())
 }
 
-pub(super) fn resolve_c_code_output_path(args: &Args) -> Result<PathBuf, CliError> {
-    if let Some(path) = args.output_file.clone() {
-        return Ok(path);
-    }
-
-    if let Some(input) = primary_input_path(args) {
-        return Ok(input.with_extension("c"));
-    }
-
-    Err(CliError::Other(
-        "output file required for /XC (use -o <file>)".into(),
-    ))
-}
-
 pub(super) fn write_ford_ihex_output(
     args: &Args,
     hexfile: &HexFile,
@@ -291,17 +205,14 @@ pub(super) fn write_ford_ihex_output(
     provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let ini_path = resolve_ini_path(args)?;
-    let ini = load_ini_or_empty(&ini_path, provider)?;
+    let ini = load_ini_or_empty(&ini_path, provider, None)?;
     let has_complete_header = has_complete_ford_header(&ini);
     let header = if has_complete_header {
         build_ford_header(args, hexfile, output_path, &ini)?
     } else {
         build_minimal_ford_header(output_path)
     };
-    let options = crate::IntelHexWriteOptions {
-        bytes_per_line: args.bytes_per_line.unwrap_or(32),
-        mode: crate::IntelHexMode::Auto,
-    };
+    let options = crate::IntelHexWriteOptions::default();
     let data = if has_complete_header {
         crate::write_intel_hex(hexfile, &options)
     } else {
@@ -317,29 +228,17 @@ pub(super) fn write_ford_ihex_output(
     Ok(())
 }
 
-pub(super) fn resolve_ford_output_path(args: &Args) -> Result<PathBuf, CliError> {
-    if let Some(path) = args.output_file.clone() {
-        return Ok(path);
-    }
-
-    if let Some(input) = primary_input_path(args) {
-        return Ok(input.with_extension("hex"));
-    }
-
-    Err(CliError::Other(
-        "output file required for /XF (use -o <file>)".into(),
-    ))
-}
-
 pub(super) fn write_porsche_output(
     args: &Args,
     hexfile: &HexFile,
     output_path: &Path,
+    provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let checksum_params = porsche_checksum_params(args)?;
     let options = checksum_options(
         checksum_params,
         &format!("/CS{}", checksum_params.algorithm),
+        provider,
     )?;
     let mut normalized = hexfile.normalized();
     let fill = args.align_fill;
@@ -363,7 +262,10 @@ pub(super) fn write_porsche_output(
     Ok(())
 }
 
-pub(super) fn validate_porsche_output_args(args: &Args) -> Result<(), CliError> {
+pub(super) fn validate_porsche_output_args(
+    args: &Args,
+    provider: &impl ReadProvider,
+) -> Result<(), CliError> {
     if !matches!(
         args.output_format,
         Some(super::types::OutputFormat::Porsche)
@@ -375,6 +277,7 @@ pub(super) fn validate_porsche_output_args(args: &Args) -> Result<(), CliError> 
     checksum_options(
         checksum_params,
         &format!("/CS{}", checksum_params.algorithm),
+        provider,
     )?;
     Ok(())
 }
@@ -390,13 +293,21 @@ fn porsche_checksum_params(args: &Args) -> Result<&ChecksumParams, CliError> {
     })
 }
 
-/// Core checksum options for `params`; `flag` labels an unsupported algorithm error.
+/// Core checksum options for `params`; `flag` labels errors.
 pub(super) fn checksum_options(
     params: &ChecksumParams,
     flag: &str,
+    provider: &impl ReadProvider,
 ) -> Result<crate::ChecksumOptions, CliError> {
-    let algorithm = crate::ChecksumAlgorithm::try_from(params.algorithm)
-        .map_err(|e| CliError::Other(format!("{flag}: {e}")))?;
+    let flag_error = |e: String| CliError::Other(format!("{flag}: {e}"));
+    let algorithm = match crate::ChecksumAlgorithm::try_from(params.algorithm)
+        .map_err(|e| flag_error(e.to_string()))?
+    {
+        crate::ChecksumAlgorithm::Constant(_) => {
+            crate::ChecksumAlgorithm::Constant(checksum_constant(provider).map_err(flag_error)?)
+        }
+        algorithm => algorithm,
+    };
     Ok(crate::ChecksumOptions {
         algorithm,
         range: params.range,
@@ -406,28 +317,48 @@ pub(super) fn checksum_options(
     })
 }
 
+/// Method 16 bytes from `[constant]` in `expdatproc.ini` in the working directory, as
+/// HexView's expdatproc reads them: `NumBytes` (default 2) bytes taken as digit pairs
+/// from `HexDataString` (default `0815`), a trailing single digit making the last byte.
+fn checksum_constant(provider: &impl ReadProvider) -> Result<Vec<u8>, String> {
+    let ini = load_ini_or_empty(Path::new("expdatproc.ini"), provider, Some("constant"))
+        .map_err(|e| format!("expdatproc.ini: {e}"))?;
+    let num_bytes = ini
+        .get("numbytes")
+        .map_or(2, |value| parse_lenient_number(value));
+    if num_bytes == 0 {
+        return Err("expdatproc.ini NumBytes must be a positive number".into());
+    }
+    let text = ini.get("hexdatastring").map_or("0815", String::as_str);
+    text.as_bytes()
+        .chunks(2)
+        .take(num_bytes as usize)
+        .map(|digits| {
+            std::str::from_utf8(digits)
+                .ok()
+                .filter(|digits| digits.bytes().all(|b| b.is_ascii_hexdigit()))
+                .and_then(|digits| u8::from_str_radix(digits, 16).ok())
+                .ok_or_else(|| format!("expdatproc.ini HexDataString is not hex: {text}"))
+        })
+        .collect()
+}
+
 /// Write checksum bytes as the `0xAA, 0xBB` text HexView produces for file targets.
 pub(super) fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    let formatted = bytes
+    std::fs::write(path, hex_list(bytes, ", "))
+}
+
+/// Write signature bytes as the `0xAA ,0xBB` text HexView produces for `/DP` outfiles.
+pub(super) fn write_signature_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    std::fs::write(path, hex_list(bytes, " ,"))
+}
+
+fn hex_list(bytes: &[u8], separator: &str) -> String {
+    bytes
         .iter()
         .map(|b| format!("0x{b:02X}"))
         .collect::<Vec<_>>()
-        .join(", ");
-    std::fs::write(path, formatted)
-}
-
-pub(super) fn resolve_porsche_output_path(args: &Args) -> Result<PathBuf, CliError> {
-    if let Some(path) = args.output_file.clone() {
-        return Ok(path);
-    }
-
-    if let Some(input) = primary_input_path(args) {
-        return Ok(input.with_extension("bin"));
-    }
-
-    Err(CliError::Other(
-        "output file required for /XP (use -o <file>)".into(),
-    ))
+        .join(separator)
 }
 
 fn resolve_ini_path(args: &Args) -> Result<PathBuf, CliError> {
@@ -624,87 +555,19 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     (year as i32, m as u32, d as u32)
 }
 
+/// One binary per block, named `<stem>_<start address>` plus the output extension.
 fn write_separate_binary(hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
-    let segments = separate_binary_segments(hexfile);
-
-    if segments.is_empty() {
-        return Ok(());
-    }
-
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
-
-    for segment in segments {
-        let (start_address, data) = segment.into_parts();
-        let filename = format!("{stem}_{start_address:x}.{ext}");
-        let out_path = dir.join(filename);
-        std::fs::write(out_path, data)?;
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    for block in hexfile.blocks() {
+        let (start_address, data) = block.into_parts();
+        std::fs::write(dir.join(format!("{stem}_{start_address:x}{ext}")), data)?;
     }
-
     Ok(())
-}
-
-fn separate_binary_segments(hexfile: &HexFile) -> Vec<Segment> {
-    let all_segments = hexfile.segments();
-    let mut indexed_segments: Vec<(usize, &Segment)> = all_segments.iter().enumerate().collect();
-    indexed_segments.sort_by_key(|(_, segment)| segment.start_address());
-
-    let mut output = Vec::new();
-    let mut run_indices = Vec::new();
-    let mut run_end: Option<u32> = None;
-
-    for (index, segment) in indexed_segments {
-        match run_end {
-            Some(end) if segment.start_address() <= end => {
-                run_indices.push(index);
-                run_end = Some(end.max(segment.end_address()));
-            }
-            Some(_) => {
-                push_separate_binary_run(all_segments, &run_indices, &mut output);
-                run_indices.clear();
-                run_indices.push(index);
-                run_end = Some(segment.end_address());
-            }
-            None => {
-                run_indices.push(index);
-                run_end = Some(segment.end_address());
-            }
-        }
-    }
-
-    if !run_indices.is_empty() {
-        push_separate_binary_run(all_segments, &run_indices, &mut output);
-    }
-
-    output.sort_by_key(Segment::start_address);
-    output
-}
-
-fn push_separate_binary_run(
-    all_segments: &[Segment],
-    run_indices: &[usize],
-    output: &mut Vec<Segment>,
-) {
-    if run_indices.len() == 1 {
-        output.push(all_segments[run_indices[0]].clone());
-        return;
-    }
-
-    let mut insertion_order = run_indices.to_vec();
-    insertion_order.sort_unstable();
-    let run_segments = insertion_order
-        .into_iter()
-        .map(|index| all_segments[index].clone())
-        .collect();
-    output.extend(
-        HexFile::with_segments(run_segments)
-            .normalized()
-            .into_segments(),
-    );
 }
 
 #[cfg(test)]
@@ -733,28 +596,8 @@ mod tests {
     }
 
     #[test]
-    fn test_write_separate_binary_outputs_segments() {
+    fn test_write_separate_binary_writes_blocks() -> Result<(), CliError> {
         let dir = unique_temp_dir();
-        let output = dir.join("out.bin");
-        let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap(),
-            Segment::new(0x2000, vec![0xCC]).unwrap(),
-        ]);
-
-        write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None).unwrap();
-
-        let file1 = dir.join("out_1000.bin");
-        let file2 = dir.join("out_2000.bin");
-        assert_eq!(fs::read(file1).unwrap(), vec![0xAA, 0xBB]);
-        assert_eq!(fs::read(file2).unwrap(), vec![0xCC]);
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn test_write_separate_binary_preserves_adjacent_blocks() -> Result<(), CliError> {
-        let dir = unique_temp_dir();
-        let output = dir.join("out.bin");
         let hexfile = HexFile::with_segments(vec![
             Segment::new(0x1000, vec![0x00, 0x01, 0x02, 0x03]).unwrap(),
             Segment::new(0x1004, vec![0x04, 0x05, 0x06, 0x07]).unwrap(),
@@ -762,45 +605,14 @@ mod tests {
             Segment::new(0x2002, vec![0xAA, 0xBB]).unwrap(),
         ]);
 
-        write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
+        write_separate_binary(&hexfile, &dir.join("out"))?;
 
-        assert_eq!(
-            fs::read(dir.join("out_1000.bin"))?,
-            vec![0x00, 0x01, 0x02, 0x03]
-        );
-        assert_eq!(
-            fs::read(dir.join("out_1004.bin"))?,
-            vec![0x04, 0x05, 0x06, 0x07]
-        );
-        assert_eq!(
-            fs::read(dir.join("out_2000.bin"))?,
-            vec![0x10, 0x11, 0xAA, 0xBB]
-        );
-        assert!(!dir.join("out_2002.bin").exists());
+        assert_eq!(fs::read(dir.join("out_1000"))?, [0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(fs::read(dir.join("out_1004"))?, [0x04, 0x05, 0x06, 0x07]);
+        assert_eq!(fs::read(dir.join("out_2000"))?, [0x10, 0x11, 0xAA, 0xBB]);
+        assert!(!dir.join("out_2002").exists());
 
         fs::remove_dir_all(dir)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_write_separate_binary_outputs_normalized_sparse_blocks()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = unique_temp_dir();
-        let output = dir.join("out.bin");
-        let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02, 0x03]).unwrap(),
-            Segment::new(0x1001, vec![0xAA]).unwrap(),
-            Segment::new(0x2000, vec![0xBB, 0xCC]).unwrap(),
-        ]);
-
-        write_output(&hexfile, &output, &Some(OutputFormat::SeparateBinary), None)?;
-
-        let file1 = dir.join("out_1000.bin");
-        let file2 = dir.join("out_2000.bin");
-        assert_eq!(fs::read(file1)?, vec![0x01, 0xAA, 0x03]);
-        assert_eq!(fs::read(file2)?, vec![0xBB, 0xCC]);
-
-        let _ = fs::remove_dir_all(dir);
         Ok(())
     }
 
@@ -814,7 +626,6 @@ mod tests {
 
         let args = Args {
             ini_file: Some(ini_path),
-            bytes_per_line: Some(16),
             ..Args::default()
         };
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02]).unwrap()]);
@@ -902,7 +713,7 @@ mod tests {
         let args = Args::default();
         let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01]).unwrap()]);
 
-        let result = write_porsche_output(&args, &hexfile, &output);
+        let result = write_porsche_output(&args, &hexfile, &output, &FsProvider);
         assert!(result.is_err());
         assert!(!output.exists());
 
@@ -930,7 +741,7 @@ mod tests {
             Segment::new(0x1004, vec![0x03]).unwrap(),
         ]);
 
-        write_porsche_output(&args, &hexfile, &output).unwrap();
+        write_porsche_output(&args, &hexfile, &output, &FsProvider).unwrap();
         let data = fs::read(&output).unwrap();
         // data: 0x01,0x02,0xFF,0xFF,0x03 then checksum
         assert_eq!(&data[..5], &[0x01, 0x02, 0xFF, 0xFF, 0x03]);
@@ -960,7 +771,7 @@ mod tests {
             Segment::new((crate::DEFAULT_DENSE_SPAN_LIMIT as u32) + 1, vec![0x02]).unwrap(),
         ]);
 
-        let result = write_porsche_output(&args, &hexfile, &output);
+        let result = write_porsche_output(&args, &hexfile, &output, &FsProvider);
         assert!(result.is_err());
         assert!(!output.exists());
 
@@ -968,28 +779,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_default_paths_from_i16_input() {
-        let input = PathBuf::from("input.hex");
+    fn test_resolve_ini_path_from_i16_input() {
         let args = Args {
-            import_i16: Some(input.clone()),
+            import_i16: Some(PathBuf::from("input.hex")),
             ..Args::default()
         };
-
-        assert_eq!(
-            resolve_c_code_output_path(&args).unwrap(),
-            input.with_extension("c")
-        );
-        assert_eq!(
-            resolve_ford_output_path(&args).unwrap(),
-            input.with_extension("hex")
-        );
-        assert_eq!(
-            resolve_porsche_output_path(&args).unwrap(),
-            input.with_extension("bin")
-        );
-        assert_eq!(
-            resolve_ini_path(&args).unwrap(),
-            input.with_extension("ini")
-        );
+        assert_eq!(resolve_ini_path(&args).unwrap(), PathBuf::from("input.ini"));
     }
 }

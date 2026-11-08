@@ -12,7 +12,8 @@ pub use error::{ParseError, WriteError};
 pub use file::{AutoFormat, FileIoError, detect_format, parse_auto};
 pub use hex_ascii::{HexAsciiWriteOptions, parse_hex_ascii, write_hex_ascii};
 pub use intel_hex::{
-    IntelHexMode, IntelHexWriteOptions, parse_intel_hex, parse_intel_hex_16bit, write_intel_hex,
+    DEFAULT_INTEL_HEX_BYTES_PER_LINE, IntelHexMode, IntelHexWriteOptions, parse_intel_hex,
+    parse_intel_hex_16bit, write_intel_hex,
 };
 pub use srec::{
     DEFAULT_SREC_BYTES_PER_LINE, SRecordType, SRecordWriteOptions, parse_srec, write_srec,

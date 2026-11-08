@@ -220,6 +220,19 @@ def test_pipeline_places_checksums_in_order():
     assert result.hexfile.read(0x2000, 2) == b"\x14\x00"
 
 
+def test_pipeline_removes_split_pieces_and_places_constant():
+    # HexView 1.15.2: /SB:0x100 /RB=0x101 removes every piece; /CS16 writes a constant.
+    pipeline = hexy.Pipeline()
+    pipeline.remove_small_blocks(0x101)
+    pipeline.split(0x100)
+    pipeline.checksum(16, constant=b"", placement=0x5000)
+
+    result = pipeline.apply(hexy.HexFile.from_binary(bytes(0x300), 0x1000))
+
+    assert result.checksums == [b""]
+    assert [s.start for s in result.hexfile.segments()] == [0x5000]
+
+
 def test_dspic_and_mapping_surfaces_are_available():
     hf = hexy.HexFile.from_binary(b"\x01\x02\x03\x04", 0x1000)
     hf.dspic_expand("0x1000-0x1003", 0x2000)

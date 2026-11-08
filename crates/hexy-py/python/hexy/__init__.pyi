@@ -127,7 +127,11 @@ class HexFile:
     def align(
         self, alignment: int, *, fill: int = 0xFF, length: bool = False
     ) -> None: ...
-    def split(self, max_size: int) -> None: ...
+    def split(self, max_size: int) -> None:
+        """Split each block into pieces of at most `max_size` bytes; the pieces stay
+        separate blocks."""
+    def remove_small_blocks(self, min_len: int) -> None:
+        """Remove blocks shorter than `min_len` bytes (`/RB`)."""
     def swap(self, mode: SwapMode) -> None: ...
     def dspic_expand(self, range: RangeLike, target: int | None = None) -> None: ...
     def dspic_shrink(self, range: RangeLike, target: int | None = None) -> None: ...
@@ -147,7 +151,9 @@ class Pipeline:
     """HexView-ordered recipe: each method configures one stage, and `apply` runs
     the configured stages in HexView order, whatever order they were set in.
     Methods for single stages replace earlier settings; `dspic_*`, `cut`, `merge`
-    and `checksum` add to their stage."""
+    and `checksum` add to their stage. Configured data stages join adjacent data
+    into one block; pass `source.normalized()` to also join it on input, as
+    HexView does when it loads a file."""
 
     def __init__(self) -> None: ...
     def apply(self, source: HexFile) -> PipelineResult: ...
@@ -175,6 +181,8 @@ class Pipeline:
         self, alignment: int, *, fill: int = 0xFF, length: bool = False
     ) -> None: ...
     def split(self, max_size: int) -> None: ...
+    def remove_small_blocks(self, min_len: int) -> None:
+        """Remove blocks shorter than `min_len` bytes after the split and swap stages (`/RB`)."""
     def swap(self, mode: SwapMode) -> None: ...
     def checksum(
         self,
@@ -186,8 +194,10 @@ class Pipeline:
         exclude: RangesLike | None = None,
         forced_range: RangeLike | None = None,
         forced_pattern: bytes | None = None,
+        constant: bytes | None = None,
     ) -> None:
         """Add a checksum stage using a HexView `/CS` algorithm index. `reverse`
         reverses the algorithm's native byte order (`/CSR`); `forced_range` is
         included even where it holds no data, with gaps taking `forced_pattern`
-        (default 0xFF)."""
+        (default 0xFF). Algorithm 16 writes `constant` (default 08 15) instead of
+        a checksum."""

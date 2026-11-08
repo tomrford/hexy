@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::{AddressRange, DspicOp, ForcedRange, Placement, RemapOptions};
+use crate::{
+    AddressRange, DspicOp, ForcedRange, HexAsciiWriteOptions, IntelHexWriteOptions, Placement,
+    RemapOptions, SRecordWriteOptions,
+};
 
 use super::parse::parse_option;
 
@@ -48,9 +51,8 @@ pub struct Args {
     pub merge_opaque: Vec<MergeParam>,
     pub merge_transparent: Vec<MergeParam>,
 
-    // Address range filter: /AR:'range'
-    pub address_range: Vec<AddressRange>,
-    pub address_range_empty_output: bool,
+    // Address range filter: /AR:'range'[:'range']; an empty list keeps nothing
+    pub address_range: Option<Vec<AddressRange>>,
 
     // Log file: /L:file
     pub log_file: Option<PathBuf>,
@@ -79,6 +81,8 @@ pub struct Args {
 
     // Split blocks: /sb:size
     pub split_block_size: Option<u32>,
+    // Remove blocks shorter than this: /RB=size
+    pub remove_blocks_below: Option<u32>,
 
     // Byte swap: /swapword or /swaplong
     pub swap_word: bool,
@@ -89,11 +93,8 @@ pub struct Args {
     pub dspic_shrink: Vec<DspicOp>,
     pub dspic_clear_ghost: Vec<AddressRange>,
 
-    // Output format (only one allowed)
+    // Output format; the last /Xx flag wins
     pub output_format: Option<OutputFormat>,
-
-    // Output format options
-    pub bytes_per_line: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -143,21 +144,29 @@ pub struct SignatureVerifyParams {
 
 #[derive(Debug, Clone)]
 pub enum OutputFormat {
-    IntelHex {
-        record_type: Option<u8>,
-    }, // /XI[:len[:type]]
-    SRecord {
-        record_type: Option<u8>,
-    }, // /XS[:len[:type]]
-    Binary, // /XN
-    HexAscii {
-        line_length: Option<u32>,
-        separator: Option<String>,
-    }, // /XA
-    CCode,  // /XC
-    FordIntelHex, // /XF
-    Porsche, // /XP
-    SeparateBinary, // /XSB
+    IntelHex(IntelHexWriteOptions), // /XI[:len[:type]]
+    /// `/XS[:len[:type]]`; a record length of 0 writes no data records, as HexView does.
+    SRecord(SRecordWriteOptions),
+    Binary,                         // /XN
+    HexAscii(HexAsciiWriteOptions), // /XA[:len[:separator]]
+    CCode,                          // /XC
+    FordIntelHex,                   // /XF
+    Porsche,                        // /XP
+    SeparateBinary,                 // /XSB
+}
+
+impl OutputFormat {
+    /// Appended to the input file name without its extension when `-o` is absent.
+    pub fn default_suffix(&self) -> &'static str {
+        match self {
+            Self::IntelHex(_) => ".hex",
+            Self::SRecord(_) => ".s19",
+            Self::Binary | Self::Porsche | Self::SeparateBinary => ".bin",
+            Self::HexAscii(_) => ".asc",
+            Self::CCode => ".c",
+            Self::FordIntelHex => "_f.hex",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -166,7 +175,6 @@ pub enum ParseArgError {
     InvalidOption(String),
     InvalidRange(String),
     InvalidNumber(String),
-    DuplicateOutputFormat,
     MissingValue(String),
 }
 
@@ -177,7 +185,6 @@ impl std::fmt::Display for ParseArgError {
             Self::InvalidOption(s) => write!(f, "invalid option: {s}"),
             Self::InvalidRange(s) => write!(f, "invalid range: {s}"),
             Self::InvalidNumber(s) => write!(f, "invalid number: {s}"),
-            Self::DuplicateOutputFormat => write!(f, "multiple output formats specified"),
             Self::MissingValue(s) => write!(f, "missing value for {s}"),
         }
     }

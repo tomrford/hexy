@@ -15,6 +15,9 @@ pub enum AddressRangeError {
 
     #[error("zero length range at {start:#X}")]
     ZeroLength { start: u32 },
+
+    #[error("range {start:#X},{length:#X} reaches past the address space")]
+    PastAddressSpace { start: u32, length: u64 },
 }
 
 /// An inclusive memory address range inside the u32 address space.
@@ -25,15 +28,15 @@ pub struct AddressRange {
 }
 
 impl AddressRange {
-    /// Create range from start address and length. A length reaching past the end of
-    /// the address space is clipped to `u32::MAX`.
+    /// Create range from start address and length.
     pub fn from_start_length(start: u32, length: u64) -> Result<Self, AddressRangeError> {
         if length == 0 {
             return Err(AddressRangeError::ZeroLength { start });
         }
         let end = u64::from(start)
-            .saturating_add(length - 1)
-            .min(u64::from(u32::MAX)) as u32;
+            .checked_add(length - 1)
+            .and_then(|end| u32::try_from(end).ok())
+            .ok_or(AddressRangeError::PastAddressSpace { start, length })?;
         Ok(Self { start, end })
     }
 
@@ -418,11 +421,12 @@ mod tests {
     }
 
     #[test]
-    fn test_start_length_past_address_space_is_clipped() {
-        let r: AddressRange = "0xFFFFFFFC,0x8".parse().unwrap();
-        assert_eq!(r.start(), 0xFFFF_FFFC);
-        assert_eq!(r.end(), u32::MAX);
-        assert_eq!(r.length(), 4);
+    fn test_start_length_past_address_space_errors() {
+        let result: Result<AddressRange, _> = "0xFFFFFFFC,0x5".parse();
+        assert!(matches!(
+            result,
+            Err(AddressRangeError::PastAddressSpace { .. })
+        ));
     }
 
     #[test]

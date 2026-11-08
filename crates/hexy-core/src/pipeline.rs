@@ -4,6 +4,12 @@
 //! configured stages in [`Pipeline::stages`] order, whatever order they were set in.
 //! Callers that act between stages (the compat CLI runs `/L` log commands and writes
 //! checksum and signature files) drive [`Pipeline::run_stage`] themselves.
+//!
+//! The image is kept as HexView keeps its blocks: every configured stage that adds,
+//! removes or moves data leaves it normalized, so adjacent data forms one block. Split
+//! pieces stay separate blocks (see [`HexFile::blocks`]) until a later stage places
+//! data. HexView also joins adjacent data when it loads a file; normalize the input
+//! first (`HexFile::normalize`) to reproduce that.
 
 use thiserror::Error;
 
@@ -73,6 +79,7 @@ pub enum Stage {
     Align,
     Split,
     Swap,
+    RemoveSmallBlocks,
     Checksum(usize),
     Sign,
     Verify,
@@ -97,6 +104,7 @@ impl Stage {
             Self::Align,
             Self::Split,
             Self::Swap,
+            Self::RemoveSmallBlocks,
         ])
         .chain((0..checksum_count).map(Self::Checksum))
         .chain([Self::Sign, Self::Verify])
@@ -136,6 +144,8 @@ pub struct Pipeline {
     pub fill_gaps: Option<u8>,
     pub align: Option<AlignOptions>,
     pub split: Option<u32>,
+    /// Remove blocks shorter than this many bytes.
+    pub remove_small_blocks: Option<u32>,
     pub swap_word: bool,
     pub swap_dword: bool,
     pub checksums: Vec<ChecksumStage>,
@@ -160,6 +170,40 @@ impl Pipeline {
 
     /// Apply one stage, recording any bytes it produces in `output`.
     pub fn run_stage(
+        &self,
+        stage: Stage,
+        hexfile: &mut HexFile,
+        output: &mut PipelineOutput,
+    ) -> Result<(), PipelineError> {
+        self.apply(stage, hexfile, output)?;
+        let places_data = match stage {
+            Stage::Split | Stage::RemoveSmallBlocks | Stage::Swap | Stage::Verify => false,
+            Stage::AddressMap => self.address_map.is_some(),
+            Stage::DspicExpand => !self.dspic_expand.is_empty(),
+            Stage::DspicShrink => !self.dspic_shrink.is_empty(),
+            Stage::DspicClearGhost => !self.dspic_clear_ghost.is_empty(),
+            Stage::Fill => self.fill.is_some(),
+            Stage::Cut => !self.cut.is_empty(),
+            Stage::Merge(index) => self.merges.get(index).is_some(),
+            Stage::AddressFilter => self.address_filter.is_some(),
+            Stage::FillGaps => self.fill_gaps.is_some(),
+            Stage::Align => self.align.is_some(),
+            Stage::Checksum(index) => self
+                .checksums
+                .get(index)
+                .is_some_and(|stage| stage.placement.is_some()),
+            Stage::Sign => self
+                .sign
+                .as_ref()
+                .is_some_and(|sign| sign.placement.is_some()),
+        };
+        if places_data {
+            hexfile.normalize();
+        }
+        Ok(())
+    }
+
+    fn apply(
         &self,
         stage: Stage,
         hexfile: &mut HexFile,
@@ -229,6 +273,11 @@ impl Pipeline {
             Stage::Split => {
                 if let Some(size) = self.split {
                     hexfile.split(size);
+                }
+            }
+            Stage::RemoveSmallBlocks => {
+                if let Some(min_len) = self.remove_small_blocks {
+                    hexfile.remove_small_blocks(min_len as usize);
                 }
             }
             Stage::Swap => {

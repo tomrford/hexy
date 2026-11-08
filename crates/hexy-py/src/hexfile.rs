@@ -225,7 +225,7 @@ impl PyHexFile {
             &self.inner,
             &HexAsciiWriteOptions {
                 line_length,
-                separator,
+                separator: separator.unwrap_or_default(),
             },
         );
         py_bytes(py, &data)
@@ -286,7 +286,7 @@ impl PyHexFile {
                 &path,
                 &HexAsciiWriteOptions {
                     line_length,
-                    separator,
+                    separator: separator.unwrap_or_default(),
                 },
             )
             .map_err(value_error)
@@ -360,6 +360,10 @@ impl PyHexFile {
 
     fn split(&mut self, max_size: u32) {
         self.inner.split(max_size);
+    }
+
+    fn remove_small_blocks(&mut self, min_len: usize) {
+        self.inner.remove_small_blocks(min_len);
     }
 
     fn swap(&mut self, mode: &str) -> PyResult<()> {

@@ -56,8 +56,8 @@ fn test_cli_dp_sv_rsa_pkcs1_success() {
     let output = run_hexy(&args);
     assert_success(&output);
 
-    let signature = std::fs::read(&sig_path).unwrap();
-    assert_eq!(signature.len(), 256);
+    let signature = std::fs::read_to_string(&sig_path).unwrap();
+    assert_eq!(signature.split(" ,").count(), 256);
 }
 
 #[test]
@@ -98,8 +98,8 @@ fn test_cli_dp_sv_ed25519_success() {
     let output = run_hexy(&args);
     assert_success(&output);
 
-    let signature = std::fs::read(&sig_path).unwrap();
-    assert_eq!(signature.len(), 64);
+    let signature = std::fs::read_to_string(&sig_path).unwrap();
+    assert_eq!(signature.split(" ,").count(), 64);
 }
 
 #[test]
@@ -175,8 +175,8 @@ fn assert_dp_placement_empty_input_noop(target: &str) {
     let output = run_hexy(&args);
     assert_success(&output);
 
-    let signature = std::fs::read(&sig_path).unwrap();
-    assert_eq!(signature.len(), 64);
+    let signature = std::fs::read_to_string(&sig_path).unwrap();
+    assert_eq!(signature.split(" ,").count(), 64);
 
     let encoded = std::fs::read(&out_hex).unwrap();
     let parsed = parse_intel_hex(&encoded).unwrap();

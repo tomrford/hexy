@@ -2,20 +2,26 @@ use super::super::types::ChecksumTarget;
 use super::*;
 use crate::Placement;
 
+/// HexView 1.15.2 reads /Xx parameters as lenient integers, falls back to auto record
+/// selection for unknown types and lets the last /Xx flag win.
 #[test]
-fn test_output_record_type_requires_length() {
+fn test_output_params_follow_hexview() {
     let mut args = Args::default();
-    let result = parse_option(&mut args, "XI::2");
-    assert!(result.is_err());
+    for opt in ["XI:16:1", "XS:10h:3"] {
+        parse_option(&mut args, opt).unwrap();
+    }
+    let Some(OutputFormat::SRecord(options)) = args.output_format.take() else {
+        panic!("last /Xx flag wins");
+    };
+    assert_eq!(options.bytes_per_line, 10);
+    assert_eq!(options.record_type, None);
 
-    let mut args = Args::default();
-    parse_option(&mut args, "XS::2").unwrap();
-    assert!(matches!(
-        args.output_format,
-        Some(OutputFormat::SRecord {
-            record_type: Some(2)
-        })
-    ));
+    parse_option(&mut args, "XI::x").unwrap();
+    let Some(OutputFormat::IntelHex(options)) = args.output_format else {
+        panic!("/XI parsed");
+    };
+    assert_eq!(options.bytes_per_line, 32);
+    assert_eq!(options.mode, crate::IntelHexMode::Auto);
 }
 
 #[test]
@@ -61,38 +67,32 @@ fn test_parse_dp_signature_subset_option() {
     assert_eq!(dp.key_info, "key.pem");
 }
 
+/// HexView 1.15.2 keeps the intersection of the valid /AR ranges, skips empty and
+/// overflowing ranges, stops reading at a reversed range, and applies the last /AR.
 #[test]
-fn test_parse_ar_repeated_last_wins() -> Result<(), Box<dyn std::error::Error>> {
+fn test_parse_ar_matches_hexview() -> Result<(), Box<dyn std::error::Error>> {
+    let ar = |value: &str| {
+        let mut args = Args::default();
+        parse_option(&mut args, &format!("AR:{value}")).map(|()| args.address_range)
+    };
+    assert_eq!(
+        ar("0x1000-0x1007:0x1004-0x100B")?,
+        Some(vec![AddressRange::from_start_end(0x1004, 0x1007)?])
+    );
+    assert_eq!(ar("0x1000,0x8:0x2000,0x4")?, Some(vec![]));
+    assert_eq!(
+        ar("0xFFFFFFF0,0x20:0x1000-0x1007:")?,
+        Some(vec![AddressRange::from_start_end(0x1000, 0x1007)?])
+    );
+    assert_eq!(ar("0x1000,0:0x1008-0x1007:0x1000-0x1007")?, None);
+
     let mut args = Args::default();
     parse_option(&mut args, "AR:0x1000,0x2")?;
     parse_option(&mut args, "AR:0x2000,0x2")?;
     assert_eq!(
         args.address_range,
-        vec![AddressRange::from_start_length(0x2000, 0x2)?]
+        Some(vec![AddressRange::from_start_length(0x2000, 0x2)?])
     );
-    assert!(!args.address_range_empty_output);
-    Ok(())
-}
-
-#[test]
-fn test_parse_ar_multiple_ranges_empty_output() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = Args::default();
-    parse_option(&mut args, "AR:0x1000,0x2:0x2000,0x2")?;
-    assert!(args.address_range.is_empty());
-    assert!(args.address_range_empty_output);
-    Ok(())
-}
-
-#[test]
-fn test_parse_ar_repeated_single_resets_empty_output() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = Args::default();
-    parse_option(&mut args, "AR:0x1000,0x2:0x2000,0x2")?;
-    parse_option(&mut args, "AR:0x3000,0x2")?;
-    assert_eq!(
-        args.address_range,
-        vec![AddressRange::from_start_length(0x3000, 0x2)?]
-    );
-    assert!(!args.address_range_empty_output);
     Ok(())
 }
 

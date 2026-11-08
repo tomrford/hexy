@@ -2,7 +2,7 @@
 //!
 //! Parser boundary: this module parses HexView-style argv into `Args`; execution
 //! builds a `hexy_core::Pipeline` from `Args` and runs its stages in order. The core
-//! pipeline owns the stage order (steps 5-18 below, except /L); compat loads inputs,
+//! pipeline owns the stage order (steps 5-19 below, except /L); compat loads inputs,
 //! runs /L after the /AR stage, writes checksum and signature files after their
 //! stages, and exports. `hexy-core` does not depend on slash syntax.
 //!
@@ -22,10 +22,11 @@
 //! 13. Align (/AD, /AL)
 //! 14. Split blocks (/SB)
 //! 15. Swap bytes (/SWAPWORD, /SWAPLONG)
-//! 16. Checksum (/CS, /CSM)
-//! 17. Data processing signature subset (/DP32/33/38/39/46/47/48/49)
-//! 18. Signature verification subset (/SV4..11)
-//! 19. Export (/Xx)
+//! 16. Remove small blocks (/RB)
+//! 17. Checksum (/CS, /CSM)
+//! 18. Data processing signature subset (/DP32/33/38/39/46/47/48/49)
+//! 19. Signature verification subset (/SV4..11)
+//! 20. Export (/Xx)
 //!
 //! Note: /PB remains unsupported (proprietary DLL-backed).
 

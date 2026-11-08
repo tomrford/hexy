@@ -1,13 +1,13 @@
 use crate::{
     AddressMap, AlignOptions, ChecksumStage, Fill, FillData, HexFile, Merge, MergeMode,
-    MergeOptions, Pipeline, PipelineOutput, Stage,
+    MergeOptions, Pipeline, PipelineOutput, Segment, Stage,
 };
 
 use super::error::CliError;
 use super::io::{
     FsProvider, ReadProvider, checksum_options, load_binary_input, load_hex_ascii_input,
     load_input, load_intel_hex_16bit_input, validate_porsche_output_args, write_checksum_text,
-    write_output_for_args,
+    write_output_for_args, write_signature_text,
 };
 use super::log::execute_log;
 use super::signature::{
@@ -93,11 +93,13 @@ impl Args {
         provider: &P,
     ) -> Result<(), CliError> {
         self.validate_supported_features()?;
-        validate_porsche_output_args(self)?;
+        validate_porsche_output_args(self, provider)?;
 
         let mut hexfile = self.load_hexfile(provider)?;
+        hexfile.normalize();
         let mut pipeline = self.pipeline();
         let mut output = PipelineOutput::default();
+        let mut checksum_error = None;
         let checksum_count = if matches!(self.output_format, Some(OutputFormat::Porsche)) {
             0
         } else {
@@ -106,12 +108,20 @@ impl Args {
         let merge_count = self.merge_transparent.len() + self.merge_opaque.len();
         for stage in Stage::in_order(merge_count, checksum_count) {
             self.before_stage(stage, &mut pipeline, provider)?;
-            pipeline
-                .run_stage(stage, &mut hexfile, &mut output)
-                .map_err(|e| CliError::Other(format!("{}: {e}", self.stage_flag(stage))))?;
-            self.after_stage(stage, &mut hexfile, &output, provider)?;
+            match pipeline.run_stage(stage, &mut hexfile, &mut output) {
+                Ok(()) => self.after_stage(stage, &mut hexfile, &output, provider)?,
+                Err(e) => {
+                    let error = CliError::Other(format!("{}: {e}", self.stage_flag(stage)));
+                    if !matches!(stage, Stage::Checksum(_)) {
+                        return Err(error);
+                    }
+                    checksum_error.get_or_insert(error);
+                    output.checksums.push(Vec::new());
+                }
+            }
         }
-        write_output_for_args(self, &hexfile, provider)
+        write_output_for_args(self, &hexfile, provider)?;
+        checksum_error.map_or(Ok(()), Err)
     }
 
     /// The core pipeline for these flags; each field is set only from its own flags.
@@ -135,11 +145,6 @@ impl Args {
                 }
             },
         });
-        let address_filter = if self.address_range_empty_output {
-            Some(Vec::new())
-        } else {
-            (!self.address_range.is_empty()).then(|| self.address_range.clone())
-        };
         Pipeline {
             address_map,
             dspic_expand: self.dspic_expand.clone(),
@@ -147,14 +152,15 @@ impl Args {
             dspic_clear_ghost: self.dspic_clear_ghost.clone(),
             fill,
             cut: self.cut_ranges.clone(),
-            address_filter,
+            address_filter: self.address_range.clone(),
             fill_gaps: self.fill_all.then_some(self.align_fill),
             align: self.align_address.map(|alignment| AlignOptions {
                 alignment,
                 fill_byte: self.align_fill,
                 align_length: self.align_length,
             }),
-            split: self.split_block_size,
+            split: self.split(),
+            remove_small_blocks: self.remove_blocks_below,
             swap_word: self.swap_word,
             swap_dword: self.swap_long,
             ..Default::default()
@@ -187,7 +193,7 @@ impl Args {
             Stage::Checksum(index) => {
                 let (params, flag) = self.checksum_stage(index);
                 pipeline.checksums.push(ChecksumStage {
-                    options: checksum_options(params, &flag)?,
+                    options: checksum_options(params, &flag, provider)?,
                     placement: match params.target {
                         ChecksumTarget::Place(placement) => Some(placement),
                         ChecksumTarget::None | ChecksumTarget::File(_) => None,
@@ -231,6 +237,7 @@ impl Args {
                     execute_log(hexfile, &content)?;
                 }
             }
+            Stage::Swap if self.swap_long => repeat_second_swapped_word(hexfile)?,
             Stage::Checksum(index) => {
                 let (params, flag) = self.checksum_stage(index);
                 if let (ChecksumTarget::File(path), Some(bytes)) =
@@ -244,7 +251,7 @@ impl Args {
                 if let (Some(dp), Some(signature)) = (&self.data_processing, &output.signature)
                     && let Some(path) = &dp.output_file
                 {
-                    std::fs::write(path, signature)
+                    write_signature_text(path, signature)
                         .map_err(|e| CliError::Other(format!("/DP{}: {e}", dp.method)))?;
                 }
             }
@@ -271,6 +278,7 @@ impl Args {
             Stage::FillGaps => "/FA",
             Stage::Align => "/AD/AL",
             Stage::Split => "/SB",
+            Stage::RemoveSmallBlocks => "/RB",
             Stage::Swap => "/SWAPWORD/SWAPLONG",
             Stage::Checksum(index) => return self.checksum_stage(index).1,
             Stage::Sign => {
@@ -283,6 +291,18 @@ impl Args {
             }
         };
         flag.to_owned()
+    }
+
+    /// HexView ignores `/SB` below 0x100 bytes with a warning.
+    fn split(&self) -> Option<u32> {
+        let size = self.split_block_size?;
+        if size < 0x100 {
+            if !self.silent {
+                eprintln!("Warning: invalid parameter for /SB; ignoring it");
+            }
+            return None;
+        }
+        Some(size)
     }
 
     /// `/CS` and `/CSM` are exclusive, so checksum stages come from one of them.
@@ -339,6 +359,38 @@ impl Args {
         }
         Err(ParseArgError::MissingInputFile.into())
     }
+}
+
+/// HexView quirk: after `/SWAPLONG`, every block of 16 MiB or more repeats its second
+/// swapped word after the first. The swap only runs on a span whose start and length
+/// are multiples of four.
+fn repeat_second_swapped_word(hexfile: &mut HexFile) -> Result<(), CliError> {
+    const LARGE_BLOCK: usize = 0x100_0000;
+    let (Some(start), Some(end)) = (hexfile.min_address(), hexfile.max_address()) else {
+        return Ok(());
+    };
+    let swapped = start % 4 == 0 && (u64::from(end - start) + 1) % 4 == 0;
+    if !swapped || hexfile.segments().iter().all(|s| s.len() < LARGE_BLOCK) {
+        return Ok(());
+    }
+    let blocks = std::mem::take(hexfile).into_segments();
+    *hexfile = HexFile::with_segments(
+        blocks
+            .into_iter()
+            .map(|block| {
+                if block.len() < LARGE_BLOCK {
+                    return Ok(block);
+                }
+                let (start, mut data) = block.into_parts();
+                let second = [data[4], data[5], data[6], data[7]];
+                for word in data[8..].chunks_exact_mut(4) {
+                    word.copy_from_slice(&second);
+                }
+                Segment::new(start, data).map_err(|e| CliError::Other(e.to_string()))
+            })
+            .collect::<Result<_, _>>()?,
+    );
+    Ok(())
 }
 
 /// `/FR` without `/FP` fills with fresh random bytes on every run.

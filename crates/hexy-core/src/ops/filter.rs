@@ -49,6 +49,17 @@ impl HexFile {
         self.filter_ranges(&[range]);
     }
 
+    /// Remove every block shorter than `min_len` bytes (see [`HexFile::blocks`]).
+    pub fn remove_small_blocks(&mut self, min_len: usize) {
+        let blocks = self.blocks();
+        self.set_segments(
+            blocks
+                .into_iter()
+                .filter(|block| block.len() >= min_len)
+                .collect(),
+        );
+    }
+
     /// Keep only data within any of the specified ranges.
     pub fn filter_ranges(&mut self, ranges: &[AddressRange]) {
         let ranges = merge_ranges(ranges);
@@ -293,19 +304,6 @@ mod tests {
         ]);
 
         hf.filter_range(AddressRange::from_start_length(u32::MAX - 3, 4).unwrap());
-
-        assert_eq!(hf.segments().len(), 1);
-        assert_eq!(hf.segments()[0].start_address, u32::MAX - 3);
-        assert_eq!(hf.segments()[0].data, vec![0xFC, 0xFD, 0xFE, 0xFF]);
-    }
-
-    #[test]
-    fn test_filter_overflowing_length_form_clips_to_address_space() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(u32::MAX - 3, vec![0xFC, 0xFD, 0xFE, 0xFF]).unwrap(),
-        ]);
-
-        hf.filter_range(AddressRange::from_start_length(u32::MAX - 3, 8).unwrap());
 
         assert_eq!(hf.segments().len(), 1);
         assert_eq!(hf.segments()[0].start_address, u32::MAX - 3);

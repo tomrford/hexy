@@ -17,12 +17,15 @@
 //! - 13: CRC-16/IBM-3740, LE output
 //! - 14: CRC-16/IBM-3740, BE output
 //! - 15: MD5
+//! - 16: constant bytes, no calculation
 //! - 17: CRC-16 CCITT LE init 0
 //! - 18: CRC-16 CCITT BE init 0
 //! - 19: SHA-512
 //! - 20: SHA-256
+//! - 21: CRC-16 CCITT LE init 0xCAFE (undocumented; identified from HexView 1.15.2 vectors)
+//! - 22: CRC-16 CCITT BE init 0xCAFE (undocumented; identified from HexView 1.15.2 vectors)
 
-use crc::Crc;
+use crc::{Algorithm, Crc};
 use md5::Md5;
 use ripemd::Ripemd160;
 use sha1::Sha1;
@@ -36,6 +39,19 @@ const CRC16_USB: Crc<u16> = Crc::<u16>::new(&crc::CRC_16_USB);
 const CRC16_IBM_3740: Crc<u16> = Crc::<u16>::new(&crc::CRC_16_IBM_3740);
 const CRC16_XMODEM: Crc<u16> = Crc::<u16>::new(&crc::CRC_16_XMODEM);
 const CRC32_ISO_HDLC: Crc<u32> = Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+const CRC16_CCITT_CAFE: Crc<u16> = Crc::<u16>::new(&Algorithm {
+    width: 16,
+    poly: 0x1021,
+    init: 0xCAFE,
+    refin: false,
+    refout: false,
+    xorout: 0x0000,
+    check: 0xEDAC,
+    residue: 0x0000,
+});
+
+/// The bytes HexView method 16 writes when no constant is configured.
+const DEFAULT_CHECKSUM_CONSTANT: [u8; 2] = [0x08, 0x15];
 
 /// Range included in the checksum even where it holds no data; gaps take the pattern.
 #[derive(Debug, Clone)]
@@ -46,7 +62,7 @@ pub struct ForcedRange {
 }
 
 /// Checksum algorithm identifier (cleanroom-compatible).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum ChecksumAlgorithm {
     #[default]
@@ -66,10 +82,14 @@ pub enum ChecksumAlgorithm {
     Crc16Ibm3740Le = 13,
     Crc16Ibm3740Be = 14,
     Md5 = 15,
+    /// These bytes in place of a checksum.
+    Constant(Vec<u8>) = 16,
     Crc16CcittLeInit0 = 17,
     Crc16CcittBeInit0 = 18,
     Sha512 = 19,
     Sha256 = 20,
+    Crc16CcittLeInitCafe = 21,
+    Crc16CcittBeInitCafe = 22,
 }
 
 impl TryFrom<u8> for ChecksumAlgorithm {
@@ -93,10 +113,13 @@ impl TryFrom<u8> for ChecksumAlgorithm {
             13 => Self::Crc16Ibm3740Le,
             14 => Self::Crc16Ibm3740Be,
             15 => Self::Md5,
+            16 => Self::Constant(DEFAULT_CHECKSUM_CONSTANT.to_vec()),
             17 => Self::Crc16CcittLeInit0,
             18 => Self::Crc16CcittBeInit0,
             19 => Self::Sha512,
             20 => Self::Sha256,
+            21 => Self::Crc16CcittLeInitCafe,
+            22 => Self::Crc16CcittBeInitCafe,
             _ => return Err(OpsError::UnsupportedChecksumAlgorithm(index)),
         })
     }
@@ -111,6 +134,7 @@ impl ChecksumAlgorithm {
             Self::Md5 => 16,
             Self::Sha256 => 32,
             Self::Sha512 => 64,
+            Self::Constant(bytes) => bytes.len(),
             _ => 2,
         }
     }
@@ -124,6 +148,7 @@ impl ChecksumAlgorithm {
                 | Self::WordSumLeTwosComplement
                 | Self::Crc16Ibm3740Le
                 | Self::Crc16CcittLeInit0
+                | Self::Crc16CcittLeInitCafe
         )
     }
 
@@ -184,7 +209,10 @@ impl HexFile {
     ) -> Result<Vec<u8>, OpsError> {
         use ChecksumAlgorithm as A;
 
-        let data = self.checksum_data(options, target)?;
+        let data = match options.algorithm {
+            A::Constant(_) => Vec::new(),
+            _ => self.checksum_data(options, target)?,
+        };
         let little_endian = options.algorithm.native_little_endian() ^ options.little_endian_output;
         let word = |value: u16| {
             if little_endian {
@@ -200,7 +228,7 @@ impl HexFile {
             bytes
         };
 
-        Ok(match options.algorithm {
+        Ok(match &options.algorithm {
             A::ByteSumBe | A::ByteSumLe => word(byte_sum(&data)),
             A::WordSumBe => word(word_sum(&data, u16::from_be_bytes)?),
             A::WordSumLe => word(word_sum(&data, u16::from_le_bytes)?),
@@ -214,6 +242,9 @@ impl HexFile {
             A::Crc16NonStandard => word(crc16_non_standard(&data)),
             A::Crc16Ibm3740Le | A::Crc16Ibm3740Be => word(CRC16_IBM_3740.checksum(&data)),
             A::Crc16CcittLeInit0 | A::Crc16CcittBeInit0 => word(CRC16_XMODEM.checksum(&data)),
+            A::Crc16CcittLeInitCafe | A::Crc16CcittBeInitCafe => {
+                word(CRC16_CCITT_CAFE.checksum(&data))
+            }
             A::Crc32 => {
                 let crc = CRC32_ISO_HDLC.checksum(&data);
                 if little_endian {
@@ -227,6 +258,7 @@ impl HexFile {
             A::Md5 => digest(Md5::digest(&data).to_vec()),
             A::Sha256 => digest(Sha256::digest(&data).to_vec()),
             A::Sha512 => digest(Sha512::digest(&data).to_vec()),
+            A::Constant(bytes) => digest(bytes.clone()),
         })
     }
 
@@ -414,6 +446,20 @@ mod tests {
         assert_eq!(checksum(&check, A::Crc16Ibm3740Be, false), [0x29, 0xB1]);
         assert_eq!(checksum(&check, A::Crc16CcittLeInit0, false), [0xC3, 0x31]);
         assert_eq!(checksum(&check, A::Crc16CcittBeInit0, false), [0x31, 0xC3]);
+        // HexView 1.15.2 /CS21 and /CS22.
+        assert_eq!(
+            checksum(&check, A::Crc16CcittLeInitCafe, false),
+            [0xAC, 0xED]
+        );
+        assert_eq!(
+            checksum(&check, A::Crc16CcittBeInitCafe, false),
+            [0xED, 0xAC]
+        );
+        // HexView 1.15.2 /CSR16 without expdatproc.ini.
+        assert_eq!(
+            checksum(&check, A::Constant(vec![0x08, 0x15]), true),
+            [0x15, 0x08]
+        );
         assert_eq!(checksum(&words, A::WordSumLe, false), [0xAC, 0x68]);
         assert_eq!(checksum(&words, A::WordSumBe, false), [0xAC, 0x68]);
         assert_eq!(
@@ -552,7 +598,10 @@ mod tests {
             ChecksumAlgorithm::try_from(12).unwrap(),
             ChecksumAlgorithm::ModularSum
         );
-        assert!(ChecksumAlgorithm::try_from(16).is_err());
-        assert!(ChecksumAlgorithm::try_from(21).is_err());
+        assert_eq!(
+            ChecksumAlgorithm::try_from(16).unwrap(),
+            ChecksumAlgorithm::Constant(vec![0x08, 0x15])
+        );
+        assert!(ChecksumAlgorithm::try_from(23).is_err());
     }
 }
