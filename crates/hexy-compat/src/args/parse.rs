@@ -1,30 +1,18 @@
 use std::path::PathBuf;
 
 use crate::{
-    AddressRange, DEFAULT_INTEL_HEX_BYTES_PER_LINE, DEFAULT_SREC_BYTES_PER_LINE,
-    HexAsciiWriteOptions, IntelHexMode, IntelHexWriteOptions, SRecordType, SRecordWriteOptions,
+    DEFAULT_INTEL_HEX_BYTES_PER_LINE, DEFAULT_SREC_BYTES_PER_LINE, HexAsciiWriteOptions,
+    IntelHexMode, IntelHexWriteOptions, MergeMode, SRecordType, SRecordWriteOptions,
 };
 
 use super::parse_util::{
-    parse_checksum, parse_dspic_op, parse_hex_bytes, parse_import_param, parse_lenient_number,
-    parse_lenient_ranges, parse_merge_params, parse_number, parse_remap, split_option,
-    strip_quotes,
+    parse_checksum, parse_dspic_ops, parse_import, parse_lenient_number, parse_merge_params,
+    parse_number, parse_ranges, parse_remap, split_option, strip_quotes,
 };
 use super::processing::{parse_data_processing, parse_signature_verify};
-use super::types::{Args, MergeParam, OutputFormat, ParseArgError};
+use super::types::{Args, Import, ImportKind, MergeSpec, OutputFormat, ParseArgError};
 
 type ValueParser = fn(&mut Args, &str, &str) -> Result<bool, ParseArgError>;
-
-fn extend_ranges(target: &mut Vec<AddressRange>, value: &str) -> Result<(), ParseArgError> {
-    target.extend(parse_lenient_ranges(value)?);
-    Ok(())
-}
-
-fn extend_merges(target: &mut Vec<MergeParam>, value: &str) -> Result<(), ParseArgError> {
-    let params = parse_merge_params(value)?;
-    target.extend(params);
-    Ok(())
-}
 
 fn parse_hex_no_sep(raw: &str) -> Result<u32, ParseArgError> {
     let stripped = raw
@@ -34,52 +22,45 @@ fn parse_hex_no_sep(raw: &str) -> Result<u32, ParseArgError> {
     u32::from_str_radix(stripped, 16).map_err(|_| ParseArgError::InvalidNumber(raw.to_owned()))
 }
 
-fn unsupported_output_format(key_upper: &str) -> ParseArgError {
-    ParseArgError::InvalidOption(format!("/{key_upper} not yet implemented"))
+/// HexView options with an effect hexy does not reproduce: OEM containers, GM headers,
+/// external DLLs and VBF tools.
+fn reject_unsupported(key_upper: &str) -> Result<(), ParseArgError> {
+    let unsupported = matches!(
+        key_upper,
+        "PB" | "EXPDAT"
+            | "MVBF"
+            | "XVBFSUBST"
+            | "XFCA_SIGN"
+            | "VS"
+            | "VSHSM"
+            | "XV"
+            | "XVBF"
+            | "XB"
+    ) || (key_upper.starts_with("XG") && key_upper != "XGACSWIL");
+    if unsupported {
+        return Err(ParseArgError::InvalidOption(format!(
+            "/{key_upper} is not supported"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_simple_flag(args: &mut Args, opt_upper: &str) -> bool {
     match opt_upper {
-        "S" => {
-            args.silent = true;
-            true
-        }
-        "V" => {
-            args.write_version = true;
-            true
-        }
-        "FA" => {
-            args.fill_all = true;
-            true
-        }
-        "SWAPWORD" => {
-            args.swap_word = true;
-            true
-        }
-        "SWAPLONG" => {
-            args.swap_long = true;
-            true
-        }
-        "S08" | "S08MAP" => {
-            args.s08_map = true;
-            true
-        }
-        "S12MAP" => {
-            args.s12_map = true;
-            true
-        }
-        "S12XMAP" => {
-            args.s12x_map = true;
-            true
-        }
-        "AL" => {
-            args.align_length = true;
-            true
-        }
+        "S" => args.silent = true,
+        "V" => args.write_version = true,
+        "FA" => args.fill_all = true,
+        "SWAPWORD" => args.swap_word = true,
+        "SWAPLONG" => args.swap_long = true,
+        "S08MAP" => args.s08_map = true,
+        "S12MAP" => args.s12_map = true,
+        "S12XMAP" => args.s12x_map = true,
+        "AL" => args.align_length = Some(0),
         // Disclaimer acceptance and license path: HexView runtime switches with no effect here.
-        "G" | "M" => true,
-        _ => false,
+        "G" | "M" => {}
+        _ => return false,
     }
+    true
 }
 
 fn parse_import_option(
@@ -87,44 +68,30 @@ fn parse_import_option(
     key_upper: &str,
     value: &str,
 ) -> Result<bool, ParseArgError> {
-    match key_upper {
-        "II2" => {
-            args.import_i16 = Some(PathBuf::from(strip_quotes(value)));
-            Ok(true)
-        }
-        "IN" => {
-            args.import_binary = Some(parse_import_param(value)?);
-            Ok(true)
-        }
-        "IA" => {
-            args.import_hex_ascii = Some(parse_import_param(value)?);
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
+    args.import = Some(match key_upper {
+        // HexView reads all of the /II2 value as the file name.
+        "II2" => Import {
+            kind: ImportKind::IntelHex16,
+            file: PathBuf::from(strip_quotes(value)),
+            offset: 0,
+        },
+        "IN" => parse_import(ImportKind::Binary, value),
+        "IA" => parse_import(ImportKind::HexAscii, value),
+        _ => return Ok(false),
+    });
+    Ok(true)
 }
 
 fn parse_path_option(args: &mut Args, key_upper: &str, value: &str) -> Result<bool, ParseArgError> {
+    let path = Some(PathBuf::from(strip_quotes(value)));
     match key_upper {
-        "E" => {
-            args.error_log = Some(PathBuf::from(strip_quotes(value)));
-            Ok(true)
-        }
-        "L" => {
-            args.log_file = Some(PathBuf::from(strip_quotes(value)));
-            Ok(true)
-        }
-        "P" => {
-            args.ini_file = Some(PathBuf::from(strip_quotes(value)));
-            Ok(true)
-        }
-        "PB" => {
-            args.postbuild = Some(PathBuf::from(strip_quotes(value)));
-            Ok(true)
-        }
-        "M" => Ok(true),
-        _ => Ok(false),
+        "E" => args.error_log = path,
+        "L" => args.log_file = path,
+        "P" => args.ini_file = path,
+        "M" => {}
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 fn parse_range_option(
@@ -135,29 +102,20 @@ fn parse_range_option(
     match key_upper {
         // HexView keeps the intersection of the valid ranges; with none, /AR has no effect.
         "AR" => {
-            let mut ranges = parse_lenient_ranges(value)?.into_iter();
+            let mut ranges = parse_ranges(value).into_iter();
             args.address_range = ranges.next().map(|first| {
                 ranges
                     .try_fold(first, |acc, range| acc.intersection(&range))
                     .into_iter()
                     .collect()
             });
-            Ok(true)
         }
-        "CR" => {
-            extend_ranges(&mut args.cut_ranges, value)?;
-            Ok(true)
-        }
-        "FR" => {
-            extend_ranges(&mut args.fill_ranges, value)?;
-            Ok(true)
-        }
-        "CDSPG" => {
-            extend_ranges(&mut args.dspic_clear_ghost, value)?;
-            Ok(true)
-        }
-        _ => Ok(false),
+        "CR" => args.cut_ranges.extend(parse_ranges(value)),
+        "FR" => args.fill_ranges.extend(parse_ranges(value)),
+        "CDSPG" => args.dspic_clear_ghost.extend(parse_ranges(value)),
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 fn parse_merge_option(
@@ -165,17 +123,16 @@ fn parse_merge_option(
     key_upper: &str,
     value: &str,
 ) -> Result<bool, ParseArgError> {
-    match key_upper {
-        "MO" => {
-            extend_merges(&mut args.merge_opaque, value)?;
-            Ok(true)
-        }
-        "MT" => {
-            extend_merges(&mut args.merge_transparent, value)?;
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
+    let mode = match key_upper {
+        "MO" => MergeMode::Overwrite,
+        "MT" => MergeMode::Preserve,
+        _ => return Ok(false),
+    };
+    args.merge = Some(MergeSpec {
+        mode,
+        files: parse_merge_params(value)?,
+    });
+    Ok(true)
 }
 
 fn parse_numeric_option(
@@ -187,7 +144,6 @@ fn parse_numeric_option(
         // Compatibility performance-tuning flags; accepted for compat, values ignored.
         "BHFCT" | "BTFST" | "BTBS" => {
             let _ = parse_number(value)?;
-            Ok(true)
         }
         "AD" => {
             if value.starts_with("0b") || value.starts_with("0B") {
@@ -195,33 +151,20 @@ fn parse_numeric_option(
             } else {
                 args.align_address = Some(parse_number(value)?);
             }
-            Ok(true)
         }
-        "AL" => {
-            args.align_length = true;
-            if !value.is_empty() {
-                args.align_address = Some(parse_number(value)?);
-            }
-            Ok(true)
-        }
+        "AL" => args.align_length = Some(parse_lenient_number(value)),
         "AF" => {
             let fill = parse_number(value)?;
             if fill > u8::MAX as u32 {
                 return Err(ParseArgError::InvalidNumber(value.to_owned()));
             }
             args.align_fill = fill as u8;
-            Ok(true)
         }
-        "AE" => {
-            args.align_erase = Some(parse_number(value)?);
-            Ok(true)
-        }
-        "SB" => {
-            args.split_block_size = Some(parse_lenient_number(value));
-            Ok(true)
-        }
-        _ => Ok(false),
+        "AE" => args.align_erase = Some(parse_number(value)?),
+        "SB" => args.split_block_size = Some(parse_lenient_number(value)),
+        _ => return Ok(false),
     }
+    Ok(true)
 }
 
 fn parse_checksum_option(
@@ -229,90 +172,32 @@ fn parse_checksum_option(
     key_upper: &str,
     value: &str,
 ) -> Result<bool, ParseArgError> {
-    fn reject_mixed(args: &Args, is_multi: bool) -> Result<(), ParseArgError> {
-        if is_multi && args.checksum.is_some() {
-            return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_owned(),
-            ));
-        }
-        if !is_multi && !args.checksum_multi.is_empty() {
-            return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_owned(),
-            ));
-        }
-        Ok(())
+    let (multi, little_endian, algo) = if let Some(algo) = key_upper.strip_prefix("CSMR") {
+        (true, true, algo)
+    } else if let Some(algo) = key_upper.strip_prefix("CSM") {
+        (true, false, algo)
+    } else if let Some(algo) = key_upper.strip_prefix("CSR") {
+        (false, true, algo)
+    } else if let Some(algo) = key_upper.strip_prefix("CS") {
+        (false, false, algo)
+    } else {
+        return Ok(false);
+    };
+    if !algo.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(false);
     }
-
-    if let Some(algo) = key_upper.strip_prefix("CSMR") {
-        reject_mixed(args, true)?;
-        args.checksum_multi.push(parse_checksum(algo, value, true)?);
-        return Ok(true);
+    if (multi && args.checksum.is_some()) || (!multi && !args.checksum_multi.is_empty()) {
+        return Err(ParseArgError::InvalidOption(
+            "cannot combine /CS* with /CSM*".to_owned(),
+        ));
     }
-    if let Some(algo) = key_upper.strip_prefix("CSM") {
-        reject_mixed(args, true)?;
-        args.checksum_multi
-            .push(parse_checksum(algo, value, false)?);
-        return Ok(true);
+    let params = parse_checksum(algo, value, little_endian)?;
+    if multi {
+        args.checksum_multi.push(params);
+    } else {
+        args.checksum = Some(params);
     }
-    if let Some(algo) = key_upper.strip_prefix("CSR") {
-        reject_mixed(args, false)?;
-        args.checksum = Some(parse_checksum(algo, value, true)?);
-        return Ok(true);
-    }
-    if let Some(algo) = key_upper.strip_prefix("CS") {
-        reject_mixed(args, false)?;
-        args.checksum = Some(parse_checksum(algo, value, false)?);
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-fn parse_bare_checksum_option(args: &mut Args, opt_upper: &str) -> Result<bool, ParseArgError> {
-    if let Some(algo) = opt_upper.strip_prefix("CSMR")
-        && algo.chars().all(|ch| ch.is_ascii_digit())
-    {
-        if args.checksum.is_some() {
-            return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_owned(),
-            ));
-        }
-        args.checksum_multi.push(parse_checksum(algo, "", true)?);
-        return Ok(true);
-    }
-    if let Some(algo) = opt_upper.strip_prefix("CSM")
-        && algo.chars().all(|ch| ch.is_ascii_digit())
-    {
-        if args.checksum.is_some() {
-            return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_owned(),
-            ));
-        }
-        args.checksum_multi.push(parse_checksum(algo, "", false)?);
-        return Ok(true);
-    }
-    if let Some(algo) = opt_upper.strip_prefix("CSR")
-        && algo.chars().all(|ch| ch.is_ascii_digit())
-    {
-        if !args.checksum_multi.is_empty() {
-            return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_owned(),
-            ));
-        }
-        args.checksum = Some(parse_checksum(algo, "", true)?);
-        return Ok(true);
-    }
-    if let Some(algo) = opt_upper.strip_prefix("CS")
-        && algo.chars().all(|ch| ch.is_ascii_digit())
-    {
-        if !args.checksum_multi.is_empty() {
-            return Err(ParseArgError::InvalidOption(
-                "cannot combine /CS* with /CSM*".to_owned(),
-            ));
-        }
-        args.checksum = Some(parse_checksum(algo, "", false)?);
-        return Ok(true);
-    }
-    Ok(false)
+    Ok(true)
 }
 
 fn parse_data_processing_option(
@@ -345,61 +230,26 @@ fn parse_signature_verify_option(
     Ok(false)
 }
 
-fn parse_dspic_option(
-    args: &mut Args,
-    key_upper: &str,
-    value: &str,
-) -> Result<bool, ParseArgError> {
-    match key_upper {
-        "CDSPX" => {
-            if let Ok(op) = parse_dspic_op(value) {
-                args.dspic_expand.push(op);
-            } else {
-                for part in value.split(':').filter(|p| !p.is_empty()) {
-                    args.dspic_expand.push(parse_dspic_op(part)?);
-                }
-            }
-            Ok(true)
-        }
-        "CDSPS" => {
-            if let Ok(op) = parse_dspic_op(value) {
-                args.dspic_shrink.push(op);
-            } else {
-                for part in value.split(':').filter(|p| !p.is_empty()) {
-                    args.dspic_shrink.push(parse_dspic_op(part)?);
-                }
-            }
-            Ok(true)
-        }
-        _ => Ok(false),
-    }
-}
-
 fn parse_value_option(
     args: &mut Args,
     key_upper: &str,
     value: &str,
 ) -> Result<bool, ParseArgError> {
     match key_upper {
+        "CDSPX" => args.dspic_expand.extend(parse_dspic_ops(value)?),
+        "CDSPS" => args.dspic_shrink.extend(parse_dspic_ops(value)?),
+        // HexView reads the pattern like HEX ASCII data; without any digits the fill is
+        // random.
         "FP" => {
-            args.fill_pattern = parse_hex_bytes(value)?;
-            args.fill_pattern_set = true;
-            Ok(true)
+            args.fill_pattern = crate::parse_hex_ascii(value.as_bytes(), 0)
+                .ok()
+                .and_then(|pattern| pattern.into_segments().pop())
+                .map(|segment| segment.into_parts().1);
         }
-        "REMAP" => {
-            args.remap = Some(parse_remap(value)?);
-            Ok(true)
-        }
-        _ => Ok(false),
+        "REMAP" => args.remap = Some(parse_remap(value)?),
+        _ => return Ok(false),
     }
-}
-
-fn parse_output_option_value(
-    args: &mut Args,
-    key_upper: &str,
-    value: &str,
-) -> Result<bool, ParseArgError> {
-    parse_output_option(args, key_upper, Some(value))
+    Ok(true)
 }
 
 /// `/XI` and `/XS` record length; HexView crashes above 255.
@@ -455,96 +305,79 @@ fn parse_output_option(
         }
         "XC" => OutputFormat::CCode,
         "XF" => OutputFormat::FordIntelHex,
+        "XK" => OutputFormat::FlashKernel,
+        "XGACSWIL" => OutputFormat::GacSwil,
         "XP" => OutputFormat::Porsche,
         "XSB" => OutputFormat::SeparateBinary,
-        "XG" | "XGC" | "XGCC" | "XGAC" | "XGACSWIL" | "XK" | "XV" | "XVBF" | "XB" => {
-            return Err(unsupported_output_format(key_upper));
-        }
         _ => return Ok(false),
     };
     args.output_format = Some(format);
     Ok(true)
 }
 
-pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<(), ParseArgError> {
+/// Parse one option without its `/` or `-`; `Ok(false)` when HexView does not know it.
+pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<bool, ParseArgError> {
     let opt_upper = opt.to_ascii_uppercase();
 
     if parse_simple_flag(args, &opt_upper) {
-        return Ok(());
-    }
-    if parse_bare_checksum_option(args, &opt_upper)? {
-        return Ok(());
+        return Ok(true);
     }
     // HexView accepts /RB only with '='.
     if let Some(value) = opt_upper.strip_prefix("RB=") {
         args.remove_blocks_below = Some(parse_lenient_number(value));
-        return Ok(());
+        return Ok(true);
     }
 
-    if opt_upper.starts_with("AD")
-        && opt_upper.len() > 2
-        && !opt[2..].starts_with(':')
-        && !opt[2..].starts_with('=')
-    {
-        let raw = &opt[2..];
-        let value = parse_hex_no_sep(raw)?;
-        args.align_address = Some(value);
-        return Ok(());
+    // `/ADxx` and `/AFxx` read xx as hex digits.
+    let hex_suffix = |prefix| {
+        opt_upper
+            .strip_prefix(prefix)
+            .filter(|raw| !raw.is_empty() && !raw.starts_with([':', '=']))
+    };
+    if let Some(raw) = hex_suffix("AD") {
+        args.align_address = Some(parse_hex_no_sep(raw)?);
+        return Ok(true);
+    }
+    if let Some(raw) = hex_suffix("AF") {
+        args.align_fill = u8::try_from(parse_hex_no_sep(raw)?)
+            .map_err(|_| ParseArgError::InvalidNumber(raw.to_owned()))?;
+        return Ok(true);
     }
 
-    if opt_upper.starts_with("AF")
-        && opt_upper.len() > 2
-        && !opt[2..].starts_with(':')
-        && !opt[2..].starts_with('=')
-    {
-        let raw = &opt[2..];
-        let value = parse_hex_no_sep(raw)?;
-        if value > u8::MAX as u32 {
-            return Err(ParseArgError::InvalidNumber(raw.to_owned()));
-        }
-        args.align_fill = value as u8;
-        return Ok(());
+    let Some((key, value)) = split_option(opt) else {
+        reject_unsupported(&opt_upper)?;
+        // `/CSn`, `/DPn` and `/SVn` without parameters; the latter two fail when their
+        // stage runs.
+        return Ok(parse_output_option(args, &opt_upper, None)?
+            || parse_checksum_option(args, &opt_upper, "")?
+            || parse_data_processing_option(args, &opt_upper, "")?
+            || parse_signature_verify_option(args, &opt_upper, "")?);
+    };
+    let key_upper = key.to_ascii_uppercase();
+    reject_unsupported(&key_upper)?;
+    // HexView ignores `/CR=` and `/FR=`.
+    if matches!(key_upper.as_str(), "CR" | "FR") && opt[key.len()..].starts_with('=') {
+        return Ok(true);
     }
 
-    if let Some((key, value)) = split_option(opt) {
-        let key_upper = key.to_ascii_uppercase();
-
-        let parsers: &[ValueParser] = &[
-            parse_output_option_value,
-            parse_import_option,
-            parse_path_option,
-            parse_range_option,
-            parse_merge_option,
-            parse_numeric_option,
-            parse_checksum_option,
-            parse_data_processing_option,
-            parse_signature_verify_option,
-            parse_dspic_option,
-            parse_value_option,
-        ];
-        for parser in parsers {
-            if parser(args, &key_upper, value)? {
-                return Ok(());
-            }
-        }
-        return Err(ParseArgError::InvalidOption(opt.to_owned()));
-    } else {
-        let opt_upper = opt.to_ascii_uppercase();
-        if parse_output_option(args, &opt_upper, None)? {
-            return Ok(());
-        }
-        // `/DPn` and `/SVn` without parameters fail when their stage runs.
-        if parse_data_processing_option(args, &opt_upper, "")?
-            || parse_signature_verify_option(args, &opt_upper, "")?
-        {
-            return Ok(());
-        }
-        if !parse_simple_flag(args, &opt_upper) {
-            return Err(ParseArgError::InvalidOption(opt.to_owned()));
+    let parsers: &[ValueParser] = &[
+        |args, key, value| parse_output_option(args, key, Some(value)),
+        parse_import_option,
+        parse_path_option,
+        parse_range_option,
+        parse_merge_option,
+        parse_numeric_option,
+        parse_checksum_option,
+        parse_data_processing_option,
+        parse_signature_verify_option,
+        parse_value_option,
+    ];
+    for parser in parsers {
+        if parser(args, &key_upper, value)? {
+            return Ok(true);
         }
     }
-
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(test)]

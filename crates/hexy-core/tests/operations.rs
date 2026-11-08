@@ -50,11 +50,10 @@ fn test_merge_align_normalize_overwrite() {
 
     // Align to 4 bytes
     hf1.align(&AlignOptions {
-        alignment: 4,
+        address_alignment: 4,
+        length_alignment: 4,
         fill_byte: 0xFF,
-        align_length: true,
-    })
-    .unwrap();
+    });
 
     let norm = hf1.normalized();
 
@@ -135,11 +134,10 @@ fn test_align_then_split() {
 
     // Align to 8-byte boundary with length alignment
     hf.align(&AlignOptions {
-        alignment: 8,
+        address_alignment: 8,
+        length_alignment: 8,
         fill_byte: 0xFF,
-        align_length: true,
-    })
-    .unwrap();
+    });
 
     // After align: start at 0x1000 (3 prepended), length becomes 32 (next multiple of 8)
     assert_eq!(hf.segments()[0].start_address(), 0x1000);
@@ -267,11 +265,10 @@ fn test_filter_cut_fill_align_split() {
 
     // Align to 16 bytes
     hf.align(&AlignOptions {
-        alignment: 16,
+        address_alignment: 16,
+        length_alignment: 16,
         fill_byte: 0xFF,
-        align_length: true,
-    })
-    .unwrap();
+    });
 
     // Fill gaps to merge everything
     hf.fill_gaps(0x00, u64::MAX).unwrap();
@@ -308,7 +305,7 @@ fn test_operations_on_empty_file() {
     hf.scale_addresses(2).unwrap();
     hf.offset_addresses(0x1000).unwrap();
     hf.split(16);
-    hf.align(&AlignOptions::default()).unwrap();
+    hf.align(&AlignOptions::default());
 
     assert!(hf.segments().is_empty());
 }

@@ -8,39 +8,39 @@ The external compatibility target also supports additional proprietary or OEM-sp
 
 ## Command model
 
-- Use one positional input file unless an explicit import flag replaces it.
+- The first positional argument is the input file; HexView ignores later ones. Without it, the last of `/IN`, `/IA` and `/II2` loads the image, and without either the image starts empty.
 - Use slash flags for operations: `/FLAG`, `/FLAG:value`, or `/FLAG=value`.
+- Options HexView does not know, such as `/RB:8` with a colon, are reported as unrecognized and skipped, as HexView does. Options HexView knows but hexy does not reproduce are rejected (see the last section).
 - Use `-o <file>` for the output path.
 - Use `--` before an absolute Unix path if it would otherwise look like an option.
-- Expect numeric values to accept decimal, `0x` hex, trailing `h` hex, `0b` or trailing `b` binary, and `_` or `.` separators. `/XI`, `/XS`, `/XA`, `/SB` and `/RB` values follow HexView instead: `0x` hex or decimal digits up to the first other character, and no digits reads as 0.
+- Expect numeric values to accept decimal, `0x` hex, trailing `h` hex, `0b` or trailing `b` binary, and `_` or `.` separators. `/XI`, `/XS`, `/XA`, `/SB`, `/RB`, `/AL`, the `/IN` and `/IA` offsets, and the `/XC` INI values follow HexView instead: `0x` hex or decimal digits up to the first other character, and no digits reads as 0.
 - If several output format flags are given, the last one wins.
-- Ranges that are empty or reach past `0xFFFFFFFF` are skipped and a reversed range ends a range list, as in HexView; malformed range text is an error.
+- Ranges are `start,length` or `start-end`. As in HexView, each number is `0x` hex (lower-case `x`) or decimal after optional blanks, the start must be followed directly by `,` or `-`, and text after the second number is ignored. Empty ranges and ranges that reach past `0xFFFFFFFF` are skipped; a reversed or unreadable range, such as `1000h,4` or `x`, ends a range list.
 - Data is kept as blocks: adjacent data forms one block after every stage that changes data, except that `/SB` pieces stay separate blocks until a checksum or data processing output is placed. `/RB`, `/XSB` and `/DP` work on blocks.
 
 ## Execution order
 
 `hexy` applies operations in this order:
 
-1. Read positional input file.
+1. Read the positional input file, or the last import (`/IN`, `/IA`, `/II2`).
 2. Open error log with `/E`.
 3. Enable silent mode with `/S`.
-4. Import 16-bit Intel HEX with `/II2`.
-5. Apply address mapping with `/S08MAP`, `/S12MAP`, `/S12XMAP`, or `/REMAP`.
-6. Apply dsPIC transforms with `/CDSPX`, `/CDSPS`, `/CDSPG`.
-7. Fill ranges with `/FR` and `/FP`.
-8. Cut ranges with `/CR`.
-9. Merge files with `/MT` or `/MO`.
-10. Filter address ranges with `/AR`.
-11. Execute log commands with `/L`.
-12. Collapse to a single region with `/FA`.
-13. Align addresses or length with `/AD`, `/AL`, `/AF`, `/AE`.
-14. Split blocks with `/SB`.
-15. Swap bytes with `/SWAPWORD` or `/SWAPLONG`.
-16. Remove small blocks with `/RB`.
-17. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
-18. Apply supported data processing (signing, MACs, XOR, AES, RSA encryption, compression) with `/DP`.
-19. Apply supported signature verification with `/SV`.
-20. Export with `/X...` and `-o`.
+4. Apply address mapping with `/S08MAP`, `/S12MAP`, `/S12XMAP`, or `/REMAP`.
+5. Apply dsPIC transforms with `/CDSPX`, `/CDSPS`, `/CDSPG`.
+6. Fill ranges with `/FR` and `/FP`.
+7. Cut ranges with `/CR`.
+8. Merge files with `/MT` or `/MO`.
+9. Filter address ranges with `/AR`.
+10. Execute log commands with `/L`.
+11. Collapse to a single region with `/FA`.
+12. Align addresses or length with `/AD`, `/AL`, `/AF`, `/AE`.
+13. Split blocks with `/SB`.
+14. Swap bytes with `/SWAPWORD` or `/SWAPLONG`.
+15. Remove small blocks with `/RB`.
+16. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
+17. Apply supported data processing (signing, MACs, XOR, AES, RSA encryption, compression) with `/DP`.
+18. Apply supported signature verification with `/SV`.
+19. Export with `/X...` and `-o`.
 
 ## Input and runtime
 
@@ -50,14 +50,14 @@ The external compatibility target also supports additional proprietary or OEM-sp
 
 `/E:error.log`
 - Create or truncate an error log file before execution.
-- Write the final error text there on failure.
+- Every warning and error goes there on its own CRLF-terminated line, as in HexView, followed by the `/V` line and the unrecognized options.
 
 `/S`
-- Suppress stderr output for normal CLI failures.
+- Suppress stderr output for warnings and errors.
 - Keep using `/E` if you still want an error artifact.
 
 `/V`
-- Append the version string to the `/E` log after successful execution.
+- Add `hexy V<version>` to the `/E` log, also after a failure.
 - Use it with `/E`; by itself it has nowhere to write.
 
 `/BHFCT`, `/BTFST`, `/BTBS`
@@ -69,21 +69,23 @@ The external compatibility target also supports additional proprietary or OEM-sp
 
 ## Explicit imports
 
+Imports replace the positional input file, so HexView ignores them next to one, with a warning. Only the last import option is used. A missing import file is an error.
+
 `/IN:file[;offset]`
-- Import raw binary at `offset`, default `0`.
+- Import raw binary at `offset`, default `0`. A negative offset wraps around the address space.
 - Use this instead of a positional input when the source is not auto-detectable.
 
 `/IA:file[;offset]`
 - Import HEX ASCII at `offset`, default `0`.
-- Use it to force ASCII-hex parsing even when the source is not the main positional file.
+- Every pair of hex digits is a byte, and a single digit before a separator is a byte of its own (`123` reads `12 03`). A lower-case `x` is skipped, dropping a `0` right before it (`0x12` reads `12`); other characters separate.
 
 `/II2:file`
 - Import 16-bit Intel HEX with address values scaled by two.
-- Do not combine it with `/IN`, `/IA`, or a positional input file.
+- All of the value is the file name; it takes no offset.
 
 ## Address mapping
 
-`/S08` or `/S08MAP`
+`/S08MAP`
 - Map Star08 pages to `0x100000 + page * 0x4000`: `0x0000`, `0x4000` and `0xC000` are pages 0, 1 and 3, and the `0x8000-0xBFFF` window of bank `PP` is page `PP` for banks 0, 2 and 4 to `0x1F`. Banks 1 and 3 stay where they are, and `0x0000-0x3FFF` stays when its data would land on data of the bank 0 window.
 - Use it before later filtering, checksums, or export.
 
@@ -103,9 +105,9 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 
 ## dsPIC transforms
 
-`/CDSPX:range[;target]`
+`/CDSPX:range[;target][:range[;target]]...`
 - Expand dsPIC words by inserting two zero bytes per two-byte word.
-- Omit `target` to write back in place using the default mapping.
+- Omit `target` to write back in place using the default mapping. Text after a range, such as `,target`, is ignored, as in HexView.
 
 `/CDSPS:range[;target]`
 - Shrink dsPIC data by keeping the lower two bytes from each four-byte group.
@@ -120,31 +122,34 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 `/FR:'range1':'range2':...`
 - Fill the listed ranges before cuts, merges, and checksums.
 - Pair it with `/FP:xxyyzz...`; without `/FP`, `hexy` uses pseudo-random fill bytes.
+- HexView ignores `/FR=`; only `/FR:` fills.
 
 `/FP:xxyyzz...`
-- Set the fill pattern for `/FR`.
+- Set the fill pattern for `/FR`, read like `/IA` data: `/FP:ABC` is `AB 0C` and `/FP:0xAB` is `AB`. Without any hex digits the fill is random.
 - Reuse the pattern cyclically over the requested range.
 
 `/CR:'range1':'range2':...`
 - Remove bytes from the listed ranges.
 - Use it before `/AR` if the cut should affect later filtering.
+- HexView ignores `/CR=`; only `/CR:` cuts.
 
 `/MT:file[;offset][:range][+...]`
 - Merge transparently and preserve existing bytes on overlap.
 - Use `+` to chain several merge inputs in one flag value.
+- `*` and `?` in a file name merge every matching file in its folder, in name order and regardless of case; the offset and range apply to the first match only. A name without wildcards must exist.
+- A reversed or unreadable range merges the whole file and fails the run after the export, as in HexView.
 
 `/MO:file[;offset][:range][+...]`
 - Merge opaquely and overwrite existing bytes on overlap.
-- Do not combine `/MO` and `/MT` in the same command.
+- Takes the same forms as `/MT`. Only the last `/MO` or `/MT` option is used.
 
 `/AR:range[:range...]`
 - Keep only the data inside the intersection of the listed ranges; disjoint ranges keep nothing.
 - If `/AR` appears more than once, the last `/AR` wins.
 
 `/L:logfile`
-- Replay supported slash-style log commands from a file.
-- Use it for `FileClose` and `FileNew` cleanup/reset steps.
-- `FileOpen <path>` is rejected in command-line export; pass inputs through normal CLI input paths.
+- Run HexView log commands after `/AR`, matched case-sensitively at the start of each line. As in HexView's command-line run, `FileNew` and `FileOpen` leave an empty image, and `FileOpen` without a file name also fails; other lines, `FileClose` among them, are ignored.
+- A log file that cannot be read is ignored.
 
 `/FA`
 - Fill gaps and collapse the image into a single contiguous region.
@@ -153,19 +158,19 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 ## Alignment, split, and swap
 
 `/ADxx`, `/AD:xx`, or `/AD=xx`
-- Align segment starts to `xx`.
-- Use `/AL` if the final region length must also align.
+- Align block starts down to `xx`; `/ADxx` reads `xx` as hex.
+- Use `/AL` if block lengths must also align.
 
 `/AL[:length]`
-- Align overall length in addition to address alignment.
-- If `length` is provided, it also sets the alignment value.
+- Grow each block, counted from its aligned start, to a multiple of `length`, or without it of the `/AD` value. `/AL:length` without `/AD` leaves block starts as they are.
+- HexView aligns with the bit mask of the value minus one, and so does hexy: for a power of two that is the multiple, for other values (with a warning for `/AD`) it clears or sets the mask bits instead.
 
 `/AFxx`, `/AF:xx`, or `/AF=xx`
 - Set the fill byte for alignment and `/FA` gap filling.
 - Default is `0xFF`.
 
 `/AE:xxx`
-- Set the erase-alignment value used by Ford export sector formatting.
+- Set the erase alignment of the `/XF` erase sectors: each block is widened to the bits of `xxx - 1` around it, and sectors that touch are joined.
 - Treat it as Ford-export metadata, not a general transform by itself.
 
 `/SB:maxblocksize`
@@ -236,7 +241,7 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 
 `-o output.ext`
 - Write the export to `output.ext`.
-- Without `-o`, the export goes to the input file name with the format's extension: `.hex` for `/XI`, `.s19` for `/XS`, `.bin` for `/XN`, `/XP` and `/XSB`, `.asc` for `/XA`, `.c` for `/XC` and `_f.hex` for `/XF`. `/XI` without `-o` therefore overwrites a `.hex` input.
+- Without `-o`, the export goes to the input file name with the format's extension: `.hex` for `/XI`, `.s19` for `/XS`, `.bin` for `/XN`, `/XP`, `/XSB` and `/XGACSWIL`, `.asc` for `/XA`, `.c` for `/XC`, `.fkl` for `/XK` and `_f.hex` for `/XF`. `/XI` without `-o` therefore overwrites a `.hex` input.
 - Without an `/X...` flag nothing is exported, even with `-o`.
 
 `/XI[:reclinelen[:rectype]]`
@@ -261,25 +266,41 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 - Every byte is followed by CRLF when it ends a line and by the separator otherwise, the last byte included. The separator is used verbatim, quotes included.
 
 `/XC`
-- Export C source and header output using INI-driven settings from `/P`.
-- Use it when a bootloader or firmware build needs C arrays instead of hex files.
+- Export HexView's flash-driver C arrays: `-o` with its extension replaced by `.c` and `.h`, one `<Prefix>Blk<n>` array and `_ADDRESS`, `_LENGTH` and `_CHECKSUM` macros per block. Without `-o`, the files are named after the input file's full path.
+- `[C_EXPORT]` in the INI file sets `Prefix` (default empty), `WordSize` (0 bytes, 1 16-bit, 2 32-bit words), `WordType` (0 Intel, otherwise Motorola), `Decryption` (default on; off drops the XOR) and `Decryptvalue` (the XOR value, default 0). A partial last word is padded with zero bytes, and `_CHECKSUM` is the 16-bit (32-bit for `WordSize=2`) sum of the plain words.
+- Each file records its creation time, and `<PREFIX>_GEN_RAND` is a time-seeded number that ties the two files together, as in HexView.
+
+`/XK`
+- Export a CCP/XCP flash kernel (`.fkl`): a `[FLASH_KERNEL_CONFIG]` header followed by the kernel as Intel HEX. The image must be a single block; use `/FA` to make it one.
+- `[FLASH_KERNEL_CONFIG]` in the INI file sets `FLASH_KERNEL_NAME` (default the output file name), `FLASH_KERNEL_COMMENT` (default `Flash kernel <name>`), `FLASH_KERNEL_FILE_ADDR`, `FLASH_KERNEL_SIZE`, `FLASH_KERNEL_RAM_ADDR` and `FLASH_KERNEL_RAM_START` (default the block's start and length). Values are copied as text.
+- `FLASH_KERNEL_RAM_START=@file.map:pattern` takes the address from the first map file line that `pattern` matches, with `%lx` at the address, as C's `sscanf` reads it; without a match the text is kept.
+- As HexView does, the name, comment and RAM values that the INI file lacks are written back to it, creating it if needed.
+
+`/XGACSWIL`
+- Export a GAC software interlock file: the block count as one byte, each block's big-endian start address and length, then the data of every block. An empty image writes no file.
 
 `/XF`
-- Export Ford Intel-HEX container output using `[FORDHEADER]` values from `/P`.
-- Use `/AE` when Ford erase-sector formatting must align to a specific boundary.
+- Export a Ford Intel HEX file: a `KEY>value` header from `[FORDHEADER]`, `$`, then the data as Intel HEX.
+- Header lines appear in HexView's order and only for keys the INI file sets, except `FILE NAME` (default the output file name), `RELEASE DATE` (default today's local date), `DOWNLOAD FORMAT` (default `0x01`), `FILE CHECKSUM` (always the 16-bit sum of the data bytes), `FLASH INDICATOR` (default `1`) and `FLASH ERASE SECTORS` (default the blocks as `:start,length`, widened by `/AE`).
+- Without `PRODUCTION MODULE PART NUMBER` or `MODULE ID` the file stops before that line and holds no data, with a warning; the run still succeeds, as in HexView.
 
 `/XP`
-- Export Porsche binary output with the required trailer checksum.
-- Use it only when the downstream format expects Porsche-style single-region binary output.
+- Export the image as one region, gaps filled with the `/AF` byte, followed by the checksum of the first `/CS` or `/CSM` method over it, big-endian and without the method's ranges. The `/CS` stage still runs as usual, so `/CS0:@append` places its checksum before `/XP` adds its own.
+- Without a `/CS` method, or with one HexView does not know, the data is written alone and the run fails, as in HexView.
 
 ## INI-backed exports
 
 `/P:file.ini`
-- Supply extra parameters for export modes that require side metadata.
-- Use it with `/XC` and `/XF`; if omitted, `hexy` looks for `<input>.ini`.
+- Supply extra parameters for export modes that require side metadata: `[C_EXPORT]` for `/XC`, `[FLASH_KERNEL_CONFIG]` for `/XK` and `[FORDHEADER]` for `/XF`.
+- If omitted, `hexy` looks for `<input>.ini`, or the import file with `.ini`.
 
 ## Unsupported or out-of-scope
 
-- Treat `/PB`, `/expdat`, OEM containers, GM/VBF/FIAT-specific exports, and other proprietary external-tool extensions as out of scope here.
-- Output formats `/XG*` (GCC), `/XK` (Keil), `/XV`, `/XVBF`, and `/XB` are recognized by the parser but not yet implemented; using them produces an error.
-- Treat this reference as the shared CLI surface that `hexy` implements for non-proprietary workflows.
+These HexView options are rejected, because their formats or DLLs are not documented well enough to reproduce:
+
+- `/XG`, `/XGC`, `/XGCC`, `/XGCS`, `/XGCR`, `/XGCK` and `/XGC_*` (GM file headers, defined in GMW3110), `/XGMFBL` (GM-FBL header info) and `/XGAC` (GAC file header)
+- `/XV` (VAG SGML container), `/XVBF`, `/XVBFSUBST` and `/MVBF` (Ford and Volvo VBF), `/XB` (Fiat binary and parameter files) and `/xfca_sign` (FCA header)
+- `/PB` (post-build DLL) and `/expdat` (alternative data processing DLL)
+- `/vs` and `/vshsm` (validation structures)
+
+The GM header parameters (`/DLS`, `/DCID`, `/MPFH`, `/MODID`, `/PN`, `/SWMI`, `/sigver`, `/sigkeyid`, `/gmad`, `/gmal`, `/XML`), `/DIFF` (which needs a diff DLL HexView does not ship) and the `/tms570-parity` and `/tms570-ECC` options, which HexView 1.15.2 does not recognize, are reported as unrecognized and have no effect.

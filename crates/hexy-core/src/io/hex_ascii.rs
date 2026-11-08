@@ -18,51 +18,27 @@ impl Default for HexAsciiWriteOptions {
     }
 }
 
-/// Parse a HEX ASCII data file into a single segment at the given base address.
-/// Non-hex characters are treated as separators. CLI: /IA.
+/// Parse HEX ASCII data into a single segment at `base_address`, as HexView reads it:
+/// every pair of hex digits is a byte, and a single digit before a separator is a byte
+/// of its own. A lower-case `x` is skipped, dropping a `0` that comes right before it
+/// (the `0x` prefix); every other character separates. CLI: /IA.
 pub fn parse_hex_ascii(data: &[u8], base_address: u32) -> Result<HexFile, ParseError> {
     let mut bytes = Vec::new();
-    let mut line_no = 1usize;
-    let mut token_digits: Vec<u8> = Vec::new();
-
-    let mut idx = 0usize;
-    while idx < data.len() {
-        let b = data[idx];
-        if b == b'\r' {
-            idx += 1;
-            continue;
-        }
-        if b == b'\n' {
-            if !token_digits.is_empty() {
-                push_hex_token(&token_digits, &mut bytes, line_no)?;
-                token_digits.clear();
+    let mut pending: Option<u8> = None;
+    for &b in data {
+        if let Some(digit) = (b as char).to_digit(16) {
+            let digit = digit as u8;
+            match pending.take() {
+                Some(high) => bytes.push(high << 4 | digit),
+                None => pending = Some(digit),
             }
-            line_no += 1;
-            idx += 1;
-            continue;
+        } else if b == b'x' {
+            pending = pending.filter(|&digit| digit != 0);
+        } else if let Some(digit) = pending.take() {
+            bytes.push(digit);
         }
-        if b == b'0' && idx + 1 < data.len() && token_digits.is_empty() {
-            let next = data[idx + 1];
-            if next == b'x' || next == b'X' {
-                idx += 2;
-                continue;
-            }
-        }
-        if (b as char).is_ascii_hexdigit() {
-            token_digits.push(b);
-            idx += 1;
-            continue;
-        }
-        if !token_digits.is_empty() {
-            push_hex_token(&token_digits, &mut bytes, line_no)?;
-            token_digits.clear();
-        }
-        idx += 1;
     }
-
-    if !token_digits.is_empty() {
-        push_hex_token(&token_digits, &mut bytes, line_no)?;
-    }
+    bytes.extend(pending);
 
     if bytes.is_empty() {
         return Ok(HexFile::new());
@@ -92,14 +68,6 @@ pub fn write_hex_ascii(hexfile: &HexFile, options: &HexAsciiWriteOptions) -> Vec
         }
     }
     out
-}
-
-fn push_hex_token(digits: &[u8], out: &mut Vec<u8>, line: usize) -> Result<(), ParseError> {
-    match digits {
-        [digit] => out.push(super::hex_digit(*digit, line)?),
-        _ => out.extend(super::parse_hex_bytes(digits, line)?),
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -137,32 +105,29 @@ mod tests {
         assert_eq!(write(16), b"01,08,0F,16,1D,24,2B,32,");
     }
 
+    /// HexView 1.15.2 `/IA` readings.
     #[test]
-    fn test_hex_ascii_odd_digits_error() {
-        let data = b"0A1";
-        let result = parse_hex_ascii(data, 0);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_hex_ascii_accepts_0x_prefix() {
-        let data = b"0x12, 0x34\n0XAB";
-        let parsed = parse_hex_ascii(data, 0x2000).unwrap();
-        assert_eq!(parsed.segments()[0].start_address, 0x2000);
-        assert_eq!(parsed.segments()[0].data, vec![0x12, 0x34, 0xAB]);
-    }
-
-    #[test]
-    fn test_hex_ascii_single_digit_tokens() {
-        let data = b"A B C";
-        let parsed = parse_hex_ascii(data, 0).unwrap();
-        assert_eq!(parsed.segments()[0].data, vec![0x0A, 0x0B, 0x0C]);
-    }
-
-    #[test]
-    fn test_hex_ascii_contiguous_pairs() {
-        let data = b"23456789";
-        let parsed = parse_hex_ascii(data, 0).unwrap();
-        assert_eq!(parsed.segments()[0].data, vec![0x23, 0x45, 0x67, 0x89]);
+    fn test_hex_ascii_matches_hexview() {
+        let parse = |text: &[u8]| {
+            parse_hex_ascii(text, 0)
+                .unwrap()
+                .into_segments()
+                .pop()
+                .map(|segment| segment.into_parts().1)
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            parse(b"0x12, 0x23, 0x34\r\n23456789 5 F3"),
+            [0x12, 0x23, 0x34, 0x23, 0x45, 0x67, 0x89, 0x05, 0xF3]
+        );
+        assert_eq!(
+            parse(b"123 4567 0x5 0xABC x1 1x2"),
+            [0x12, 0x03, 0x45, 0x67, 0x05, 0xAB, 0x0C, 0x01, 0x12]
+        );
+        assert_eq!(parse(b"12 G4 zz 5"), [0x12, 0x04, 0x05]);
+        assert_eq!(parse(b"00x1"), [0x00, 0x01]);
+        assert_eq!(parse(b"0X12"), [0x00, 0x12]);
+        assert_eq!(parse(b"0x0x12"), [0x12]);
+        assert_eq!(parse(b"zz"), []);
     }
 }

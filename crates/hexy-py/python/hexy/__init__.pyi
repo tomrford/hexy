@@ -107,6 +107,36 @@ class HexFile:
     def to_hex_ascii(
         self, *, line_length: int = 16, separator: str | None = None
     ) -> bytes: ...
+    def to_c_code(
+        self,
+        file_name: str,
+        *,
+        prefix: str = "",
+        word_size: Literal[1, 2, 4] = 1,
+        motorola: bool = False,
+        xor: int | None = None,
+        created: str = "",
+        generation: int = 0,
+    ) -> tuple[bytes, bytes]:
+        """HexView's `/XC` C arrays of the blocks, as the `.c` and `.h` file contents.
+        `file_name` names the `.c` file in its comment and the `.h` file it includes,
+        `xor` is applied to every element, and `created` and `generation` fill the
+        creation date and the `_GEN_RAND` check."""
+    def to_flash_kernel(
+        self,
+        name: str,
+        *,
+        comment: str | None = None,
+        file_address: str | None = None,
+        size: str | None = None,
+        ram_address: str | None = None,
+        ram_start: str | None = None,
+    ) -> bytes:
+        """A CCP/XCP flash kernel file (`/XK`) of a single-block image. Header values
+        are written as given; by default they describe the block."""
+    def to_gac_swil(self) -> bytes:
+        """A GAC software interlock file (`/XGACSWIL`): the block count, each block's
+        big-endian address and length, then the data."""
     def write_binary(self, path: Pathish, *, fill_gaps: int | None = None) -> None: ...
     def write_intel_hex(
         self,
@@ -144,9 +174,10 @@ class HexFile:
         range: RangeLike | None = None,
     ) -> None: ...
     def offset(self, offset: int) -> None: ...
-    def align(
-        self, alignment: int, *, fill: int = 0xFF, length: bool = False
-    ) -> None: ...
+    def align(self, alignment: int, *, length: int = 0, fill: int = 0xFF) -> None:
+        """Move block starts down to `alignment` and grow block lengths, counted from the
+        aligned start, to `length` (`/AD`, `/AL`); 0 leaves them. HexView aligns with
+        the bit mask of the value minus one."""
     def split(self, max_size: int) -> None:
         """Split each block into pieces of at most `max_size` bytes; the pieces stay
         separate blocks."""
@@ -312,9 +343,7 @@ class Pipeline:
     ) -> None: ...
     def filter(self, ranges: RangesLike) -> None: ...
     def fill_gaps(self, *, fill: int = 0xFF) -> None: ...
-    def align(
-        self, alignment: int, *, fill: int = 0xFF, length: bool = False
-    ) -> None: ...
+    def align(self, alignment: int, *, length: int = 0, fill: int = 0xFF) -> None: ...
     def split(self, max_size: int) -> None: ...
     def remove_small_blocks(self, min_len: int) -> None:
         """Remove blocks shorter than `min_len` bytes after the split and swap stages (`/RB`)."""

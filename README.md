@@ -56,7 +56,7 @@ uv run --directory crates/hexy-py --group dev pytest tests
 
 Compat flags execute in a fixed pipeline order, not in argument order. Steps 2-10 are the stages of `hexy_core::Pipeline`, which the CLI builds from its flags:
 
-1. Input (`/IN`, `/IA`, `/II2`)
+1. Input: the positional file, or the last of `/IN`, `/IA` and `/II2`
 2. Address mapping (`/S08MAP`, `/S12MAP`, `/S12XMAP`, `/REMAP`)
 3. dsPIC transforms (`/CDSPX`, `/CDSPS`, `/CDSPG`)
 4. Fill (`/FR`; `/FP` sets the pattern, random fill when omitted)
@@ -66,7 +66,7 @@ Compat flags execute in a fixed pipeline order, not in argument order. Steps 2-1
 8. Collapse (`/FA`), align (`/AD`, `/AL`, `/AF`), split (`/SB`), swap (`/SWAPWORD`, `/SWAPLONG`), remove small blocks (`/RB`)
 9. Checksum (`/CS`, `/CSR`, `/CSM`, `/CSMR`)
 10. Data processing (`/DP`: signing, MACs, XOR, AES and RSA encryption, LZSS and ARLE compression) and verification (`/SV`)
-11. Export (`/XI`, `/XS`, `/XN`, `/XSB`, `/XA`, `/XC`, `/XF`, `/XP`) to `-o`, or to the input name with the format's extension; without an export flag nothing is written
+11. Export (`/XI`, `/XS`, `/XN`, `/XSB`, `/XA`, `/XC`, `/XK`, `/XGACSWIL`, `/XF`, `/XP`) to `-o`, or to the input name with the format's extension; without an export flag nothing is written
 
 The pipeline keeps the image as HexView keeps its blocks: adjacent data forms one block after every stage that changes data, while `/SB` pieces stay separate blocks until a checksum or data processing output is placed. `/RB`, `/XSB` and `/DP` work on these blocks (`HexFile::blocks`).
 

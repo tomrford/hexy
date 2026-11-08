@@ -120,7 +120,7 @@ def test_memory_operations_cover_filter_cut_fill_merge_align_split_swap():
 
     overlay = hexy.HexFile.from_binary(b"\xaa\xbb", 0x1002)
     hf.merge(overlay, mode="overwrite")
-    hf.align(4, fill=0xEE, length=True)
+    hf.align(4, length=4, fill=0xEE)
     hf.split(4)
     hf.swap("word")
 
@@ -213,7 +213,7 @@ def test_pipeline_matches_hexview_multistage_checksum():
     pipeline.checksum(9)
     pipeline.swap("word")
     pipeline.split(0x40)
-    pipeline.align(0x40, fill=0x00, length=True)
+    pipeline.align(0x40, length=0x40, fill=0x00)
     pipeline.filter(["0x0F00-0x1FFF"])
     pipeline.merge(merge, mode="preserve", offset=0x100)
     pipeline.cut(["0x1010-0x101F"])
@@ -421,3 +421,28 @@ def test_compression_matches_hexview():
         hexy.HexFile.from_binary(b"\x40\x00", 0).decompress("arle")
     with pytest.raises(ValueError):
         source.compress(window_bits=4, length_bits=4)
+
+
+def test_exports_match_hexview():
+    """HexView 1.15.2 `/XC`, `/XK` and `/XGACSWIL` of the same two blocks."""
+    hf = hexy.HexFile.from_segments(
+        [
+            hexy.Segment(0x1000, bytes((1 + 7 * i) & 0xFF for i in range(0x13))),
+            hexy.Segment(0x2001, bytes((2 + 7 * i) & 0xFF for i in range(6))),
+        ]
+    )
+    c, h = hf.to_c_code("out.c", prefix="fd", word_size=4, xor=0xCC)
+    assert b"\t0x160F08CDul, 0x322B24D1ul, 0x4E4740F5ul, 0x6A635C99ul,\r\n\t0x007F78BDul\r\n};" in c
+    assert b"#include <out.h>\r\n" in c
+    assert b"#define FD_BLOCK0_CHECKSUM\t0x164411Dul\r\n" in h
+
+    assert hf.to_gac_swil() == bytes.fromhex(
+        "02 00001000 00000013 00002001 00000006"
+    ) + hf.to_binary()
+
+    with pytest.raises(ValueError):
+        hf.to_flash_kernel("k.fkl")
+    hf.cut(["0x2000-0x2FFF"])
+    kernel = hf.to_flash_kernel("k.fkl", ram_start="0x38EB")
+    assert kernel.startswith(b'\r\n[FLASH_KERNEL_CONFIG]\r\n\r\nFLASH_KERNEL_NAME="k.fkl"\r\n')
+    assert b"FLASH_KERNEL_SIZE=0x13\r\nFLASH_KERNEL_RAM_ADDR=0x1000\r\nFLASH_KERNEL_RAM_START=0x38EB\r\n" in kernel

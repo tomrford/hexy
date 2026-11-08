@@ -17,6 +17,7 @@ use crate::{
 use super::error::CliError;
 use super::ini::load_ini;
 use super::io::ReadProvider;
+use super::report::Report;
 
 pub(super) use params::{
     DataInput, DataProcessingParams, ParamSource, SignatureVerifyParams, parse_data_processing,
@@ -182,7 +183,7 @@ fn sv_method(number: u8) -> Option<SignatureMethod> {
 /// method numbers fail when their stage runs, as in HexView.
 pub(super) fn validate_data_processing(
     params: &DataProcessingParams,
-    silent: bool,
+    report: &Report,
 ) -> Result<(), CliError> {
     let flag = format!("/DP{}", params.method);
     let unsupported = |what: &str| Err(CliError::Unsupported(format!("{flag}: {what}")));
@@ -243,9 +244,7 @@ pub(super) fn validate_data_processing(
         Method::None | Method::Xor | Method::Mac(..) | Method::Rsa { .. } => {}
     }
     for name in options.names().filter(|name| !used.contains(name)) {
-        if !silent {
-            eprintln!("Warning: {flag} ignores {name}");
-        }
+        report.warn(&format!("{flag} ignores {name}"));
     }
     Ok(())
 }

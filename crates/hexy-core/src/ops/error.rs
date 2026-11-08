@@ -22,9 +22,6 @@ pub enum OpsError {
         operation: &'static str,
     },
 
-    #[error("alignment must be non-zero, got {0}")]
-    InvalidAlignment(u32),
-
     #[error("unsupported checksum algorithm index: {0}")]
     UnsupportedChecksumAlgorithm(u8),
 

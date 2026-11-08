@@ -275,50 +275,28 @@ fn test_cli_binary_address_order() {
     assert_eq!(data, vec![0x02, 0x01]);
 }
 
+/// HexView 1.15.2 /XP: the checksum of the first /CS method over the final image,
+/// big-endian; without a method the data alone is written and the run fails.
 #[test]
-fn test_cli_porsche_requires_checksum_without_partial_output() {
-    let dir = temp_dir("cli_xp_requires_cs");
+fn test_cli_porsche_matches_hexview() {
+    let dir = temp_dir("cli_xp_hexview");
     let input = dir.join("input.bin");
     let out = dir.join("out.bin");
-    write_file(&input, &[0x01, 0x02]);
+    let data: Vec<u8> = (0..0x13u8).map(|i| 1 + 7 * i).collect();
+    write_file(&input, &data);
 
-    let args = vec![
-        format!("/IN:{};0x1000", input.display()),
-        "/XP".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("/XP requires /CS or /CSR"));
-    assert!(!out.exists());
-}
-
-#[test]
-fn test_cli_porsche_rejects_checksum_multi_before_signature_sidecar() {
-    let dir = temp_dir("cli_xp_csm_preflight");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.bin");
-    let signature = dir.join("sig.bin");
-    write_file(&input, &[0x01, 0x02]);
-
-    let args = vec![
-        format!("/IN:{};0x1000", input.display()),
-        "/XP".to_owned(),
-        "/CSM0:@append".to_owned(),
-        format!("/DP46:{};{}", "42".repeat(32), signature.display()),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("/CSM is not supported for /XP"));
-    assert!(!signature.exists());
-    assert!(!out.exists());
+    let run = |checksum: &[&str]| {
+        let mut args = vec![format!("/IN:{};0x1000", input.display()), "/XP".to_owned()];
+        args.extend(checksum.iter().map(|flag| (*flag).to_owned()));
+        args.extend(["-o".to_owned(), out.display().to_string()]);
+        let output = run_hexy(&args);
+        (output.status.success(), std::fs::read(&out).unwrap())
+    };
+    assert_eq!(run(&[]), (false, data.clone()));
+    let with = |tail: &[u8]| (true, [data.as_slice(), tail].concat());
+    assert_eq!(run(&["/CSR0"]), with(&[0x04, 0xC0]));
+    assert_eq!(run(&["/CS0:@append"]), with(&[0x04, 0xC0, 0x05, 0x84]));
+    assert_eq!(run(&["/CSM0"]), with(&[0x04, 0xC0]));
 }
 
 #[test]

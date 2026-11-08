@@ -11,6 +11,7 @@ repository = "https://github.com/tomrford/hexy"
 [workspace.dependencies]
 aes = "0.8.4"
 base64ct = { version = "1.8.3", features = ["alloc"] }
+chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 cmac = "0.7.2"
 crc = "3.4.0"
 ed25519-dalek = { version = "2.1.1", features = ["digest"] }

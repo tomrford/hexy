@@ -1,31 +1,27 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    AddressMap, AlignOptions, ChecksumStage, Fill, FillData, HexFile, Merge, MergeMode,
-    MergeOptions, Pipeline, PipelineOutput, Stage,
+    AddressMap, AlignOptions, ChecksumOptions, ChecksumStage, Fill, FillData, HexFile, Merge,
+    MergeMode, MergeOptions, Pipeline, PipelineOutput, Stage,
 };
 
 use super::error::CliError;
+use super::export::write_output_for_args;
 use super::io::{
-    FsProvider, ReadProvider, checksum_options, load_binary_input, load_hex_ascii_input,
-    load_input, load_intel_hex_16bit_input, validate_porsche_output_args, write_checksum_text,
-    write_data_processing_text, write_output_for_args,
+    FsProvider, ReadProvider, checksum_options, load_input, write_checksum_text,
+    write_data_processing_text,
 };
 use super::log::execute_log;
 use super::processing::{
     data_processing_output, data_processing_stage, validate_data_processing,
     validate_signature_verify, verify_stage,
 };
-use super::types::{Args, ChecksumParams, ChecksumTarget, OutputFormat, ParseArgError};
+use super::report::Report;
+use super::types::{Args, ChecksumParams, ChecksumTarget, ImportKind};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Args {
-    fn validate_supported_features(&self) -> Result<(), CliError> {
-        if !self.merge_transparent.is_empty() && !self.merge_opaque.is_empty() {
-            return Err(CliError::Unsupported(
-                "cannot combine /MT and /MO in one command".into(),
-            ));
-        }
+    fn validate_supported_features(&self, report: &Report) -> Result<(), CliError> {
         if self.s12_map && self.s12x_map {
             return Err(CliError::Unsupported(
                 "cannot combine /S12MAP and /S12XMAP".into(),
@@ -41,78 +37,53 @@ impl Args {
                 "cannot combine /REMAP with /S08MAP, /S12MAP, or /S12XMAP".into(),
             ));
         }
-        if self.postbuild.is_some() {
-            return Err(CliError::Unsupported(
-                "postbuild (/PB) is not supported yet".into(),
-            ));
-        }
         if let Some(ref params) = self.data_processing {
-            validate_data_processing(params, self.silent)?;
+            validate_data_processing(params, report)?;
         }
         if let Some(ref params) = self.signature_verify {
             validate_signature_verify(params)?;
-        }
-        if self.import_binary.is_some() && self.import_hex_ascii.is_some() {
-            return Err(CliError::Unsupported(
-                "binary import (/IN) cannot be combined with HEX ASCII import (/IA)".into(),
-            ));
-        }
-        if self.import_i16.is_some()
-            && (self.import_binary.is_some() || self.import_hex_ascii.is_some())
-        {
-            return Err(CliError::Unsupported(
-                "16-bit Intel HEX import (/II2) cannot be combined with /IN or /IA".into(),
-            ));
-        }
-        if (self.import_binary.is_some() || self.import_i16.is_some()) && self.input_file.is_some()
-        {
-            return Err(CliError::Unsupported(
-                "explicit import (/IN, /II2) cannot be combined with input file".into(),
-            ));
-        }
-        if self.checksum.is_some() && !self.checksum_multi.is_empty() {
-            return Err(CliError::Unsupported(
-                "cannot combine /CS* with /CSM* in one command".into(),
-            ));
         }
         Ok(())
     }
 
     /// Execute the parsed arguments in compatibility processing order.
-    pub fn execute(&self) -> Result<(), CliError> {
-        self.execute_with_provider(&FsProvider)
-    }
+    pub(super) fn execute(&self, report: &Report) -> Result<(), CliError> {
+        let provider = &FsProvider;
+        self.validate_supported_features(report)?;
 
-    pub(super) fn execute_with_provider<P: ReadProvider>(
-        &self,
-        provider: &P,
-    ) -> Result<(), CliError> {
-        self.validate_supported_features()?;
-        validate_porsche_output_args(self, provider)?;
-
-        let mut hexfile = self.load_hexfile(provider)?;
+        let mut hexfile = self.load_hexfile(provider, report)?;
+        // HexView joins adjacent data into one block when it loads a file.
         hexfile.normalize();
-        let mut pipeline = self.pipeline();
+        let mut pipeline = self.pipeline(report);
         let mut output = PipelineOutput::default();
         let dir = self.processing_dir();
         let mut stage_error = None;
-        let checksum_count = if matches!(self.output_format, Some(OutputFormat::Porsche)) {
-            0
-        } else {
-            self.checksum_params().len()
-        };
-        let merge_count = self.merge_transparent.len() + self.merge_opaque.len();
-        for stage in Stage::in_order(merge_count, checksum_count) {
+        for stage in pipeline.stages() {
             self.before_stage(stage, &mut pipeline, provider)?;
-            let result = self
-                .prepare_stage(stage, &mut pipeline, &dir, provider)
-                .and_then(|()| {
-                    pipeline
-                        .run_stage(stage, &mut hexfile, &mut output)
-                        .map_err(|e| e.to_string())
-                });
+            let result = if let Stage::Merge(index) = stage {
+                self.merge_stage(index, &mut pipeline, &mut hexfile, &mut output, provider)?;
+                Ok(())
+            } else {
+                self.prepare_stage(stage, &mut pipeline, &dir, provider)
+                    .and_then(|()| {
+                        pipeline
+                            .run_stage(stage, &mut hexfile, &mut output)
+                            .map_err(|e| e.to_string())
+                    })
+            };
             match result {
-                Ok(()) => self.after_stage(stage, &mut hexfile, &output, &dir, provider)?,
+                Ok(()) => {
+                    if let Err(error) =
+                        self.after_stage(stage, &mut hexfile, &output, &dir, provider)
+                    {
+                        if !matches!(stage, Stage::Merge(_) | Stage::AddressFilter) {
+                            return Err(error);
+                        }
+                        // HexView reports a rejected merge range or a failed log
+                        // command and carries on.
+                        stage_error.get_or_insert(error);
+                    }
+                }
                 Err(e) => {
                     let error = CliError::Other(format!("{}: {e}", self.stage_flag(stage)));
                     if !matches!(
@@ -121,6 +92,9 @@ impl Args {
                     ) {
                         return Err(error);
                     }
+                    // HexView reports a failed checksum, data processing or verification
+                    // but runs the remaining stages and exports; the placeholder keeps
+                    // later checksum results at their stage index.
                     stage_error.get_or_insert(error);
                     if let Stage::Checksum(_) = stage {
                         output.checksums.push(Vec::new());
@@ -128,7 +102,7 @@ impl Args {
                 }
             }
         }
-        write_output_for_args(self, &hexfile, provider)?;
+        write_output_for_args(self, &hexfile, provider, report)?;
         stage_error.map_or(Ok(()), Err)
     }
 
@@ -141,8 +115,8 @@ impl Args {
             .unwrap_or_default()
     }
 
-    /// `/DP` and `/SV` parameters are read when their stage runs, so that `/SV` can
-    /// read the output file of `/DP`.
+    /// `/DP` and `/SV` parameters are read when their stage runs, so that a method
+    /// HexView does not know fails only its stage and `/SV` can read `/DP`'s output.
     fn prepare_stage<P: ReadProvider>(
         &self,
         stage: Stage,
@@ -172,7 +146,8 @@ impl Args {
     }
 
     /// The core pipeline for these flags; each field is set only from its own flags.
-    fn pipeline(&self) -> Pipeline {
+    /// `data_processing` and `verify` are set by [`Self::prepare_stage`].
+    fn pipeline(&self, report: &Report) -> Pipeline {
         let address_map = if self.s12_map {
             Some(AddressMap::Star12)
         } else if self.s12x_map {
@@ -184,14 +159,39 @@ impl Args {
         };
         let fill = (!self.fill_ranges.is_empty()).then(|| Fill {
             ranges: self.fill_ranges.clone(),
-            data: if self.fill_pattern_set {
-                FillData::Pattern(self.fill_pattern.clone())
-            } else {
-                FillData::Random {
+            data: match &self.fill_pattern {
+                Some(pattern) => FillData::Pattern(pattern.clone()),
+                None => FillData::Random {
                     seed: random_seed(),
-                }
+                },
             },
         });
+        // One slot per parameter group; wildcard matches replace it as they run.
+        let merges = self
+            .merge
+            .iter()
+            .flat_map(|spec| {
+                spec.files.iter().map(move |_| Merge {
+                    file: HexFile::new(),
+                    options: MergeOptions {
+                        mode: spec.mode,
+                        ..Default::default()
+                    },
+                })
+            })
+            .collect();
+        let checksums = self
+            .checksum_params()
+            .iter()
+            .map(|params| ChecksumStage {
+                options: ChecksumOptions::default(),
+                placement: match params.target {
+                    ChecksumTarget::Place(placement) => Some(placement),
+                    ChecksumTarget::None | ChecksumTarget::File(_) => None,
+                },
+            })
+            .collect();
+
         Pipeline {
             address_map,
             dspic_expand: self.dspic_expand.clone(),
@@ -199,55 +199,63 @@ impl Args {
             dspic_clear_ghost: self.dspic_clear_ghost.clone(),
             fill,
             cut: self.cut_ranges.clone(),
+            merges,
             address_filter: self.address_range.clone(),
             fill_gaps: self.fill_all.then_some(self.align_fill),
-            align: self.align_address.map(|alignment| AlignOptions {
-                alignment,
-                fill_byte: self.align_fill,
-                align_length: self.align_length,
-            }),
-            split: self.split(),
+            align: self.align(report),
+            split: self.split(report),
             remove_small_blocks: self.remove_blocks_below,
             swap_word: self.swap_word,
             swap_dword: self.swap_long,
-            ..Default::default()
+            checksums,
+            data_processing: None,
+            verify: None,
         }
     }
 
-    /// Resolve fallible inputs when their stage is reached, after earlier side effects.
+    /// Preparation failures are fatal, after side effects from earlier stages.
     fn before_stage<P: ReadProvider>(
         &self,
         stage: Stage,
         pipeline: &mut Pipeline,
         provider: &P,
     ) -> Result<(), CliError> {
-        match stage {
-            Stage::Merge(index) => {
-                let (params, mode) = if self.merge_transparent.is_empty() {
-                    (&self.merge_opaque[index], MergeMode::Overwrite)
-                } else {
-                    (&self.merge_transparent[index], MergeMode::Preserve)
-                };
-                pipeline.merges.push(Merge {
-                    file: load_input(provider, &params.file)?,
-                    options: MergeOptions {
-                        mode,
-                        offset: params.offset.unwrap_or(0),
-                        range: params.range,
-                    },
-                });
-            }
-            Stage::Checksum(index) => {
-                let (params, flag) = self.checksum_stage(index);
-                pipeline.checksums.push(ChecksumStage {
-                    options: checksum_options(params, &flag, provider)?,
-                    placement: match params.target {
-                        ChecksumTarget::Place(placement) => Some(placement),
-                        ChecksumTarget::None | ChecksumTarget::File(_) => None,
-                    },
-                });
-            }
-            _ => {}
+        if let Stage::Checksum(index) = stage {
+            let (params, flag) = self.checksum_stage(index);
+            pipeline.checksums[index].options = checksum_options(params, provider)
+                .map_err(|error| CliError::Other(format!("{flag}: {error}")))?;
+        }
+        Ok(())
+    }
+
+    /// Resolve each wildcard group at its stage and apply matches before reading
+    /// later files. Only the first match receives the group's offset and range.
+    fn merge_stage<P: ReadProvider>(
+        &self,
+        index: usize,
+        pipeline: &mut Pipeline,
+        hexfile: &mut HexFile,
+        output: &mut PipelineOutput,
+        provider: &P,
+    ) -> Result<(), CliError> {
+        let Some(spec) = &self.merge else {
+            return Ok(());
+        };
+        let params = &spec.files[index];
+        let stage = Stage::Merge(index);
+        for (match_index, path) in merge_files(&params.file)?.iter().enumerate() {
+            let first = match_index == 0;
+            pipeline.merges[index] = Merge {
+                file: load_input(provider, path)?,
+                options: MergeOptions {
+                    mode: spec.mode,
+                    offset: params.offset.filter(|_| first).unwrap_or(0),
+                    range: params.range.filter(|_| first),
+                },
+            };
+            pipeline
+                .run_stage(stage, hexfile, output)
+                .map_err(|error| CliError::Other(format!("{}: {error}", self.stage_flag(stage))))?;
         }
         Ok(())
     }
@@ -263,12 +271,23 @@ impl Args {
         provider: &P,
     ) -> Result<(), CliError> {
         match stage {
+            Stage::Merge(index) => {
+                let spec = self.merge.as_ref();
+                if spec.is_some_and(|spec| spec.files[index].invalid_range) {
+                    return Err(CliError::Other(format!(
+                        "{}: invalid merge range; merged the whole file",
+                        self.stage_flag(stage)
+                    )));
+                }
+            }
+            // HexView runs /L after /AR and ignores a log file it cannot read.
             Stage::AddressFilter => {
-                if let Some(ref path) = self.log_file {
-                    let content = provider
-                        .read_string(path)
-                        .map_err(|e| CliError::Other(format!("/L: {e}")))?;
-                    execute_log(hexfile, &content)?;
+                if let Some(content) = self
+                    .log_file
+                    .as_deref()
+                    .and_then(|path| provider.read_bytes(path).ok())
+                {
+                    execute_log(hexfile, &String::from_utf8_lossy(&content))?;
                 }
             }
             Stage::Checksum(index) => {
@@ -305,8 +324,10 @@ impl Args {
             Stage::DspicClearGhost => "/CDSPG",
             Stage::Fill => "/FR",
             Stage::Cut => "/CR",
-            Stage::Merge(_) if self.merge_transparent.is_empty() => "/MO",
-            Stage::Merge(_) => "/MT",
+            Stage::Merge(_) => match self.merge.as_ref().map(|spec| spec.mode) {
+                Some(MergeMode::Preserve) => "/MT",
+                _ => "/MO",
+            },
             Stage::AddressFilter => "/AR",
             Stage::FillGaps => "/FA",
             Stage::Align => "/AD/AL",
@@ -327,15 +348,34 @@ impl Args {
     }
 
     /// HexView ignores `/SB` below 0x100 bytes with a warning.
-    fn split(&self) -> Option<u32> {
+    fn split(&self, report: &Report) -> Option<u32> {
         let size = self.split_block_size?;
         if size < 0x100 {
-            if !self.silent {
-                eprintln!("Warning: invalid parameter for /SB; ignoring it");
-            }
+            report.warn("invalid parameter for /SB; ignoring it");
             return None;
         }
         Some(size)
+    }
+
+    /// `/AD` aligns block starts and `/AL` block lengths, to its own value or without
+    /// one to the `/AD` value. HexView warns about an `/AD` that is not a power of two.
+    fn align(&self, report: &Report) -> Option<AlignOptions> {
+        let address_alignment = self.align_address.unwrap_or(0);
+        if address_alignment > 1 && !address_alignment.is_power_of_two() {
+            report.warn(&format!(
+                "/AD: 0x{address_alignment:X} is not a power of two; alignment may not be what you expect"
+            ));
+        }
+        let length_alignment = match self.align_length {
+            None => 0,
+            Some(0) => address_alignment,
+            Some(length) => length,
+        };
+        (address_alignment != 0 || length_alignment != 0).then_some(AlignOptions {
+            address_alignment,
+            length_alignment,
+            fill_byte: self.align_fill,
+        })
     }
 
     /// `/CS` and `/CSM` are exclusive, so checksum stages come from one of them.
@@ -357,40 +397,67 @@ impl Args {
         (params, format!("{base}{}", params.algorithm))
     }
 
-    fn load_hexfile<P: ReadProvider>(&self, provider: &P) -> Result<HexFile, CliError> {
-        if let Some(ref import) = self.import_binary {
-            return load_binary_input(provider, &import.file, import.offset);
-        }
-        if let Some(ref import) = self.import_hex_ascii {
-            let ascii = load_hex_ascii_input(provider, &import.file, import.offset)?;
-            if let Some(ref path) = self.input_file {
-                let mut base = load_input(provider, path)?;
-                if super::io::hexfiles_overlap(&base, &ascii) {
-                    if !self.silent {
-                        eprintln!("Warning: /IA overlaps input file; ignoring input file");
-                    }
-                    return Ok(ascii);
-                }
-                for segment in ascii.segments() {
-                    base.append_segment(segment.clone());
-                }
-                return Ok(base);
-            }
-            return Ok(ascii);
-        }
-        if let Some(ref import) = self.import_i16 {
-            return load_intel_hex_16bit_input(provider, import);
-        }
+    /// The positional input file, or without one the last import. HexView ignores an
+    /// import next to an input file with a warning, and starts empty without either.
+    fn load_hexfile<P: ReadProvider>(
+        &self,
+        provider: &P,
+        report: &Report,
+    ) -> Result<HexFile, CliError> {
         if let Some(ref path) = self.input_file {
+            if self.import.is_some() {
+                report.warn("cannot import a file next to an input file; ignoring the import");
+            }
             return load_input(provider, path);
         }
-        if self.log_file.is_some()
-            || !self.merge_transparent.is_empty()
-            || !self.merge_opaque.is_empty()
-        {
+        let Some(import) = &self.import else {
             return Ok(HexFile::new());
+        };
+        let content = provider.read_bytes(&import.file)?;
+        Ok(match import.kind {
+            ImportKind::Binary => crate::parse_binary(&content, import.offset)?,
+            ImportKind::HexAscii => crate::parse_hex_ascii(&content, import.offset)?,
+            ImportKind::IntelHex16 => crate::parse_intel_hex_16bit(&content)?,
+        })
+    }
+}
+
+/// The files a `/MO` or `/MT` name refers to: itself, or with `*` or `?` in the file
+/// name every match in its folder, ordered by name and matched without regard to case.
+fn merge_files(path: &Path) -> Result<Vec<PathBuf>, CliError> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    if !name.contains(['*', '?']) {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty());
+    let pattern: Vec<char> = name.to_lowercase().chars().collect();
+    let mut matches = Vec::new();
+    for entry in std::fs::read_dir(dir.unwrap_or(Path::new(".")))? {
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().to_lowercase();
+        let chars: Vec<char> = file_name.chars().collect();
+        if entry.file_type()?.is_file() && wildcard_match(&pattern, &chars) {
+            matches.push((
+                file_name,
+                dir.map_or_else(
+                    || entry.file_name().into(),
+                    |dir| dir.join(entry.file_name()),
+                ),
+            ));
         }
-        Err(ParseArgError::MissingInputFile.into())
+    }
+    matches.sort();
+    Ok(matches.into_iter().map(|(_, path)| path).collect())
+}
+
+/// `*` matches any run of characters and `?` any one character.
+fn wildcard_match(pattern: &[char], name: &[char]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|skip| wildcard_match(rest, &name[skip..])),
+        Some((&c, rest)) => name
+            .split_first()
+            .is_some_and(|(&n, name)| (c == '?' || c == n) && wildcard_match(rest, name)),
     }
 }
 

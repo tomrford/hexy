@@ -2,14 +2,20 @@ mod binary;
 mod c_code;
 mod error;
 mod file;
+mod flash_kernel;
+mod ford;
+mod gac;
 mod hex_ascii;
 mod intel_hex;
 mod srec;
 
 pub use binary::{BinaryWriteOptions, parse_binary, write_binary};
-pub use c_code::{CCodeOutput, CCodeWordType, CCodeWriteOptions, write_c_code};
+pub use c_code::{CCodeOutput, CCodeWordSize, CCodeWordType, CCodeWriteOptions, write_c_code};
 pub use error::{ParseError, WriteError};
 pub use file::{AutoFormat, FileIoError, detect_format, parse_auto};
+pub use flash_kernel::{FlashKernelHeader, write_flash_kernel};
+pub use ford::{FordHeader, write_ford_intel_hex};
+pub use gac::write_gac_swil;
 pub use hex_ascii::{HexAsciiWriteOptions, parse_hex_ascii, write_hex_ascii};
 pub use intel_hex::{
     DEFAULT_INTEL_HEX_BYTES_PER_LINE, IntelHexMode, IntelHexWriteOptions, parse_intel_hex,

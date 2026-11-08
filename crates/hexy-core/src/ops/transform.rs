@@ -11,56 +11,57 @@ pub enum SwapMode {
     DWord,
 }
 
-/// Options for alignment operations.
+/// Options for alignment operations (`/AD`, `/AL`). HexView aligns with the bit mask of
+/// `alignment - 1`: a power of two aligns to its multiples, other values clear or set
+/// the bits of that mask instead.
 #[derive(Debug, Clone)]
 pub struct AlignOptions {
-    /// Must be non-zero
-    pub alignment: u32,
+    /// Block starts move down to this alignment; 0 leaves them.
+    pub address_alignment: u32,
+    /// Block lengths, counted from the aligned start, grow to this alignment; 0 leaves
+    /// them.
+    pub length_alignment: u32,
     /// Byte to use for padding (default 0xFF)
     pub fill_byte: u8,
-    /// Also align segment lengths
-    pub align_length: bool,
 }
 
 impl Default for AlignOptions {
     fn default() -> Self {
         Self {
-            alignment: 4,
+            address_alignment: 4,
+            length_alignment: 0,
             fill_byte: 0xFF,
-            align_length: false,
         }
     }
 }
 
 impl HexFile {
-    /// Align all segment start addresses to multiples of alignment.
-    /// Prepends fill bytes as needed. Optionally aligns lengths too.
-    /// Fill bytes are LOW priority (existing data wins on overlap).
-    pub fn align(&mut self, options: &AlignOptions) -> Result<(), OpsError> {
-        let alignment = options.alignment;
-        if alignment == 0 {
-            return Err(OpsError::InvalidAlignment(alignment));
-        }
-
+    /// Align block starts and lengths. Fill bytes are LOW priority (existing data wins
+    /// on overlap); a length that would reach past the address space stops at its end.
+    pub fn align(&mut self, options: &AlignOptions) {
         let normalized = self.normalized();
         let mut result = HexFile::new();
         for segment in normalized.segments() {
-            let aligned_start = segment.start_address - segment.start_address % alignment;
-            if aligned_start < segment.start_address {
-                let fill_len = (segment.start_address - aligned_start) as usize;
+            let start = match options.address_alignment {
+                0 => segment.start_address,
+                alignment => segment.start_address & !(alignment - 1),
+            };
+            if start < segment.start_address {
+                let fill_len = (segment.start_address - start) as usize;
                 result.prepend_segment(Segment::from_valid(
-                    aligned_start,
+                    start,
                     vec![options.fill_byte; fill_len],
                 ));
             }
-
-            if options.align_length {
-                let end_addr = u64::from(segment.end_address()) + 1;
-                let aligned_end = end_addr.next_multiple_of(u64::from(alignment));
-                if aligned_end > end_addr && aligned_end <= u64::from(u32::MAX) + 1 {
-                    let fill_len = (aligned_end - end_addr) as usize;
+            if options.length_alignment > 0 {
+                let end = u64::from(segment.end_address()) + 1;
+                let mask = u64::from(options.length_alignment - 1);
+                let len = (end - u64::from(start) + mask) & !mask;
+                let aligned_end = (u64::from(start) + len).min(1 << 32);
+                if aligned_end > end {
+                    let fill_len = (aligned_end - end) as usize;
                     result.prepend_segment(Segment::from_valid(
-                        end_addr as u32,
+                        end as u32,
                         vec![options.fill_byte; fill_len],
                     ));
                 }
@@ -71,7 +72,6 @@ impl HexFile {
         }
 
         *self = result.normalized();
-        Ok(())
     }
 
     /// Split each normalized block into pieces of at most `max_size` bytes; the pieces
@@ -349,89 +349,56 @@ fn locate(segments: &[Segment], addr: u32) -> Option<(usize, usize)> {
 mod tests {
     use super::*;
 
+    /// HexView 1.15.2 `/AD:4 /AL:0x10`: the start moves down to a multiple of 4 and the
+    /// length from there grows to a multiple of 0x10.
     #[test]
-    fn test_align_prepends_fill() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB]).unwrap()]);
+    fn test_align_length_counts_from_aligned_start() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1035, vec![0xAA; 0x13]).unwrap()]);
         hf.align(&AlignOptions {
-            alignment: 4,
+            address_alignment: 4,
+            length_alignment: 0x10,
             fill_byte: 0xFF,
-            align_length: false,
-        })
-        .unwrap();
+        });
 
-        assert_eq!(hf.segments()[0].start_address, 0x1000);
-        assert_eq!(hf.segments()[0].data, vec![0xFF, 0xAA, 0xBB]);
+        assert_eq!(hf.segments()[0].start_address, 0x1034);
+        assert_eq!(hf.segments()[0].len(), 0x20);
+        assert_eq!(hf.segments()[0].data[0], 0xFF);
+        assert_eq!(hf.segments()[0].data[0x14..], [0xFF; 0xC]);
     }
 
     #[test]
-    fn test_align_with_length() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB]).unwrap()]);
-        hf.align(&AlignOptions {
-            alignment: 4,
-            fill_byte: 0xFF,
-            align_length: true,
-        })
-        .unwrap();
-
-        assert_eq!(hf.segments()[0].start_address, 0x1000);
-        // 1 prepended + 2 data + 1 appended = 4
-        assert_eq!(hf.segments()[0].len(), 4);
-        assert_eq!(hf.segments()[0].data, vec![0xFF, 0xAA, 0xBB, 0xFF]);
-    }
-
-    #[test]
-    fn test_align_length_can_fill_last_address() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(u32::MAX - 3, vec![0xAA]).unwrap()]);
+    fn test_align_through_final_address() {
+        let mut image =
+            HexFile::with_segments(vec![Segment::new(u32::MAX - 3, vec![0xAA]).unwrap()]);
         let options = AlignOptions {
-            alignment: 4,
-            align_length: true,
+            address_alignment: 4,
+            length_alignment: 4,
             ..Default::default()
         };
-
-        hf.align(&options).unwrap();
-        assert_eq!(hf.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
-
-        hf.align(&options).unwrap();
-        assert_eq!(hf.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
+        image.align(&options);
+        assert_eq!(image.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
+        assert_eq!(image.segments()[0].end_address(), u32::MAX);
+        image.align(&options);
+        assert_eq!(image.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
     }
 
+    /// HexView 1.15.2 `/AD:6 /AL` and `/AL:7` on a block at 0x1035: bit masks of 5 and 6.
     #[test]
-    fn test_align_already_aligned() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 8]).unwrap()]);
-        hf.align(&AlignOptions {
-            alignment: 4,
-            fill_byte: 0xFF,
-            align_length: true,
-        })
-        .unwrap();
-
-        assert_eq!(hf.segments()[0].start_address, 0x1000);
-        assert_eq!(hf.segments()[0].len(), 8);
-    }
-
-    #[test]
-    fn test_align_invalid_alignment() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA]).unwrap()]);
-        let result = hf.align(&AlignOptions {
-            alignment: 0,
-            fill_byte: 0xFF,
-            align_length: false,
-        });
-        assert!(matches!(result, Err(OpsError::InvalidAlignment(0))));
-    }
-
-    #[test]
-    fn test_align_non_power_of_two() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap()]);
-        hf.align(&AlignOptions {
-            alignment: 3,
-            fill_byte: 0xEE,
-            align_length: true,
-        })
-        .unwrap();
-
-        assert_eq!(hf.segments()[0].start_address, 0x0FFF);
-        assert_eq!(hf.segments()[0].data, vec![0xEE, 0xAA, 0xBB]);
+    fn test_align_other_values_use_bit_masks() {
+        let align = |address_alignment, length_alignment, len| {
+            let mut hf =
+                HexFile::with_segments(vec![Segment::new(0x1035, vec![0xAA; len]).unwrap()]);
+            hf.align(&AlignOptions {
+                address_alignment,
+                length_alignment,
+                fill_byte: 0xFF,
+            });
+            (hf.segments()[0].start_address, hf.segments()[0].len())
+        };
+        assert_eq!(align(6, 6, 0x13), (0x1030, 0x18));
+        assert_eq!(align(6, 6, 0x20), (0x1030, 0x2A));
+        assert_eq!(align(0, 7, 0x13), (0x1035, 0x19));
+        assert_eq!(align(0, 7, 0x20), (0x1035, 0x20));
     }
 
     #[test]
@@ -529,12 +496,7 @@ mod tests {
             Segment::new(0x1001, vec![0xAA]).unwrap(),
             Segment::new(0x1003, vec![0xBB]).unwrap(),
         ]);
-        hf.align(&AlignOptions {
-            alignment: 4,
-            fill_byte: 0xFF,
-            align_length: false,
-        })
-        .unwrap();
+        hf.align(&AlignOptions::default());
 
         // Align now resolves overlaps internally with original data winning
         // Result: single segment 0x1000-0x1003 with [0xFF, 0xAA, 0xFF, 0xBB]
@@ -543,20 +505,6 @@ mod tests {
         let seg = &hf.segments()[0];
         assert_eq!(seg.start_address, 0x1000);
         assert_eq!(seg.data, vec![0xFF, 0xAA, 0xFF, 0xBB]);
-    }
-
-    #[test]
-    fn test_align_with_alignment_1() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB]).unwrap()]);
-        hf.align(&AlignOptions {
-            alignment: 1,
-            fill_byte: 0xFF,
-            align_length: true,
-        })
-        .unwrap();
-        // No change expected
-        assert_eq!(hf.segments()[0].start_address, 0x1001);
-        assert_eq!(hf.segments()[0].len(), 2);
     }
 
     #[test]
@@ -743,25 +691,6 @@ mod tests {
                 Err(OpsError::AddressNotDivisible { divisor: 0, .. })
             ));
         }
-    }
-
-    #[test]
-    fn test_align_then_split() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 15]).unwrap()]);
-        hf.align(&AlignOptions {
-            alignment: 4,
-            fill_byte: 0xFF,
-            align_length: true,
-        })
-        .unwrap();
-        // After align: start=0x1000, len=16 (1 prepend + 15 data)
-        // Actually: 0x1001 aligns down to 0x1000, prepend 1. length 16, aligned to 4 = 16.
-        hf.split(8);
-        assert_eq!(hf.segments().len(), 2);
-        assert_eq!(hf.segments()[0].start_address, 0x1000);
-        assert_eq!(hf.segments()[0].len(), 8);
-        assert_eq!(hf.segments()[1].start_address, 0x1008);
-        assert_eq!(hf.segments()[1].len(), 8);
     }
 
     #[test]

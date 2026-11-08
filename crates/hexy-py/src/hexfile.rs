@@ -1,8 +1,9 @@
 use hexy_core::{
-    AlignOptions, BinaryWriteOptions, DataProcessing, FillOptions, HexAsciiWriteOptions, HexFile,
+    AlignOptions, BinaryWriteOptions, CCodeWordSize, CCodeWordType, CCodeWriteOptions,
+    DataProcessing, FillOptions, FlashKernelHeader, HexAsciiWriteOptions, HexFile,
     IntelHexWriteOptions, MergeOptions, RemapOptions, SRecordWriteOptions, parse_binary,
     parse_hex_ascii, parse_intel_hex, parse_intel_hex_16bit, parse_srec, write_binary,
-    write_hex_ascii, write_intel_hex, write_srec,
+    write_c_code, write_flash_kernel, write_gac_swil, write_hex_ascii, write_intel_hex, write_srec,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -233,6 +234,82 @@ impl PyHexFile {
         py_bytes(py, &data)
     }
 
+    #[pyo3(signature = (file_name, *, prefix=String::new(), word_size=1, motorola=false, xor=None, created=String::new(), generation=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn to_c_code(
+        &self,
+        py: Python<'_>,
+        file_name: String,
+        prefix: String,
+        word_size: u8,
+        motorola: bool,
+        xor: Option<u32>,
+        created: String,
+        generation: u32,
+    ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+        let word_size = match word_size {
+            1 => CCodeWordSize::Byte,
+            2 => CCodeWordSize::Word,
+            4 => CCodeWordSize::Long,
+            other => {
+                return Err(value_error(format!(
+                    "word_size must be 1, 2 or 4, not {other}"
+                )));
+            }
+        };
+        let output = write_c_code(
+            &self.inner,
+            &CCodeWriteOptions {
+                prefix,
+                word_size,
+                word_type: if motorola {
+                    CCodeWordType::Motorola
+                } else {
+                    CCodeWordType::Intel
+                },
+                decrypt_value: xor,
+                file_name,
+                created,
+                generation,
+            },
+        );
+        Ok((py_bytes(py, &output.c), py_bytes(py, &output.h)))
+    }
+
+    #[pyo3(signature = (name, *, comment=None, file_address=None, size=None, ram_address=None, ram_start=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn to_flash_kernel(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        comment: Option<String>,
+        file_address: Option<String>,
+        size: Option<String>,
+        ram_address: Option<String>,
+        ram_start: Option<String>,
+    ) -> PyResult<Py<PyBytes>> {
+        let blocks = self.inner.blocks();
+        let block = blocks
+            .first()
+            .ok_or_else(|| value_error("a flash kernel needs data"))?;
+        let defaults = FlashKernelHeader::new(name, block);
+        let header = FlashKernelHeader {
+            comment: comment.unwrap_or(defaults.comment),
+            file_address: file_address.unwrap_or(defaults.file_address),
+            size: size.unwrap_or(defaults.size),
+            ram_address: ram_address.unwrap_or(defaults.ram_address),
+            ram_start: ram_start.unwrap_or(defaults.ram_start),
+            name: defaults.name,
+        };
+        let data = write_flash_kernel(&self.inner, &header).map_err(value_error)?;
+        Ok(py_bytes(py, &data))
+    }
+
+    fn to_gac_swil(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        let data = write_gac_swil(&self.inner).map_err(value_error)?;
+        Ok(py_bytes(py, &data))
+    }
+
     #[pyo3(signature = (path, *, fill_gaps=None))]
     fn write_binary(&self, path: PathBuf, fill_gaps: Option<u8>) -> PyResult<()> {
         self.inner
@@ -349,15 +426,13 @@ impl PyHexFile {
         self.inner.offset_addresses(offset).map_err(value_error)
     }
 
-    #[pyo3(signature = (alignment, *, fill=0xFF, length=false))]
-    fn align(&mut self, alignment: u32, fill: u8, length: bool) -> PyResult<()> {
-        self.inner
-            .align(&AlignOptions {
-                alignment,
-                fill_byte: fill,
-                align_length: length,
-            })
-            .map_err(value_error)
+    #[pyo3(signature = (alignment, *, length=0, fill=0xFF))]
+    fn align(&mut self, alignment: u32, length: u32, fill: u8) {
+        self.inner.align(&AlignOptions {
+            address_alignment: alignment,
+            length_alignment: length,
+            fill_byte: fill,
+        });
     }
 
     fn split(&mut self, max_size: u32) {

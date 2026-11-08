@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::{AddressRange, AddressRangeError, DspicOp, ForcedRange, Placement, RemapOptions};
 
-use super::types::{ChecksumParams, ChecksumTarget, ImportParam, MergeParam, ParseArgError};
+use super::types::{ChecksumParams, ChecksumTarget, Import, ImportKind, MergeParam, ParseArgError};
 
 pub(super) fn split_option(opt: &str) -> Option<(&str, &str)> {
     match (opt.find(':'), opt.find('=')) {
@@ -18,50 +18,69 @@ pub(super) fn strip_quotes(s: &str) -> &str {
     s.trim_matches(|c| c == '"' || c == '\'')
 }
 
-pub(super) fn parse_compat_ranges(s: &str) -> Result<Vec<AddressRange>, ParseArgError> {
-    crate::parse_compat_ranges(s).map_err(|e| ParseArgError::InvalidRange(e.to_string()))
+/// A range as HexView reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RangeText {
+    Valid(AddressRange),
+    /// Empty, or reaching past the address space: HexView skips it.
+    Skipped,
+    /// Reversed or unreadable: HexView stops reading a range list there.
+    Invalid,
 }
 
-/// One range, or `None` for a range HexView ignores: reversed, empty, or reaching past
-/// the address space. Malformed text is an error.
-pub(super) fn parse_lenient_range(s: &str) -> Result<Option<AddressRange>, ParseArgError> {
-    match strip_quotes(s).parse::<AddressRange>() {
-        Ok(range) => Ok(Some(range)),
-        Err(
-            AddressRangeError::StartExceedsEnd { .. }
-            | AddressRangeError::ZeroLength { .. }
-            | AddressRangeError::PastAddressSpace { .. },
-        ) => Ok(None),
-        Err(e) => Err(ParseArgError::InvalidRange(e.to_string())),
+/// `start,length` or `start-end` as HexView reads it. Each number is `0x` hex or
+/// decimal after optional blanks, the start also after one `+`, and text after the
+/// second number is ignored; the start must be followed directly by `,` or `-`.
+pub(super) fn parse_range(s: &str) -> RangeText {
+    let s = strip_quotes(s);
+    let Some((start, rest)) = range_number(s.strip_prefix('+').unwrap_or(s)) else {
+        return RangeText::Invalid;
+    };
+    let Some((separator, rest)) = rest.split_at_checked(1) else {
+        return RangeText::Invalid;
+    };
+    let second = range_number(rest).map_or(0, |(value, _)| value);
+    let range = match separator {
+        "," => AddressRange::from_start_length(start, u64::from(second)),
+        "-" => AddressRange::from_start_end(start, second),
+        _ => return RangeText::Invalid,
+    };
+    match range {
+        Ok(range) => RangeText::Valid(range),
+        Err(AddressRangeError::ZeroLength { .. } | AddressRangeError::PastAddressSpace { .. }) => {
+            RangeText::Skipped
+        }
+        Err(_) => RangeText::Invalid,
     }
 }
 
-/// `:`-separated ranges as HexView reads them: empty and overflowing ranges are
-/// skipped, and a reversed range ends the list. Malformed text is an error.
-pub(super) fn parse_lenient_ranges(s: &str) -> Result<Vec<AddressRange>, ParseArgError> {
+/// A HexView range number and the text after it; `None` without digits or above 32
+/// bits.
+fn range_number(s: &str) -> Option<(u32, &str)> {
+    let s = s.trim_start();
+    let (radix, digits) = match s.strip_prefix("0x") {
+        Some(hex) if hex.starts_with(|c: char| c.is_ascii_hexdigit()) => (16, hex),
+        _ => (10, s),
+    };
+    let end = digits
+        .find(|c: char| !c.is_digit(radix))
+        .unwrap_or(digits.len());
+    let value = u32::from_str_radix(&digits[..end], radix).ok()?;
+    Some((value, &digits[end..]))
+}
+
+/// `:`-separated ranges as HexView reads them: skipped ranges are left out, and an
+/// invalid range ends the list.
+pub(super) fn parse_ranges(s: &str) -> Vec<AddressRange> {
     let mut ranges = Vec::new();
     for part in strip_quotes(s).split(':').filter(|part| !part.is_empty()) {
-        match strip_quotes(part).parse::<AddressRange>() {
-            Ok(range) => ranges.push(range),
-            Err(AddressRangeError::StartExceedsEnd { .. }) => break,
-            Err(
-                AddressRangeError::ZeroLength { .. } | AddressRangeError::PastAddressSpace { .. },
-            ) => {}
-            Err(e) => return Err(ParseArgError::InvalidRange(e.to_string())),
+        match parse_range(part) {
+            RangeText::Valid(range) => ranges.push(range),
+            RangeText::Skipped => {}
+            RangeText::Invalid => break,
         }
     }
-    Ok(ranges)
-}
-
-fn parse_single_compat_range(s: &str, context: &str) -> Result<AddressRange, ParseArgError> {
-    let ranges = parse_compat_ranges(s)?;
-    match ranges.as_slice() {
-        [range] => Ok(*range),
-        [] => Err(ParseArgError::InvalidRange(s.to_owned())),
-        _ => Err(ParseArgError::InvalidOption(format!(
-            "{context} requires exactly one range"
-        ))),
-    }
+    ranges
 }
 
 pub(super) fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, ParseArgError> {
@@ -130,7 +149,7 @@ pub(super) fn parse_signed_number(s: &str) -> Result<i64, ParseArgError> {
 
 pub(super) fn parse_merge_param(s: &str) -> Result<MergeParam, ParseArgError> {
     let s = strip_quotes(s);
-    let (file_and_offset, range) = split_merge_range(s)?;
+    let (file_and_offset, range) = split_merge_range(s);
 
     let (file, offset) = if let Some((file, offset_str)) = file_and_offset.split_once(';') {
         let offset = parse_signed_number(offset_str)?;
@@ -142,7 +161,11 @@ pub(super) fn parse_merge_param(s: &str) -> Result<MergeParam, ParseArgError> {
     Ok(MergeParam {
         file: PathBuf::from(file),
         offset,
-        range,
+        range: match range {
+            Some(RangeText::Valid(range)) => Some(range),
+            _ => None,
+        },
+        invalid_range: range == Some(RangeText::Invalid),
     })
 }
 
@@ -179,17 +202,15 @@ pub(super) fn parse_merge_params(value: &str) -> Result<Vec<MergeParam>, ParseAr
     Ok(params)
 }
 
-fn split_merge_range(s: &str) -> Result<(&str, Option<AddressRange>), ParseArgError> {
+/// The file part and the range after the last `:`, unless that `:` belongs to a
+/// Windows drive or, with an offset, comes before it.
+fn split_merge_range(s: &str) -> (&str, Option<RangeText>) {
     let Some(colon_pos) = s.rfind(':') else {
-        return Ok((s, None));
+        return (s, None);
     };
-    let left = &s[..colon_pos];
-    let right = &s[colon_pos + 1..];
-
-    match parse_lenient_range(right) {
-        Ok(range) => Ok((left, range)),
-        Err(err) if merge_range_delimiter_is_unambiguous(s, colon_pos) => Err(err),
-        Err(_) => Ok((s, None)),
+    match parse_range(&s[colon_pos + 1..]) {
+        RangeText::Invalid if !merge_range_delimiter_is_unambiguous(s, colon_pos) => (s, None),
+        range => (&s[..colon_pos], Some(range)),
     }
 }
 
@@ -205,18 +226,20 @@ fn looks_like_windows_drive_colon(s: &str, colon_pos: usize) -> bool {
     colon_pos == 1 && s.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
 }
 
-pub(super) fn parse_import_param(value: &str) -> Result<ImportParam, ParseArgError> {
+/// `file[;offset]` of `/IN` and `/IA`. HexView reads the offset as a signed lenient
+/// number and wraps it into the address space.
+pub(super) fn parse_import(kind: ImportKind, value: &str) -> Import {
     let value = strip_quotes(value);
-    let (file, offset) = if let Some((file, offset_str)) = value.split_once(';') {
-        (file, parse_number(offset_str)?)
-    } else {
-        (value, 0)
+    let (file, offset) = value.split_once(';').unwrap_or((value, ""));
+    let offset = match offset.trim().strip_prefix('-') {
+        Some(magnitude) => parse_lenient_number(magnitude).wrapping_neg(),
+        None => parse_lenient_number(offset.trim()),
     };
-
-    Ok(ImportParam {
+    Import {
+        kind,
         file: PathBuf::from(file),
         offset,
-    })
+    }
 }
 
 pub(super) fn parse_remap(s: &str) -> Result<RemapOptions, ParseArgError> {
@@ -273,7 +296,7 @@ pub(super) fn parse_checksum(
             } else {
                 (forced, None)
             };
-            let Some(range) = parse_lenient_range(range_str)? else {
+            let RangeText::Valid(range) = parse_range(range_str) else {
                 continue;
             };
             let pattern = if let Some(pattern_str) = pattern_str {
@@ -303,14 +326,14 @@ pub(super) fn parse_checksum(
         let mut pieces = part.split('/');
         let range_part = pieces.next().unwrap_or_default();
         if !range_part.is_empty() {
-            match parse_lenient_range(range_part)? {
-                Some(limit) => range = Some(limit),
+            match parse_range(range_part) {
+                RangeText::Valid(limit) => range = Some(limit),
                 // HexView checksums nothing when the limiting range is invalid.
-                None => exclude_ranges.extend(AddressRange::from_start_end(0, u32::MAX).ok()),
+                _ => exclude_ranges.extend(AddressRange::from_start_end(0, u32::MAX).ok()),
             }
         }
         for exclude in pieces {
-            exclude_ranges.extend(parse_lenient_ranges(exclude)?);
+            exclude_ranges.extend(parse_ranges(exclude));
         }
     }
 
@@ -344,21 +367,25 @@ pub(super) fn parse_placement_target(target: &str) -> Result<Placement, ParseArg
     }
 }
 
-pub(super) fn parse_dspic_op(s: &str) -> Result<DspicOp, ParseArgError> {
-    let s = strip_quotes(s);
-    if let Some((range_str, target_str)) = s.split_once(';') {
-        let target = parse_number(target_str)?;
-        Ok(DspicOp {
-            range: parse_single_compat_range(range_str, "dsPIC range")?,
-            target: Some(target),
-        })
-    } else {
-        let range_str = s.split_once(':').map_or(s, |(range, _)| range);
-        Ok(DspicOp {
-            range: parse_single_compat_range(range_str, "dsPIC range")?,
-            target: None,
-        })
+/// `/CDSPX` and `/CDSPS` items `range[;target]`, separated by `:`; text after a range,
+/// such as `,target`, is ignored and an invalid range ends the list, as in HexView.
+pub(super) fn parse_dspic_ops(value: &str) -> Result<Vec<DspicOp>, ParseArgError> {
+    let mut ops = Vec::new();
+    for item in strip_quotes(value)
+        .split(':')
+        .filter(|item| !item.is_empty())
+    {
+        let (range, target) = match item.split_once(';') {
+            Some((range, target)) => (range, Some(parse_number(target)?)),
+            None => (item, None),
+        };
+        match parse_range(range) {
+            RangeText::Valid(range) => ops.push(DspicOp { range, target }),
+            RangeText::Skipped => {}
+            RangeText::Invalid => break,
+        }
     }
+    Ok(ops)
 }
 
 /// HexView's lenient integer: `0x`-prefixed hex or decimal digits, read up to the first
@@ -462,24 +489,44 @@ mod tests {
         assert_eq!(params[0].range, None);
     }
 
+    /// HexView 1.15.2 merges the whole file when the /MT range is reversed, and fails.
     #[test]
-    fn test_parse_import_param_with_offset() {
-        let param = parse_import_param("file.bin;0x1000").unwrap();
-        assert_eq!(param.offset, 0x1000);
-    }
-
-    #[test]
-    fn test_parse_import_param_invalid_offset() {
-        let result = parse_import_param("file.bin;0xZZ");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_merge_params_ignores_reversed_range() {
-        // HexView 1.15.2 merges the whole file when the /MT range is reversed.
+    fn test_parse_merge_params_reversed_range_is_invalid() {
         let params = parse_merge_params("file.hex:0x2000-0x1000").unwrap();
         assert_eq!(params[0].file, PathBuf::from("file.hex"));
         assert!(params[0].range.is_none());
+        assert!(params[0].invalid_range);
+    }
+
+    /// HexView 1.15.2 range text: lenient numbers, ignored trailing text, no `h` or `0b`
+    /// forms, and a start that must be followed directly by `,` or `-`.
+    #[test]
+    fn test_parse_range_matches_hexview() {
+        let valid =
+            |start, end| RangeText::Valid(AddressRange::from_start_end(start, end).unwrap());
+        assert_eq!(parse_range("0x1000,4x"), valid(0x1000, 0x1003));
+        assert_eq!(parse_range("0x1000-0x1003-0x1005"), valid(0x1000, 0x1003));
+        assert_eq!(parse_range("+ 8,4"), valid(8, 11));
+        assert_eq!(parse_range("010,4"), valid(10, 13));
+        assert_eq!(parse_range("0x1000,"), RangeText::Skipped);
+        assert_eq!(parse_range("8,+4"), RangeText::Skipped);
+        for invalid in [
+            "0x1000-",
+            "0x1000",
+            ",4",
+            "1000h,4",
+            "0X8,4",
+            "0x1000 , 4",
+            "0x10_00,4",
+            " +8,4",
+            "q",
+        ] {
+            assert_eq!(parse_range(invalid), RangeText::Invalid, "{invalid}");
+        }
+        assert_eq!(
+            parse_ranges("0x1000-0x1003q:0x1010,4:x:0x1020,4"),
+            [0x1000, 0x1010].map(|start| AddressRange::from_start_length(start, 4).unwrap())
+        );
     }
 
     #[test]
@@ -512,23 +559,5 @@ mod tests {
         let params = parse_checksum("0", ";0x1000-0x1003", false).unwrap();
         assert!(matches!(params.target, ChecksumTarget::None));
         assert_eq!(params.range.unwrap().start(), 0x1000);
-    }
-
-    #[test]
-    fn test_parse_checksum_forced_multi_range_rejected() {
-        let result = parse_checksum("0", "@append;!0x1000-0x1001:0x2000-0x2001#AA", false);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_checksum_multi_range_rejected() {
-        let result = parse_checksum("0", "@append;0x1000-0x1001:0x2000-0x2001", false);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_dspic_op_multi_range_rejected() {
-        let result = parse_dspic_op("0x1000-0x1001:0x2000-0x2001;0x3000");
-        assert!(result.is_err());
     }
 }

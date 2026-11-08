@@ -15,7 +15,7 @@ Hexy has three public surfaces:
 `hexy-core` exposes the broadest API:
 
 - `HexFile`, `Segment`, `AddressRange`, range parsing, normalization, sparse reads, contiguous exports, segment append/prepend, and byte writes
-- binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, C-code writing, and auto-detected file helpers
+- binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file helpers, and HexView's C-array, CCP/XCP flash kernel, GAC software interlock and Ford Intel HEX writers
 - filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, address scaling, banked mapping, and remap operations
 - checksum calculation and writeback through `ChecksumOptions` and a `Placement`
 - data processing (signing) and signature verification, with typed key readers for HexView's key formats
@@ -25,13 +25,13 @@ Hexy has three public surfaces:
 
 `hexy-compat` exposes the subset of `hexy-core` that maps to supported HexView-style CLI flags:
 
-- file input, auto-detection, binary import (`/IN`), HEX ASCII import (`/IA`), and 16-bit Intel HEX import (`/II2`)
+- file input, auto-detection, binary import (`/IN`), HEX ASCII import (`/IA`), 16-bit Intel HEX import (`/II2`), and the `/L` log commands
 - the no-op switches `/G`, `/M`, `/BHFCT`, `/BTFST` and `/BTBS`
 - address range filtering (`/AR`), cut (`/CR`), fill (`/FR` + `/FP`), merge (`/MO`, `/MT`), fill-all (`/FA`), alignment (`/AD`, `/AL`, `/AF`), split (`/SB`), small-block removal (`/RB`), byte swap (`/SWAPWORD`, `/SWAPLONG`), remap, S08/S12/S12X mapping, and dsPIC transforms
 - checksum methods 0-22 through `/CS*` and `/CSR*`, including the `expdatproc.ini` constant (`/CS16`)
 - additional feature: sequential multi-checksum execution through `/CSM*` and `/CSMR*`
 - signing and verification through the supported `/DP` and `/SV` subset, with HexView's full `/DP` parameter grammar
-- output through Intel HEX (`/XI`), S-Record (`/XS`), binary (`/XN`), HEX ASCII (`/XA`), C code (`/XC`), Ford Intel HEX (`/XF`), Porsche (`/XP`), and separate binaries (`/XSB`)
+- output through Intel HEX (`/XI`), S-Record (`/XS`), binary (`/XN`), HEX ASCII (`/XA`), C arrays (`/XC`), CCP/XCP flash kernels (`/XK`), GAC software interlock files (`/XGACSWIL`), Ford Intel HEX (`/XF`), Porsche (`/XP`), and separate binaries (`/XSB`)
 
 `hexy-compat` does not expose every `hexy-core` operation as an independent CLI feature. Library-only surface includes segment append/prepend, arbitrary sparse reads, `to_bytes`-style contiguous inspection, standalone address scaling/unscaling APIs, direct banked-map configuration, direct C-code writer options, and the typed key readers.
 
@@ -40,42 +40,20 @@ Hexy has three public surfaces:
 `hexy-py` exposes the in-memory parts of `hexy-core` that are useful from Python:
 
 - `HexFile`, `Segment`, and `AddressRange`
-- binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file input, in-memory serializers, and file writers for binary, Intel HEX, S-Record, and HEX ASCII
+- binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file input, in-memory serializers, file writers for binary, Intel HEX, S-Record, and HEX ASCII, and in-memory C-array, flash kernel and GAC software interlock exports
 - segment inspection, sparse reads, contiguous byte export, direct byte writes, normalization, append/prepend segment operations, filter, cut, fill, gap fill, merge, offset, align, split, small-block removal, byte swap, dsPIC transforms, remap, and S08/S12/S12X mapping
 - `Pipeline`, which applies stages in hexy CLI order, including checksum calculation and writeback, signing and verification
 - signing and verification on `HexFile`
 
-`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, C-code export, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
+`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
 
 ## HexView Compatibility Limits
 
 Do not claim these areas as drop-in compatible with HexView yet.
 
-### `/XP` Porsche export
-
-- current behavior accepts some cases that the compatibility target appears to reject
-- rejection parity is wrong or `/XP` preconditions are narrower than `hexy` currently assumes
-
-### `/XC` C-array export
-
-- generated `.c/.h` output shape is structurally different from the compatibility target
-- the compatibility target emits its legacy flash-driver style wrapper/header/macros
-- `hexy` emits a smaller `stdint.h`-based array/header pair
-
-This is not a cosmetic whitespace issue; the exported contract differs.
-
-### `/XF` Ford Intel HEX export
-
-- minimal-header Ford export formats `RELEASE DATE` from the system date using UTC day boundaries
-- HexView appears to use the Windows local date for this field, so output can differ around local midnight
-
-### Other Limits
-
-- in `hexy-compat`, `/L` executes `FileClose` and `FileNew`; `FileOpen <path>` is rejected with the attempted path
-- exact `/E` and `/V` text/file semantics; hexy prints warnings (such as an ignored `/SB` below 0x100) to stderr
-- HexView warns about unrecognised options, including `/RB:n` with a colon, and carries on; hexy rejects them
-- HexView treats malformed range text such as `/CR:x` like a reversed range and stops reading the list there; hexy rejects it
-- `/MO` with an invalid merge range: both merge the whole file, but HexView also exits with an error
+- warning and error texts differ from HexView's, though each goes to the `/E` file on its own line as in HexView; `/V` writes `hexy V<version>`
+- every failure exits with status 1; HexView returns a code per failure kind, such as 2 for a merge range or 11 for a checksum
+- an import or merge file that does not exist: HexView warns and exports without it; hexy fails, so that a mistyped name cannot silently drop data. A wildcard name that matches nothing merges nothing in both
 - a zero-length forced checksum range (`;!0x1000,0`) changes HexView's result in a way not yet understood; hexy ignores the range
 - input files with overlapping records: HexView fails to read them and writes nothing; hexy keeps the last record's bytes
 - forced S1 or S2 records (`/XS:len:0`, `/XS:len:1`) for addresses that do not fit: HexView truncates the addresses; hexy rejects the export
@@ -102,13 +80,11 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 - `/DP17` blocks that are longer than one padded key length but not a whole number of key lengths, and `/DP18` blocks that are not a whole number of key lengths: HexView writes unusable data; hexy fails
 - `/DP52` on more than one block: both fail, but HexView first writes the signature of the first block to the output file; hexy writes no output file
 - `/CSM*` and `/CSMR*` are hexy extensions; HexView ignores them
-- wildcards (`?`, `*`) in `/MO` and `/MT` file names are not supported
-- `/IA` or `/II2` with a positional input file: HexView ignores the import with a warning; hexy adds `/IA` data to the input and rejects `/II2`
-- `/AD` values that are not a power of two: HexView ignores them with a warning; hexy aligns to them
-- `/AL:length` without `/AD`: HexView aligns block lengths only; hexy also aligns block starts
-- `/CR=` and `/FR=`: HexView ignores the `=` forms; hexy accepts them
-- `/FP` with an odd number of digits or a `0x` prefix: HexView accepts it; hexy rejects it
-- `/CDSPX:range,target`: HexView ignores `,target` (`;` is the documented separator); hexy rejects it
-- proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats
+- numbers above 32 bits in range text, `/XC` `WordSize` values other than 0-2 and `/XK` on an empty image crash HexView; hexy reads such a range as unreadable and rejects the others
+- a negative range length such as `/CR:8,-4`: HexView leaves overlapping blocks; hexy skips the range
+- `/IN` or `/IA` data that would reach past `0xFFFFFFFF`: HexView wraps it around to address 0; hexy fails
+- `/XF` with `FLASH ERASE SECTORS` in the INI file: HexView sometimes writes the block list instead, depending on the value and on `FLASH INDICATOR` and `DOWNLOAD FORMAT` (for example a `:start,length` list with `FLASH INDICATOR=1`); hexy always writes the INI text
+- `/L` lines `FileOpen<name>` without a blank, such as `FileOpenx`: HexView fails for some names; hexy empties the image like any other `FileOpen` with a name
+- HexView options for OEM containers, GM headers, VBF files, validation structures and external DLLs (`/XG*`, `/XGAC`, `/XGMFBL`, `/XV`, `/XVBF`, `/XVBFSUBST`, `/MVBF`, `/XB`, `/xfca_sign`, `/vs`, `/vshsm`, `/PB`, `/expdat`): hexy rejects them; see [the CLI reference](../skill/hexy-compat/references/cli-reference.md)
 
 The boundary here is compatibility claims, not implementation status. Resolved HexView parity findings are not kept as open divergences.

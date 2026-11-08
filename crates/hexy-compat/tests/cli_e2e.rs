@@ -33,9 +33,11 @@ fn test_cli_multistage_bin_merge_align_output() {
     let norm = hexfile.normalized();
 
     assert_eq!(norm.segments().len(), 1);
-    assert_eq!(norm.segments()[0].start_address(), 0x0FFF);
+    // HexView aligns with the bit mask of /AD - 1, which 0x1000 and length 5 already
+    // satisfy for /AD:3.
+    assert_eq!(norm.segments()[0].start_address(), 0x1000);
     assert_eq!(
         norm.segments()[0].data(),
-        vec![0xEE, 0x10, 0x11, 0xAA, 0xBB, 0x14]
+        vec![0x10, 0x11, 0xAA, 0xBB, 0x14]
     );
 }
