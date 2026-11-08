@@ -4,11 +4,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AddressRangeError {
-    #[error("invalid range format: {0}")]
+    #[error("invalid range '{0}': expected start-end or start,length")]
     InvalidFormat(String),
-
-    #[error("invalid number: {0}")]
-    InvalidNumber(String),
 
     #[error("range start ({start:#X}) exceeds end ({end:#X})")]
     StartExceedsEnd { start: u32, end: u32 },
@@ -83,68 +80,44 @@ impl AddressRange {
     }
 }
 
-/// Parse a number from decimal, hex (0x), or binary (0b or trailing b).
-fn parse_number(s: &str) -> Result<u64, AddressRangeError> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err(AddressRangeError::InvalidNumber("empty string".to_owned()));
-    }
-
-    let s = s.trim_end_matches(['u', 'U', 'l', 'L']).trim();
-    if s.is_empty() {
-        return Err(AddressRangeError::InvalidNumber("empty string".to_owned()));
-    }
-    let (radix, digits) = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        (16, hex)
-    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-        (2, bin)
-    } else if let Some(bin) = s.strip_suffix('b').or_else(|| s.strip_suffix('B')) {
-        (2, bin)
-    } else if let Some(hex) = s.strip_suffix('h').or_else(|| s.strip_suffix('H')) {
-        (16, hex)
-    } else {
-        (10, s)
-    };
-
-    let cleaned: String = digits.chars().filter(|c| *c != '.' && *c != '_').collect();
-    if cleaned.is_empty() {
-        return Err(AddressRangeError::InvalidNumber("empty".to_owned()));
-    }
-    u64::from_str_radix(&cleaned, radix)
-        .map_err(|e| AddressRangeError::InvalidNumber(e.to_string()))
-}
-
-fn parse_address(s: &str) -> Result<u32, AddressRangeError> {
-    let value = parse_number(s)?;
-    u32::try_from(value).map_err(|e| AddressRangeError::InvalidNumber(e.to_string()))
-}
-
 impl FromStr for AddressRange {
     type Err = AddressRangeError;
 
-    /// Parse range from string.
-    /// Formats:
-    /// - "start,length" (e.g., "0x1000,0x200")
-    /// - "start-end" (e.g., "0x1000-0x11FF")
+    /// `start-end` or `start,length` as HexView reads a range. Each number is `0x` hex or
+    /// decimal after optional blanks, the start also after one `+`, and text after the
+    /// second number is ignored; the start must be followed directly by `,` or `-`. A
+    /// missing second number reads as 0.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((start_str, len_str)) = s.split_once(',') {
-            let start = parse_address(start_str)?;
-            let length = parse_number(len_str)?;
-            AddressRange::from_start_length(start, length)
-        } else if let Some((start_str, end_str)) = s.split_once('-') {
-            let start = parse_address(start_str)?;
-            let end = parse_address(end_str)?;
-            AddressRange::from_start_end(start, end)
-        } else {
-            Err(AddressRangeError::InvalidFormat(format!(
-                "expected 'start,length' or 'start-end', got '{s}'"
-            )))
+        let invalid = || AddressRangeError::InvalidFormat(s.to_owned());
+        let (start, rest) = range_number(s.strip_prefix('+').unwrap_or(s)).ok_or_else(invalid)?;
+        let mut rest = rest.chars();
+        let separator = rest.next();
+        let second = range_number(rest.as_str()).map_or(0, |(value, _)| value);
+        match separator {
+            Some(',') => Self::from_start_length(start, u64::from(second)),
+            Some('-') => Self::from_start_end(start, second),
+            _ => Err(invalid()),
         }
     }
 }
 
+/// A HexView range number and the text after it; `None` without digits or above 32
+/// bits.
+fn range_number(s: &str) -> Option<(u32, &str)> {
+    let s = s.trim_start();
+    let (radix, digits) = match s.strip_prefix("0x") {
+        Some(hex) if hex.starts_with(|c: char| c.is_ascii_hexdigit()) => (16, hex),
+        _ => (10, s),
+    };
+    let end = digits
+        .find(|c: char| !c.is_digit(radix))
+        .unwrap_or(digits.len());
+    let value = u32::from_str_radix(&digits[..end], radix).ok()?;
+    Some((value, &digits[end..]))
+}
+
 /// Merge overlapping or adjacent ranges into a sorted, non-overlapping set.
-pub fn merge_ranges(ranges: &[AddressRange]) -> Vec<AddressRange> {
+pub(crate) fn merge_ranges(ranges: &[AddressRange]) -> Vec<AddressRange> {
     let mut sorted = ranges.to_vec();
     sorted.sort_by_key(|r| r.start);
 
@@ -191,167 +164,58 @@ pub(crate) fn subtract_ranges(range: AddressRange, excludes: &[AddressRange]) ->
     out
 }
 
-/// Parse multiple ranges separated by ':'.
-pub fn parse_ranges(s: &str) -> Result<Vec<AddressRange>, AddressRangeError> {
-    s.split(':').map(|part| part.parse()).collect()
-}
-
-/// Parse multiple ranges, trimming optional surrounding quotes.
-pub fn parse_compat_ranges(s: &str) -> Result<Vec<AddressRange>, AddressRangeError> {
-    let trimmed = s.trim_matches(|c| c == '"' || c == '\'');
-    parse_ranges(trimmed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// HexView 1.15.2 range text: `0x` hex or decimal, ignored trailing text, no `h` or
+    /// `0b` forms, and a start that must be followed directly by `,` or `-`. HexView
+    /// skips an empty range or one past the address space and stops a list at any other
+    /// error.
     #[test]
-    fn test_from_start_length() {
-        let r = AddressRange::from_start_length(0x1000, 0x200).unwrap();
-        assert_eq!(r.start(), 0x1000);
-        assert_eq!(r.end(), 0x11FF);
-        assert_eq!(r.length(), 0x200);
-    }
-
-    #[test]
-    fn test_from_start_end() {
-        let r = AddressRange::from_start_end(0x1000, 0x11FF).unwrap();
-        assert_eq!(r.start(), 0x1000);
-        assert_eq!(r.end(), 0x11FF);
-        assert_eq!(r.length(), 0x200);
-    }
-
-    #[test]
-    fn test_parse_range_with_dots() {
-        let r: AddressRange = "0x10.000-0x10.0FFF".parse().unwrap();
-        assert_eq!(r.start(), 0x10000);
-        assert_eq!(r.end(), 0x100FFF);
-    }
-
-    #[test]
-    fn test_parse_range_with_hex_suffix() {
-        let r: AddressRange = "1000h-10FFh".parse().unwrap();
-        assert_eq!(r.start(), 0x1000);
-        assert_eq!(r.end(), 0x10FF);
-    }
-
-    #[test]
-    fn test_parse_range_with_c_suffixes() {
-        let r: AddressRange = "0x1000u-0x10FFUL".parse().unwrap();
-        assert_eq!(r.start(), 0x1000);
-        assert_eq!(r.end(), 0x10FF);
-    }
-
-    #[test]
-    fn test_contains() {
-        let r = AddressRange::from_start_end(0x1000, 0x1FFF).unwrap();
-        assert!(r.contains(0x1000));
-        assert!(r.contains(0x1500));
-        assert!(r.contains(0x1FFF));
-        assert!(!r.contains(0x0FFF));
-        assert!(!r.contains(0x2000));
-    }
-
-    #[test]
-    fn test_overlaps() {
-        let r1 = AddressRange::from_start_end(0x1000, 0x1FFF).unwrap();
-        let r2 = AddressRange::from_start_end(0x1800, 0x2800).unwrap();
-        let r3 = AddressRange::from_start_end(0x2000, 0x3000).unwrap();
-        let r4 = AddressRange::from_start_end(0x0500, 0x0FFF).unwrap();
-
-        assert!(r1.overlaps(&r2)); // overlap at 0x1800-0x1FFF
-        assert!(!r1.overlaps(&r3)); // adjacent but not overlapping
-        assert!(!r1.overlaps(&r4)); // no overlap
-    }
-
-    #[test]
-    fn test_intersection() {
-        let r1 = AddressRange::from_start_end(0x1000, 0x1FFF).unwrap();
-        let r2 = AddressRange::from_start_end(0x1800, 0x2800).unwrap();
-
-        let i = r1.intersection(&r2).unwrap();
-        assert_eq!(i.start(), 0x1800);
-        assert_eq!(i.end(), 0x1FFF);
-
-        let r3 = AddressRange::from_start_end(0x2000, 0x3000).unwrap();
-        assert!(r1.intersection(&r3).is_none());
-    }
-
-    #[test]
-    fn test_parse_start_length_hex() {
-        let r: AddressRange = "0x1000,0x200".parse().unwrap();
-        assert_eq!(r.start(), 0x1000);
-        assert_eq!(r.end(), 0x11FF);
-    }
-
-    #[test]
-    fn test_parse_start_end_hex() {
-        let r: AddressRange = "0x1000-0x11FF".parse().unwrap();
-        assert_eq!(r.start(), 0x1000);
-        assert_eq!(r.end(), 0x11FF);
-    }
-
-    #[test]
-    fn test_parse_decimal() {
-        let r: AddressRange = "4096,512".parse().unwrap();
-        assert_eq!(r.start(), 4096);
-        assert_eq!(r.length(), 512);
-    }
-
-    #[test]
-    fn test_parse_binary() {
-        let r: AddressRange = "0b1000,0b100".parse().unwrap();
-        assert_eq!(r.start(), 8);
-        assert_eq!(r.length(), 4);
-
-        let r2: AddressRange = "1000b,100b".parse().unwrap();
-        assert_eq!(r2.start(), 8);
-        assert_eq!(r2.length(), 4);
-    }
-
-    #[test]
-    fn test_parse_ranges_multiple() {
-        let ranges = parse_ranges("0x1000,0x100:0x2000-0x2FFF").unwrap();
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0].start(), 0x1000);
-        assert_eq!(ranges[0].end(), 0x10FF);
-        assert_eq!(ranges[1].start(), 0x2000);
-        assert_eq!(ranges[1].end(), 0x2FFF);
-    }
-
-    #[test]
-    fn test_parse_compat_ranges_quotes() {
-        let ranges = parse_compat_ranges("'0x1000,0x100:0x2000-0x2FFF'").unwrap();
-        assert_eq!(ranges.len(), 2);
-        assert_eq!(ranges[0].start(), 0x1000);
-        assert_eq!(ranges[1].start(), 0x2000);
-    }
-
-    #[test]
-    fn test_zero_length_error() {
-        assert!(matches!(
-            AddressRange::from_start_length(0x1000, 0),
-            Err(AddressRangeError::ZeroLength { .. })
-        ));
-    }
-
-    #[test]
-    fn test_start_exceeds_end_error() {
-        assert!(matches!(
-            AddressRange::from_start_end(0x2000, 0x1000),
-            Err(AddressRangeError::StartExceedsEnd { .. })
-        ));
-    }
-
-    // --- Edge case tests ---
-
-    #[test]
-    fn test_full_4gib_range_allowed() {
-        let r = AddressRange::from_start_end(0, u32::MAX).unwrap();
-        assert_eq!(r.start(), 0);
-        assert_eq!(r.end(), u32::MAX);
-        assert_eq!(r.length(), 0x1_0000_0000);
+    fn test_parse_matches_hexview() {
+        let range = |text: &str| text.parse::<AddressRange>();
+        let valid = |start, end| AddressRange::from_start_end(start, end).unwrap();
+        assert_eq!(range("0x1000,4x").unwrap(), valid(0x1000, 0x1003));
+        assert_eq!(
+            range("0x1000-0x1003-0x1005").unwrap(),
+            valid(0x1000, 0x1003)
+        );
+        assert_eq!(range("+ 8,4").unwrap(), valid(8, 11));
+        assert_eq!(range("010,4").unwrap(), valid(10, 13));
+        assert_eq!(range("0x0-0xFFFFFFFF").unwrap(), valid(0, u32::MAX));
+        for skipped in ["0x1000,", "8,+4", "0xFFFFFFFC,5"] {
+            assert!(
+                matches!(
+                    range(skipped),
+                    Err(AddressRangeError::ZeroLength { .. }
+                        | AddressRangeError::PastAddressSpace { .. })
+                ),
+                "{skipped}"
+            );
+        }
+        for invalid in [
+            "0x1000-",
+            "0x1000",
+            ",4",
+            "1000h,4",
+            "0X8,4",
+            "0x1000 , 4",
+            "0x10_00,4",
+            " +8,4",
+            "q",
+            "8\u{e9}4",
+            "0x100000000,1",
+        ] {
+            assert!(
+                matches!(
+                    range(invalid),
+                    Err(AddressRangeError::InvalidFormat(_)
+                        | AddressRangeError::StartExceedsEnd { .. })
+                ),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]
@@ -366,90 +230,5 @@ mod tests {
             merged,
             vec![AddressRange::from_start_end(0, u32::MAX).unwrap()]
         );
-    }
-
-    #[test]
-    fn test_single_byte_range() {
-        let r = AddressRange::from_start_end(0x1000, 0x1000).unwrap();
-        assert_eq!(r.length(), 1);
-        assert!(r.contains(0x1000));
-        assert!(!r.contains(0x1001));
-    }
-
-    #[test]
-    fn test_parse_u32_max() {
-        let r: AddressRange = "0xFFFFFFFF,1".parse().unwrap();
-        assert_eq!(r.start(), u32::MAX);
-        assert_eq!(r.end(), u32::MAX);
-        assert_eq!(r.length(), 1);
-    }
-
-    #[test]
-    fn test_parse_overflow_number() {
-        let result: Result<AddressRange, _> = "0x100000000,1".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_invalid_binary() {
-        let result: Result<AddressRange, _> = "0b102,1".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_empty_string() {
-        let result: Result<AddressRange, _> = "".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_malformed_comma() {
-        let result: Result<AddressRange, _> = "0x1000,".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_malformed_dash() {
-        let result: Result<AddressRange, _> = "0x1000-".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_ranges_single() {
-        let ranges = parse_ranges("0x1000,0x100").unwrap();
-        assert_eq!(ranges.len(), 1);
-    }
-
-    #[test]
-    fn test_start_length_past_address_space_errors() {
-        let result: Result<AddressRange, _> = "0xFFFFFFFC,0x5".parse();
-        assert!(matches!(
-            result,
-            Err(AddressRangeError::PastAddressSpace { .. })
-        ));
-    }
-
-    #[test]
-    fn test_parse_full_span_start_length() {
-        let r: AddressRange = "0x0,0x100000000".parse().unwrap();
-        assert_eq!(r.start(), 0);
-        assert_eq!(r.end(), u32::MAX);
-        assert_eq!(r.length(), 0x1_0000_0000);
-    }
-
-    #[test]
-    fn test_parse_endpoint_above_address_space_errors() {
-        let result: Result<AddressRange, _> = "0x0-0x100000000".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_overlaps_single_byte_boundary() {
-        let r1 = AddressRange::from_start_end(0x1000, 0x1000).unwrap();
-        let r2 = AddressRange::from_start_end(0x1000, 0x1000).unwrap();
-        assert!(r1.overlaps(&r2));
-
-        let r3 = AddressRange::from_start_end(0x1001, 0x1001).unwrap();
-        assert!(!r1.overlaps(&r3));
     }
 }

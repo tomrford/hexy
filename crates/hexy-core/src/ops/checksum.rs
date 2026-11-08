@@ -32,8 +32,8 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 
 use super::{OpsError, materialized_len, pattern_bytes};
-use crate::range::subtract_ranges;
-use crate::{AddressRange, HexFile, Placement, Segment, merge_ranges};
+use crate::range::{merge_ranges, subtract_ranges};
+use crate::{AddressRange, HexFile, Placement, Segment};
 
 const CRC16_USB: Crc<u16> = Crc::<u16>::new(&crc::CRC_16_USB);
 const CRC16_IBM_3740: Crc<u16> = Crc::<u16>::new(&crc::CRC_16_IBM_3740);

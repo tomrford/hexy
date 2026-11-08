@@ -8,6 +8,7 @@ mod gac;
 mod hex_ascii;
 mod intel_hex;
 mod srec;
+mod validation_c;
 
 pub use binary::{BinaryWriteOptions, parse_binary, write_binary};
 pub use c_code::{CCodeOutput, CCodeWordSize, CCodeWordType, CCodeWriteOptions, write_c_code};
@@ -24,6 +25,7 @@ pub use intel_hex::{
 pub use srec::{
     DEFAULT_SREC_BYTES_PER_LINE, SRecordType, SRecordWriteOptions, parse_srec, write_srec,
 };
+pub use validation_c::{ValidationCOptions, write_validation_c};
 
 use crate::segment::end_address_for;
 use crate::{HexFile, Segment};

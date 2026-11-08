@@ -1,27 +1,21 @@
+mod args;
+mod errors;
 mod hexfile;
 mod pipeline;
+mod processing;
 mod types;
-mod util;
+mod validation;
 
-use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
-
-use crate::hexfile::PyHexFile;
-use crate::pipeline::{PyPipeline, PyPipelineResult};
-use crate::types::{PyAddressRange, PySegment};
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<PyAddressRange>()?;
-    module.add_class::<PySegment>()?;
-    module.add_class::<PyHexFile>()?;
-    module.add_class::<PyPipeline>()?;
-    module.add_class::<PyPipelineResult>()?;
-    module.add("HexyError", module.py().get_type::<PyValueError>())?;
-    module.add("RangeError", module.py().get_type::<PyValueError>())?;
-    module.add("ParseError", module.py().get_type::<PyValueError>())?;
-    module.add("OperationError", module.py().get_type::<PyValueError>())?;
-    module.add("IndexError", module.py().get_type::<PyIndexError>())?;
-    Ok(())
+    module.add_class::<types::PyAddressRange>()?;
+    module.add_class::<types::PySegment>()?;
+    module.add_class::<hexfile::PyHexFile>()?;
+    module.add_class::<processing::PyDataProcessing>()?;
+    module.add_class::<validation::PyValidationStructure>()?;
+    module.add_class::<pipeline::PyPipeline>()?;
+    module.add_class::<pipeline::PyPipelineResult>()?;
+    errors::register(module)
 }

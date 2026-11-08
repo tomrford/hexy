@@ -1,28 +1,29 @@
 use hexy_core::{
-    AddressMap, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, DataProcessing,
-    DataProcessingStage, DspicOp, Fill, FillData, ForcedRange, Merge, MergeOptions, Pipeline,
-    RemapOptions, SwapMode, VerifyStage,
+    AddressMap, AlignOptions, ChecksumStage, DataProcessingStage, DspicOp, Fill, FillData,
+    HsmValidationStage, Merge, MergeOptions, Pipeline, RemapOptions, SwapMode, ValidationStage,
+    VerifyStage,
 };
-use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use crate::hexfile::PyHexFile;
-use crate::util::{
-    CipherArgs, CompressionArgs, cipher_operation, compression_operation, key_content,
-    mac_operation, parse_fill_pattern, parse_merge_mode, parse_placement, parse_range_arg,
-    parse_ranges_arg, parse_signature_method, parse_swap_mode, py_bytes, value_error,
+use crate::args::{
+    ChecksumArgs, fill_pattern, key_file, merge_mode, optional_range, placement, range, ranges,
+    swap_mode,
 };
+use crate::errors::py_err;
+use crate::hexfile::PyHexFile;
+use crate::processing::{PyDataProcessing, signature_method};
+use crate::validation::{PyValidationStructure, ValidationArgs, hsm_options};
 
 /// A `hexy_core::Pipeline`: each method configures one stage, and `apply` runs the
 /// configured stages in HexView order.
-#[pyclass(name = "Pipeline", skip_from_py_object)]
+#[pyclass(name = "Pipeline", module = "hexy", skip_from_py_object)]
 #[derive(Default)]
 pub(crate) struct PyPipeline {
     inner: Pipeline,
 }
 
-#[pyclass(name = "PipelineResult", frozen, skip_from_py_object)]
+#[pyclass(name = "PipelineResult", module = "hexy", frozen, skip_from_py_object)]
 pub(crate) struct PyPipelineResult {
     #[pyo3(get)]
     hexfile: Py<PyHexFile>,
@@ -30,6 +31,12 @@ pub(crate) struct PyPipelineResult {
     checksums: Vec<Py<PyBytes>>,
     #[pyo3(get)]
     data_processing: Option<Py<PyBytes>>,
+    #[pyo3(get)]
+    validation: Option<Py<PyValidationStructure>>,
+    #[pyo3(get)]
+    hsm_validation: Option<Py<PyBytes>>,
+    #[pyo3(get)]
+    hsm_signature: Option<Py<PyBytes>>,
 }
 
 #[pymethods]
@@ -41,11 +48,25 @@ impl PyPipeline {
 
     fn apply(&self, py: Python<'_>, source: PyRef<'_, PyHexFile>) -> PyResult<PyPipelineResult> {
         let mut hexfile = source.inner.clone();
-        let output = self.inner.run(&mut hexfile).map_err(value_error)?;
+        let output = self.inner.run(&mut hexfile).map_err(py_err)?;
+        let bytes = |data: Vec<u8>| PyBytes::new(py, &data).unbind();
+        let validation = match (output.validation, &self.inner.validation) {
+            (Some(inner), Some(stage)) => Some(Py::new(
+                py,
+                PyValidationStructure {
+                    options: stage.options.clone(),
+                    inner,
+                },
+            )?),
+            _ => None,
+        };
         Ok(PyPipelineResult {
             hexfile: Py::new(py, PyHexFile { inner: hexfile })?,
-            checksums: output.checksums.iter().map(|c| py_bytes(py, c)).collect(),
-            data_processing: output.data_processing.map(|bytes| py_bytes(py, &bytes)),
+            checksums: output.checksums.into_iter().map(bytes).collect(),
+            data_processing: output.data_processing.map(bytes),
+            validation,
+            hsm_validation: output.hsm_validation.map(bytes),
+            hsm_signature: output.hsm_signature.map(bytes),
         })
     }
 
@@ -73,28 +94,28 @@ impl PyPipeline {
 
     #[pyo3(signature = (range, target=None))]
     fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        let range = parse_range_arg(range)?;
+        let range = self::range(range)?;
         self.inner.dspic_expand.push(DspicOp { range, target });
         Ok(())
     }
 
     #[pyo3(signature = (range, target=None))]
     fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        let range = parse_range_arg(range)?;
+        let range = self::range(range)?;
         self.inner.dspic_shrink.push(DspicOp { range, target });
         Ok(())
     }
 
     fn dspic_clear_ghost(&mut self, range: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.dspic_clear_ghost.push(parse_range_arg(range)?);
+        self.inner.dspic_clear_ghost.push(self::range(range)?);
         Ok(())
     }
 
     #[pyo3(signature = (ranges, *, pattern=None))]
     fn fill(&mut self, ranges: &Bound<'_, PyAny>, pattern: Option<&[u8]>) -> PyResult<()> {
         self.inner.fill = Some(Fill {
-            ranges: parse_ranges_arg(ranges)?,
-            data: FillData::Pattern(parse_fill_pattern(pattern)?),
+            ranges: self::ranges(ranges)?,
+            data: FillData::Pattern(fill_pattern(pattern)?),
         });
         Ok(())
     }
@@ -102,38 +123,38 @@ impl PyPipeline {
     #[pyo3(signature = (ranges, *, seed))]
     fn fill_random(&mut self, ranges: &Bound<'_, PyAny>, seed: u64) -> PyResult<()> {
         self.inner.fill = Some(Fill {
-            ranges: parse_ranges_arg(ranges)?,
+            ranges: self::ranges(ranges)?,
             data: FillData::Random { seed },
         });
         Ok(())
     }
 
     fn cut(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.cut.extend(parse_ranges_arg(ranges)?);
+        self.inner.cut.extend(self::ranges(ranges)?);
         Ok(())
     }
 
-    #[pyo3(signature = (other, *, mode=None, offset=0, range=None))]
+    #[pyo3(signature = (other, *, mode="overwrite", offset=0, range=None))]
     fn merge(
         &mut self,
         other: PyRef<'_, PyHexFile>,
-        mode: Option<&str>,
+        mode: &str,
         offset: i64,
         range: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         self.inner.merges.push(Merge {
             file: other.inner.clone(),
             options: MergeOptions {
-                mode: parse_merge_mode(mode)?,
+                mode: merge_mode(mode)?,
                 offset,
-                range: range.map(parse_range_arg).transpose()?,
+                range: optional_range(range)?,
             },
         });
         Ok(())
     }
 
     fn filter(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.address_filter = Some(parse_ranges_arg(ranges)?);
+        self.inner.address_filter = Some(self::ranges(ranges)?);
         Ok(())
     }
 
@@ -155,16 +176,16 @@ impl PyPipeline {
         self.inner.split = Some(max_size);
     }
 
-    fn remove_small_blocks(&mut self, min_len: u32) {
-        self.inner.remove_small_blocks = Some(min_len);
-    }
-
     fn swap(&mut self, mode: &str) -> PyResult<()> {
-        match parse_swap_mode(mode)? {
+        match swap_mode(mode)? {
             SwapMode::Word => self.inner.swap_word = true,
             SwapMode::DWord => self.inner.swap_dword = true,
         }
         Ok(())
+    }
+
+    fn remove_small_blocks(&mut self, min_length: u32) {
+        self.inner.remove_small_blocks = Some(min_length);
     }
 
     #[pyo3(signature = (
@@ -190,190 +211,32 @@ impl PyPipeline {
         forced_pattern: Option<&[u8]>,
         constant: Option<&[u8]>,
     ) -> PyResult<()> {
-        let algorithm = match (
-            ChecksumAlgorithm::try_from(algorithm).map_err(value_error)?,
+        let options = ChecksumArgs {
+            algorithm,
+            range,
+            reverse,
+            exclude,
+            forced_range,
+            forced_pattern,
             constant,
-        ) {
-            (ChecksumAlgorithm::Constant(_), Some(bytes)) => {
-                ChecksumAlgorithm::Constant(bytes.to_vec())
-            }
-            (_, Some(_)) => {
-                return Err(PyValueError::new_err("constant requires algorithm 16"));
-            }
-            (algorithm, None) => algorithm,
-        };
-        let forced_range = forced_range
-            .map(|range| -> PyResult<ForcedRange> {
-                Ok(ForcedRange {
-                    range: parse_range_arg(range)?,
-                    pattern: forced_pattern.unwrap_or_default().to_vec(),
-                })
-            })
-            .transpose()?;
+        }
+        .options()?;
         self.inner.checksums.push(ChecksumStage {
-            options: ChecksumOptions {
-                algorithm,
-                range: range.map(parse_range_arg).transpose()?,
-                little_endian_output: reverse,
-                forced_range,
-                exclude_ranges: exclude
-                    .map(parse_ranges_arg)
-                    .transpose()?
-                    .unwrap_or_default(),
-            },
-            placement: placement.map(parse_placement).transpose()?,
+            options,
+            placement: self::placement(placement)?,
         });
         Ok(())
     }
 
-    #[pyo3(signature = (method, key, *, metadata=false, placement=None, salt=None))]
-    fn sign(
+    #[pyo3(signature = (operation, *, placement=None))]
+    fn process_data(
         &mut self,
-        method: &str,
-        key: &Bound<'_, PyAny>,
-        metadata: bool,
-        placement: Option<&Bound<'_, PyAny>>,
-        salt: Option<&[u8]>,
-    ) -> PyResult<()> {
-        let method = parse_signature_method(method, metadata)?;
-        let key = method
-            .scheme
-            .signing_key(&key_content(key)?)
-            .map_err(value_error)?;
-        self.inner.data_processing = Some(DataProcessingStage {
-            operation: DataProcessing::Sign {
-                method,
-                key,
-                salt: salt.map(<[u8]>::to_vec),
-            },
-            placement: placement.map(parse_placement).transpose()?,
-        });
-        Ok(())
-    }
-
-    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
-    fn mac(
-        &mut self,
-        method: &str,
-        key: &[u8],
-        metadata: bool,
+        operation: PyDataProcessing,
         placement: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         self.inner.data_processing = Some(DataProcessingStage {
-            operation: mac_operation(method, key, metadata)?,
-            placement: placement.map(parse_placement).transpose()?,
-        });
-        Ok(())
-    }
-
-    #[pyo3(signature = (key=None))]
-    fn xor(&mut self, key: Option<&[u8]>) {
-        self.inner.data_processing = Some(DataProcessingStage {
-            operation: DataProcessing::Xor {
-                key: key.unwrap_or_default().to_vec(),
-            },
-            placement: None,
-        });
-    }
-
-    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, placement=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn encrypt(
-        &mut self,
-        mode: &str,
-        key: &Bound<'_, PyAny>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-        aad: Option<&[u8]>,
-        placement: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let args = CipherArgs {
-            mode,
-            key,
-            iv,
-            padding,
-            aad: aad.unwrap_or_default(),
-        };
-        self.inner.data_processing = Some(DataProcessingStage {
-            operation: cipher_operation(args, false, None)?,
-            placement: placement.map(parse_placement).transpose()?,
-        });
-        Ok(())
-    }
-
-    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, tag=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn decrypt(
-        &mut self,
-        mode: &str,
-        key: &Bound<'_, PyAny>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-        aad: Option<&[u8]>,
-        tag: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let args = CipherArgs {
-            mode,
-            key,
-            iv,
-            padding,
-            aad: aad.unwrap_or_default(),
-        };
-        self.inner.data_processing = Some(DataProcessingStage {
-            operation: cipher_operation(args, true, tag)?,
-            placement: None,
-        });
-        Ok(())
-    }
-
-    #[pyo3(signature = (method="lzss", *, window_bits=None, length_bits=None, key=None, iv=None, padding=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn compress(
-        &mut self,
-        method: &str,
-        window_bits: Option<u8>,
-        length_bits: Option<u8>,
-        key: Option<&[u8]>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-    ) -> PyResult<()> {
-        let args = CompressionArgs {
-            method,
-            window_bits,
-            length_bits,
-            key,
-            iv,
-            padding,
-        };
-        self.inner.data_processing = Some(DataProcessingStage {
-            operation: compression_operation(args, false)?,
-            placement: None,
-        });
-        Ok(())
-    }
-
-    #[pyo3(signature = (method="lzss", *, window_bits=None, length_bits=None, key=None, iv=None, padding=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn decompress(
-        &mut self,
-        method: &str,
-        window_bits: Option<u8>,
-        length_bits: Option<u8>,
-        key: Option<&[u8]>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-    ) -> PyResult<()> {
-        let args = CompressionArgs {
-            method,
-            window_bits,
-            length_bits,
-            key,
-            iv,
-            padding,
-        };
-        self.inner.data_processing = Some(DataProcessingStage {
-            operation: compression_operation(args, true)?,
-            placement: None,
+            operation: operation.inner,
+            placement: self::placement(placement)?,
         });
         Ok(())
     }
@@ -383,17 +246,81 @@ impl PyPipeline {
         &mut self,
         method: &str,
         key: &Bound<'_, PyAny>,
-        signature: &[u8],
+        signature: Vec<u8>,
         metadata: bool,
     ) -> PyResult<()> {
-        let method = parse_signature_method(method, metadata)?;
+        let method = signature_method(method, metadata)?;
+        let key = method
+            .scheme
+            .verifying_key(&key_file(key)?)
+            .map_err(py_err)?;
         self.inner.verify = Some(VerifyStage {
             method,
-            key: method
-                .scheme
-                .verifying_key(&key_content(key)?)
-                .map_err(value_error)?,
-            signature: signature.to_vec(),
+            key,
+            signature,
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (
+        *,
+        tag_begin,
+        tag_end,
+        block_checksum=None,
+        file_checksum=None,
+        validate_sum=false,
+        big_endian=false,
+        force_32bit=false,
+        alfi=false,
+        one_byte_count=false,
+        spare=None,
+        address=None,
+    ))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn validation_structure(
+        &mut self,
+        tag_begin: Vec<u8>,
+        tag_end: Vec<u8>,
+        block_checksum: Option<u8>,
+        file_checksum: Option<u8>,
+        validate_sum: bool,
+        big_endian: bool,
+        force_32bit: bool,
+        alfi: bool,
+        one_byte_count: bool,
+        spare: Option<&Bound<'_, PyAny>>,
+        address: Option<u32>,
+    ) -> PyResult<()> {
+        let options = ValidationArgs {
+            tag_begin,
+            tag_end,
+            block_checksum,
+            file_checksum,
+            validate_sum,
+            big_endian,
+            force_32bit,
+            alfi,
+            one_byte_count,
+            spare,
+        }
+        .options()?;
+        self.inner.validation = Some(ValidationStage { options, address });
+        Ok(())
+    }
+
+    #[pyo3(signature = (*, group_id=0, mode=0, hash=20, placement=None, signature=None))]
+    fn hsm_validation_structure(
+        &mut self,
+        group_id: u32,
+        mode: u16,
+        hash: u8,
+        placement: Option<&Bound<'_, PyAny>>,
+        signature: Option<PyDataProcessing>,
+    ) -> PyResult<()> {
+        self.inner.hsm_validation = Some(HsmValidationStage {
+            options: hsm_options(group_id, mode, hash)?,
+            placement: self::placement(placement)?,
+            signature: signature.map(|operation| operation.inner),
         });
         Ok(())
     }

@@ -170,6 +170,8 @@ pub struct PipelineOutput {
     /// The data processing output, such as a signature.
     pub data_processing: Option<Vec<u8>>,
     pub validation: Option<ValidationStructure>,
+    /// The vHSM validation structure, after any cipher of its signature stage.
+    pub hsm_validation: Option<Vec<u8>>,
     /// The signature over the vHSM validation structure.
     pub hsm_signature: Option<Vec<u8>>,
 }
@@ -389,6 +391,7 @@ impl Pipeline {
                         }
                         None => None,
                     };
+                    output.hsm_validation = Some(block.data().to_vec());
                     output.hsm_signature.clone_from(&signature);
                     let Some(range) = range else {
                         return Ok(());

@@ -11,8 +11,7 @@ pub use filter::{DEFAULT_DENSE_SPAN_LIMIT, FillOptions, MergeMode, MergeOptions}
 pub use map::{BankedMapOptions, MapCollision, RemapOptions};
 pub use transform::{AlignOptions, SwapMode};
 pub use validation::{
-    HsmValidationOptions, ValidationBlock, ValidationCOptions, ValidationOptions,
-    ValidationStructure, write_validation_c,
+    HsmValidationOptions, ValidationBlock, ValidationOptions, ValidationStructure,
 };
 
 use crate::AddressRange;

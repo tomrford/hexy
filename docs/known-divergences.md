@@ -6,7 +6,7 @@ Hexy has three public surfaces:
 
 - `hexy-core` is the authoritative Rust library. It owns the data model, parsers, writers, transforms, checksum machinery, signatures, and file helpers.
 - `hexy-compat` is the HexView-style slash-flag CLI. It is designed as a drop-in replacement for HexView's CLI functionality.
-- `hexy-py` is a Python binding layer over `hexy-core`. It currently exposes a smaller in-memory API than the Rust crate.
+- `hexy-py` is the Python binding layer over `hexy-core`.
 
 ## Crate Surface Differences
 
@@ -39,16 +39,12 @@ Hexy has three public surfaces:
 
 ### `hexy-py`
 
-`hexy-py` exposes the in-memory parts of `hexy-core` that are useful from Python:
-
-- `HexFile`, `Segment`, and `AddressRange`
-- binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file input, in-memory serializers, file writers for binary, Intel HEX, S-Record, and HEX ASCII, and in-memory C-array, flash kernel and GAC software interlock exports
-- segment inspection, sparse reads, contiguous byte export, direct byte writes, normalization, append/prepend segment operations, filter, cut, fill, gap fill, merge, offset, align, split, small-block removal, byte swap, dsPIC transforms, remap, and S08/S12/S12X mapping
-- `Pipeline`, which applies stages in hexy CLI order, including checksum calculation and writeback, signing and verification
-- signing and verification on `HexFile`
-- the `/vs` and `/vshsm` validation structure bytes on `HexFile`
-
-`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
+`hexy-py` exposes every `hexy-core` operation, parser, writer and `Pipeline` stage, with
+the same parameters, so a CLI run is reproduced by configuring the `Pipeline` stages of
+its flags. What the CLI does outside `hexy-core` stays in `hexy-compat`: reading
+arguments and INI files, the `/L` log commands, the `/SWAPLONG` repeat of blocks of
+16 MiB or more, the checksum and data processing output text files, and the `/XP` and
+`/XSB` file layouts, which compose `to_binary`, `checksum` and `blocks`.
 
 ## HexView Compatibility Limits
 

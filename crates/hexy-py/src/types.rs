@@ -3,10 +3,10 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use crate::util::{py_bytes, value_error};
+use crate::errors::py_err;
 
-#[pyclass(name = "AddressRange", frozen, skip_from_py_object)]
-#[derive(Clone, Copy)]
+#[pyclass(name = "AddressRange", module = "hexy", frozen, eq, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PyAddressRange {
     pub(crate) inner: AddressRange,
 }
@@ -19,39 +19,20 @@ impl PyAddressRange {
         let inner = match (end, length) {
             (Some(end), None) => AddressRange::from_start_end(start, end),
             (None, Some(length)) => AddressRange::from_start_length(start, length),
-            (None, None) => {
+            _ => {
                 return Err(PyTypeError::new_err(
                     "expected either end or keyword-only length",
                 ));
             }
-            (Some(_), Some(_)) => {
-                return Err(PyTypeError::new_err(
-                    "end and length are mutually exclusive",
-                ));
-            }
         }
-        .map_err(value_error)?;
+        .map_err(py_err)?;
         Ok(Self { inner })
-    }
-
-    #[staticmethod]
-    fn from_start_end(start: u32, end: u32) -> PyResult<Self> {
-        Ok(Self {
-            inner: AddressRange::from_start_end(start, end).map_err(value_error)?,
-        })
-    }
-
-    #[staticmethod]
-    fn from_start_length(start: u32, length: u64) -> PyResult<Self> {
-        Ok(Self {
-            inner: AddressRange::from_start_length(start, length).map_err(value_error)?,
-        })
     }
 
     #[staticmethod]
     fn parse(text: &str) -> PyResult<Self> {
         Ok(Self {
-            inner: text.parse::<AddressRange>().map_err(value_error)?,
+            inner: text.parse().map_err(py_err)?,
         })
     }
 
@@ -70,8 +51,8 @@ impl PyAddressRange {
         self.inner.length()
     }
 
-    fn contains(&self, addr: u32) -> bool {
-        self.inner.contains(addr)
+    fn __contains__(&self, address: u32) -> bool {
+        self.inner.contains(address)
     }
 
     fn __repr__(&self) -> String {
@@ -79,8 +60,8 @@ impl PyAddressRange {
     }
 }
 
-#[pyclass(name = "Segment", frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[pyclass(name = "Segment", module = "hexy", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PySegment {
     pub(crate) inner: Segment,
 }
@@ -88,9 +69,9 @@ pub(crate) struct PySegment {
 #[pymethods]
 impl PySegment {
     #[new]
-    fn new(start: u32, data: &[u8]) -> PyResult<Self> {
+    fn new(start: u32, data: Vec<u8>) -> PyResult<Self> {
         Ok(Self {
-            inner: Segment::new(start, data.to_vec()).map_err(value_error)?,
+            inner: Segment::new(start, data).map_err(py_err)?,
         })
     }
 
@@ -105,8 +86,8 @@ impl PySegment {
     }
 
     #[getter]
-    fn data(&self, py: Python<'_>) -> Py<PyBytes> {
-        py_bytes(py, self.inner.data())
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.data())
     }
 
     fn __len__(&self) -> usize {

@@ -1,109 +1,132 @@
-use hexy_core::{
-    AlignOptions, BinaryWriteOptions, CCodeWordSize, CCodeWordType, CCodeWriteOptions,
-    ChecksumAlgorithm, DataProcessing, FillOptions, FlashKernelHeader, HexAsciiWriteOptions,
-    HexFile, HsmValidationOptions, IntelHexWriteOptions, MergeOptions, RemapOptions,
-    SRecordWriteOptions, ValidationOptions, parse_binary, parse_hex_ascii, parse_intel_hex,
-    parse_intel_hex_16bit, parse_srec, write_binary, write_c_code, write_flash_kernel,
-    write_gac_swil, write_hex_ascii, write_intel_hex, write_srec,
-};
-use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 use std::path::PathBuf;
 
-use crate::types::PySegment;
-use crate::util::{
-    CipherArgs, CompressionArgs, cipher_operation, compression_operation, key_content,
-    mac_operation, parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_placement,
-    parse_range_arg, parse_ranges_arg, parse_signature_method, parse_srec_type, parse_swap_mode,
-    py_bytes, value_error,
+use chrono::{DateTime, FixedOffset};
+use hexy_core::{
+    AlignOptions, BinaryWriteOptions, CCodeWordSize, CCodeWordType, CCodeWriteOptions, FillOptions,
+    FlashKernelHeader, FordHeader, HexAsciiWriteOptions, HexFile, IntelHexWriteOptions,
+    MergeOptions, RemapOptions, SRecordWriteOptions, parse_binary, parse_hex_ascii,
+    parse_intel_hex, parse_intel_hex_16bit, parse_srec, write_binary, write_c_code,
+    write_flash_kernel, write_ford_intel_hex, write_gac_swil, write_hex_ascii, write_intel_hex,
+    write_srec,
 };
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
-#[pyclass(name = "HexFile", skip_from_py_object)]
+use crate::args::{
+    ChecksumArgs, fill_pattern, intel_hex_mode, key_file, merge_mode, optional_range, placement,
+    range, ranges, srec_type, swap_mode,
+};
+use crate::errors::py_err;
+use crate::processing::{PyDataProcessing, signature_method};
+use crate::types::PySegment;
+use crate::validation::{PyValidationStructure, ValidationArgs, hsm_options};
+
+#[pyclass(name = "HexFile", module = "hexy", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyHexFile {
     pub(crate) inner: HexFile,
 }
 
+fn segments(segments: Vec<hexy_core::Segment>) -> Vec<PySegment> {
+    segments
+        .into_iter()
+        .map(|inner| PySegment { inner })
+        .collect()
+}
+
+fn intel_hex_options(bytes_per_line: u8, mode: &str) -> PyResult<IntelHexWriteOptions> {
+    Ok(IntelHexWriteOptions {
+        bytes_per_line,
+        mode: intel_hex_mode(mode)?,
+    })
+}
+
+fn srec_options(bytes_per_line: u8, record_type: &str) -> PyResult<SRecordWriteOptions> {
+    Ok(SRecordWriteOptions {
+        bytes_per_line,
+        record_type: srec_type(record_type)?,
+    })
+}
+
 #[pymethods]
 impl PyHexFile {
     #[new]
-    fn new() -> Self {
-        Self {
-            inner: HexFile::new(),
-        }
-    }
-
-    #[staticmethod]
-    fn from_segments(segments: Vec<PyRef<'_, PySegment>>) -> Self {
-        Self {
-            inner: HexFile::with_segments(segments.iter().map(|s| s.inner.clone()).collect()),
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (data, base_address=None))]
-    fn from_binary(data: &[u8], base_address: Option<u32>) -> PyResult<Self> {
+    #[pyo3(signature = (segments=None))]
+    fn new(segments: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let segments = match segments {
+            Some(items) => items
+                .try_iter()?
+                .map(|item| Ok(item?.extract::<PyRef<'_, PySegment>>()?.inner.clone()))
+                .collect::<PyResult<Vec<_>>>()?,
+            None => Vec::new(),
+        };
         Ok(Self {
-            inner: parse_binary(data, base_address.unwrap_or(0)).map_err(value_error)?,
+            inner: HexFile::with_segments(segments),
+        })
+    }
+
+    // --- Parsers ---
+
+    #[staticmethod]
+    #[pyo3(signature = (data, base_address=0))]
+    fn from_binary(data: &[u8], base_address: u32) -> PyResult<Self> {
+        Ok(Self {
+            inner: parse_binary(data, base_address).map_err(py_err)?,
         })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (data, base_address=None))]
-    fn from_hex_ascii(data: &[u8], base_address: Option<u32>) -> PyResult<Self> {
+    #[pyo3(signature = (data, base_address=0))]
+    fn from_hex_ascii(data: &[u8], base_address: u32) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_hex_ascii(data, base_address.unwrap_or(0)).map_err(value_error)?,
+            inner: parse_hex_ascii(data, base_address).map_err(py_err)?,
         })
     }
 
     #[staticmethod]
     fn from_intel_hex(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_intel_hex(data).map_err(value_error)?,
+            inner: parse_intel_hex(data).map_err(py_err)?,
         })
     }
 
     #[staticmethod]
     fn from_intel_hex_16bit(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_intel_hex_16bit(data).map_err(value_error)?,
+            inner: parse_intel_hex_16bit(data).map_err(py_err)?,
         })
     }
 
     #[staticmethod]
     fn from_srec(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: parse_srec(data).map_err(value_error)?,
+            inner: parse_srec(data).map_err(py_err)?,
         })
     }
 
     #[staticmethod]
     fn from_file(path: PathBuf) -> PyResult<Self> {
         Ok(Self {
-            inner: HexFile::from_file(path).map_err(value_error)?,
+            inner: HexFile::from_file(path).map_err(py_err)?,
         })
     }
 
     #[staticmethod]
     fn from_file_bytes(data: &[u8]) -> PyResult<Self> {
         Ok(Self {
-            inner: HexFile::from_file_bytes(data).map_err(value_error)?,
+            inner: HexFile::from_file_bytes(data).map_err(py_err)?,
         })
     }
 
-    #[pyo3(signature = (*, normalized=false))]
-    fn segments(&self, normalized: bool) -> Vec<PySegment> {
-        let hexfile = if normalized {
-            self.inner.normalized()
-        } else {
-            self.inner.clone()
-        };
-        hexfile
-            .segments()
-            .iter()
-            .cloned()
-            .map(|inner| PySegment { inner })
-            .collect()
+    // --- Inspection and access ---
+
+    fn segments(&self) -> Vec<PySegment> {
+        segments(self.inner.segments().to_vec())
+    }
+
+    fn blocks(&self) -> Vec<PySegment> {
+        segments(self.inner.blocks())
     }
 
     fn normalized(&self) -> Self {
@@ -148,113 +171,98 @@ impl PyHexFile {
         self.inner.prepend_segment(segment.inner.clone());
     }
 
-    fn write(&mut self, addr: u32, data: &[u8]) -> PyResult<()> {
-        self.inner.write_bytes(addr, data).map_err(value_error)
+    fn write(&mut self, address: u32, data: &[u8]) -> PyResult<()> {
+        self.inner.write_bytes(address, data).map_err(py_err)
     }
 
-    fn read_byte(&self, addr: u32) -> Option<u8> {
-        self.inner.read_byte(addr)
+    fn read_byte(&self, address: u32) -> Option<u8> {
+        self.inner.read_byte(address)
     }
 
-    fn read(&self, py: Python<'_>, addr: u32, length: usize) -> Option<Py<PyBytes>> {
+    fn read<'py>(
+        &self,
+        py: Python<'py>,
+        address: u32,
+        length: usize,
+    ) -> Option<Bound<'py, PyBytes>> {
         self.inner
-            .read_bytes_contiguous(addr, length)
-            .map(|data| py_bytes(py, &data))
+            .read_bytes_contiguous(address, length)
+            .map(|data| PyBytes::new(py, &data))
     }
 
-    fn read_sparse(&self, addr: u32, length: usize) -> Vec<Option<u8>> {
-        self.inner.read_bytes(addr, length)
+    fn read_sparse(&self, address: u32, length: usize) -> Vec<Option<u8>> {
+        self.inner.read_bytes(address, length)
     }
 
-    #[pyo3(signature = (*, fill=0xFF))]
-    fn to_bytes(&self, py: Python<'_>, fill: u8) -> PyResult<Option<Py<PyBytes>>> {
-        let contiguous = self
-            .inner
-            .as_contiguous(fill, u64::MAX)
-            .map_err(value_error)?;
-        Ok(contiguous.map(|segment| py_bytes(py, segment.data())))
-    }
+    // --- Exports ---
 
     #[pyo3(signature = (*, fill_gaps=None))]
-    fn to_binary(&self, py: Python<'_>, fill_gaps: Option<u8>) -> PyResult<Py<PyBytes>> {
-        let data =
-            write_binary(&self.inner, &BinaryWriteOptions { fill_gaps }).map_err(value_error)?;
-        Ok(py_bytes(py, &data))
+    fn to_binary<'py>(
+        &self,
+        py: Python<'py>,
+        fill_gaps: Option<u8>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let data = write_binary(&self.inner, &BinaryWriteOptions { fill_gaps }).map_err(py_err)?;
+        Ok(PyBytes::new(py, &data))
     }
 
-    #[pyo3(signature = (*, bytes_per_line=32, mode=None))]
-    fn to_intel_hex(
+    #[pyo3(signature = (*, bytes_per_line=hexy_core::DEFAULT_INTEL_HEX_BYTES_PER_LINE, mode="auto"))]
+    fn to_intel_hex<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         bytes_per_line: u8,
-        mode: Option<&str>,
-    ) -> PyResult<Py<PyBytes>> {
-        let data = write_intel_hex(
-            &self.inner,
-            &IntelHexWriteOptions {
-                bytes_per_line,
-                mode: parse_intel_mode(mode)?,
-            },
-        )
-        .map_err(value_error)?;
-        Ok(py_bytes(py, &data))
+        mode: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let options = intel_hex_options(bytes_per_line, mode)?;
+        let data = write_intel_hex(&self.inner, &options).map_err(py_err)?;
+        Ok(PyBytes::new(py, &data))
     }
 
-    #[pyo3(signature = (*, bytes_per_line=16, record_type=None))]
-    fn to_srec(
+    #[pyo3(signature = (*, bytes_per_line=hexy_core::DEFAULT_SREC_BYTES_PER_LINE, record_type="auto"))]
+    fn to_srec<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         bytes_per_line: u8,
-        record_type: Option<&str>,
-    ) -> PyResult<Py<PyBytes>> {
-        let data = write_srec(
-            &self.inner,
-            &SRecordWriteOptions {
-                bytes_per_line,
-                record_type: parse_srec_type(record_type)?,
-            },
-        )
-        .map_err(value_error)?;
-        Ok(py_bytes(py, &data))
+        record_type: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let options = srec_options(bytes_per_line, record_type)?;
+        let data = write_srec(&self.inner, &options).map_err(py_err)?;
+        Ok(PyBytes::new(py, &data))
     }
 
-    #[pyo3(signature = (*, line_length=16, separator=None))]
-    fn to_hex_ascii(
+    #[pyo3(signature = (*, line_length=16, separator=String::new()))]
+    fn to_hex_ascii<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         line_length: usize,
-        separator: Option<String>,
-    ) -> Py<PyBytes> {
-        let data = write_hex_ascii(
-            &self.inner,
-            &HexAsciiWriteOptions {
-                line_length,
-                separator: separator.unwrap_or_default(),
-            },
-        );
-        py_bytes(py, &data)
+        separator: String,
+    ) -> Bound<'py, PyBytes> {
+        let options = HexAsciiWriteOptions {
+            line_length,
+            separator,
+        };
+        PyBytes::new(py, &write_hex_ascii(&self.inner, &options))
     }
 
-    #[pyo3(signature = (file_name, *, prefix=String::new(), word_size=1, motorola=false, xor=None, created=String::new(), generation=0))]
-    #[allow(clippy::too_many_arguments)]
-    fn to_c_code(
+    #[pyo3(signature = (file_name, *, prefix=String::new(), word_size=1, motorola=false, xor=None, created=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn to_c_code<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         file_name: String,
         prefix: String,
         word_size: u8,
         motorola: bool,
         xor: Option<u32>,
-        created: String,
-        generation: u32,
-    ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+        created: Option<DateTime<FixedOffset>>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
         let word_size = match word_size {
             1 => CCodeWordSize::Byte,
             2 => CCodeWordSize::Word,
             4 => CCodeWordSize::Long,
             other => {
-                return Err(value_error(format!(
-                    "word_size must be 1, 2 or 4, not {other}"
+                return Err(PyValueError::new_err(format!(
+                    "the word size must be 1, 2 or 4, not {other}"
                 )));
             }
         };
@@ -270,29 +278,28 @@ impl PyHexFile {
                 },
                 decrypt_value: xor,
                 file_name,
-                created,
-                generation,
+                created: created.unwrap_or_else(|| chrono::Local::now().fixed_offset()),
             },
         );
-        Ok((py_bytes(py, &output.c), py_bytes(py, &output.h)))
+        Ok((PyBytes::new(py, &output.c), PyBytes::new(py, &output.h)))
     }
 
     #[pyo3(signature = (name, *, comment=None, file_address=None, size=None, ram_address=None, ram_start=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn to_flash_kernel(
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn to_flash_kernel<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         name: &str,
         comment: Option<String>,
         file_address: Option<String>,
         size: Option<String>,
         ram_address: Option<String>,
         ram_start: Option<String>,
-    ) -> PyResult<Py<PyBytes>> {
+    ) -> PyResult<Bound<'py, PyBytes>> {
         let blocks = self.inner.blocks();
         let block = blocks
             .first()
-            .ok_or_else(|| value_error("a flash kernel needs data"))?;
+            .ok_or_else(|| PyValueError::new_err("a flash kernel needs data"))?;
         let defaults = FlashKernelHeader::new(name, block);
         let header = FlashKernelHeader {
             comment: comment.unwrap_or(defaults.comment),
@@ -302,143 +309,154 @@ impl PyHexFile {
             ram_start: ram_start.unwrap_or(defaults.ram_start),
             name: defaults.name,
         };
-        let data = write_flash_kernel(&self.inner, &header).map_err(value_error)?;
-        Ok(py_bytes(py, &data))
+        let data = write_flash_kernel(&self.inner, &header).map_err(py_err)?;
+        Ok(PyBytes::new(py, &data))
     }
 
-    #[pyo3(signature = (*, tag_begin, tag_end, block_checksum=None, file_checksum=None, validate_sum=false, big_endian=false, force_32bit=false, alfi=false, one_byte_count=false, spare=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn validation_structure(
+    #[pyo3(signature = (
+        file_name,
+        release_date,
+        *,
+        application=None,
+        mask_number=None,
+        module_type=None,
+        part_number=None,
+        wers_notice=None,
+        comments=None,
+        released_by=None,
+        module_name=None,
+        module_id=None,
+        download_format=String::from("0x01"),
+        flash_indicator=String::from("1"),
+        erase_sectors=None,
+        erase_alignment=0,
+    ))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn to_ford_intel_hex<'py>(
         &self,
-        py: Python<'_>,
-        tag_begin: Vec<u8>,
-        tag_end: Vec<u8>,
-        block_checksum: Option<u8>,
-        file_checksum: Option<u8>,
-        validate_sum: bool,
-        big_endian: bool,
-        force_32bit: bool,
-        alfi: bool,
-        one_byte_count: bool,
-        spare: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Py<PyBytes>> {
-        let algorithm = |method: Option<u8>| {
-            method
-                .map(ChecksumAlgorithm::try_from)
-                .transpose()
-                .map_err(value_error)
+        py: Python<'py>,
+        file_name: String,
+        release_date: String,
+        application: Option<String>,
+        mask_number: Option<String>,
+        module_type: Option<String>,
+        part_number: Option<String>,
+        wers_notice: Option<String>,
+        comments: Option<String>,
+        released_by: Option<String>,
+        module_name: Option<String>,
+        module_id: Option<String>,
+        download_format: String,
+        flash_indicator: String,
+        erase_sectors: Option<String>,
+        erase_alignment: u32,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let header = FordHeader {
+            application,
+            mask_number,
+            file_name,
+            release_date,
+            module_type,
+            part_number,
+            wers_notice,
+            comments,
+            released_by,
+            module_name,
+            module_id,
+            download_format,
+            flash_indicator,
+            erase_sectors,
+            erase_alignment,
         };
-        let structure = self
-            .inner
-            .validation_structure(&ValidationOptions {
-                tag_begin,
-                tag_end,
-                block_checksum: algorithm(block_checksum)?,
-                file_checksum: algorithm(file_checksum)?,
-                validate_sum,
-                big_endian,
-                force_32bit,
-                alfi,
-                one_byte_count,
-                spare: spare.map(parse_ranges_arg).transpose()?.unwrap_or_default(),
-            })
-            .map_err(value_error)?;
-        Ok(py_bytes(py, &structure.bytes))
+        let data = write_ford_intel_hex(&self.inner, &header).map_err(py_err)?;
+        Ok(PyBytes::new(py, &data))
     }
 
-    #[pyo3(signature = (*, group_id=0, mode=0, hash=20))]
-    fn hsm_validation_structure(
-        &self,
-        py: Python<'_>,
-        group_id: u32,
-        mode: u16,
-        hash: u8,
-    ) -> PyResult<Py<PyBytes>> {
-        let structure = self
-            .inner
-            .hsm_validation_structure(&HsmValidationOptions {
-                group_id,
-                mode,
-                hash: ChecksumAlgorithm::try_from(hash).map_err(value_error)?,
-            })
-            .map_err(value_error)?;
-        Ok(py_bytes(py, &structure))
-    }
-
-    fn to_gac_swil(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
-        let data = write_gac_swil(&self.inner).map_err(value_error)?;
-        Ok(py_bytes(py, &data))
+    fn to_gac_swil<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let data = write_gac_swil(&self.inner).map_err(py_err)?;
+        Ok(PyBytes::new(py, &data))
     }
 
     #[pyo3(signature = (path, *, fill_gaps=None))]
     fn write_binary(&self, path: PathBuf, fill_gaps: Option<u8>) -> PyResult<()> {
         self.inner
             .write_binary_file(&path, &BinaryWriteOptions { fill_gaps })
-            .map_err(value_error)
+            .map_err(py_err)
     }
 
-    #[pyo3(signature = (path, *, bytes_per_line=32, mode=None))]
-    fn write_intel_hex(
-        &self,
-        path: PathBuf,
-        bytes_per_line: u8,
-        mode: Option<&str>,
-    ) -> PyResult<()> {
+    #[pyo3(signature = (path, *, bytes_per_line=hexy_core::DEFAULT_INTEL_HEX_BYTES_PER_LINE, mode="auto"))]
+    fn write_intel_hex(&self, path: PathBuf, bytes_per_line: u8, mode: &str) -> PyResult<()> {
+        let options = intel_hex_options(bytes_per_line, mode)?;
         self.inner
-            .write_intel_hex_file(
-                &path,
-                &IntelHexWriteOptions {
-                    bytes_per_line,
-                    mode: parse_intel_mode(mode)?,
-                },
-            )
-            .map_err(value_error)
+            .write_intel_hex_file(&path, &options)
+            .map_err(py_err)
     }
 
-    #[pyo3(signature = (path, *, bytes_per_line=16, record_type=None))]
-    fn write_srec(
-        &self,
-        path: PathBuf,
-        bytes_per_line: u8,
-        record_type: Option<&str>,
-    ) -> PyResult<()> {
-        self.inner
-            .write_srec_file(
-                &path,
-                &SRecordWriteOptions {
-                    bytes_per_line,
-                    record_type: parse_srec_type(record_type)?,
-                },
-            )
-            .map_err(value_error)
+    #[pyo3(signature = (path, *, bytes_per_line=hexy_core::DEFAULT_SREC_BYTES_PER_LINE, record_type="auto"))]
+    fn write_srec(&self, path: PathBuf, bytes_per_line: u8, record_type: &str) -> PyResult<()> {
+        let options = srec_options(bytes_per_line, record_type)?;
+        self.inner.write_srec_file(&path, &options).map_err(py_err)
     }
 
-    #[pyo3(signature = (path, *, line_length=16, separator=None))]
+    #[pyo3(signature = (path, *, line_length=16, separator=String::new()))]
     fn write_hex_ascii(
         &self,
         path: PathBuf,
         line_length: usize,
-        separator: Option<String>,
+        separator: String,
     ) -> PyResult<()> {
+        let options = HexAsciiWriteOptions {
+            line_length,
+            separator,
+        };
         self.inner
-            .write_hex_ascii_file(
-                &path,
-                &HexAsciiWriteOptions {
-                    line_length,
-                    separator: separator.unwrap_or_default(),
-                },
-            )
-            .map_err(value_error)
+            .write_hex_ascii_file(&path, &options)
+            .map_err(py_err)
     }
 
-    fn filter(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.filter_ranges(&parse_ranges_arg(ranges)?);
-        Ok(())
+    // --- Operations, in Pipeline stage order ---
+
+    fn map_star12(&mut self) -> PyResult<()> {
+        self.inner.map_star12().map_err(py_err)
     }
 
-    fn cut(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.cut_ranges(&parse_ranges_arg(ranges)?);
-        Ok(())
+    fn map_star12x(&mut self) -> PyResult<()> {
+        self.inner.map_star12x().map_err(py_err)
+    }
+
+    fn map_star08(&mut self) -> PyResult<()> {
+        self.inner.map_star08().map_err(py_err)
+    }
+
+    fn remap(&mut self, start: u32, end: u32, linear: u32, size: u32, inc: u32) -> PyResult<()> {
+        let options = RemapOptions {
+            start,
+            end,
+            linear,
+            size,
+            inc,
+        };
+        self.inner.remap(&options).map_err(py_err)
+    }
+
+    #[pyo3(signature = (range, target=None))]
+    fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
+        self.inner
+            .dspic_expand(self::range(range)?, target)
+            .map_err(py_err)
+    }
+
+    #[pyo3(signature = (range, target=None))]
+    fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
+        self.inner
+            .dspic_shrink(self::range(range)?, target)
+            .map_err(py_err)
+    }
+
+    fn dspic_clear_ghost(&mut self, range: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner
+            .dspic_clear_ghost(self::range(range)?)
+            .map_err(py_err)
     }
 
     #[pyo3(signature = (ranges, *, pattern=None, overwrite=false))]
@@ -448,42 +466,55 @@ impl PyHexFile {
         pattern: Option<&[u8]>,
         overwrite: bool,
     ) -> PyResult<()> {
+        let options = FillOptions {
+            pattern: fill_pattern(pattern)?,
+            overwrite,
+        };
         self.inner
-            .fill_ranges(
-                &parse_ranges_arg(ranges)?,
-                &FillOptions {
-                    pattern: parse_fill_pattern(pattern)?,
-                    overwrite,
-                },
-            )
-            .map_err(value_error)
+            .fill_ranges(&self::ranges(ranges)?, &options)
+            .map_err(py_err)
     }
 
-    #[pyo3(signature = (*, fill=0xFF))]
-    fn fill_gaps(&mut self, fill: u8) -> PyResult<()> {
-        self.inner.fill_gaps(fill, u64::MAX).map_err(value_error)
+    #[pyo3(signature = (ranges, *, seed))]
+    fn fill_random(&mut self, ranges: &Bound<'_, PyAny>, seed: u64) -> PyResult<()> {
+        self.inner
+            .fill_random(&self::ranges(ranges)?, seed)
+            .map_err(py_err)
     }
 
-    #[pyo3(signature = (other, *, mode=None, offset=0, range=None))]
+    fn cut(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.cut_ranges(&self::ranges(ranges)?);
+        Ok(())
+    }
+
+    #[pyo3(signature = (other, *, mode="overwrite", offset=0, range=None))]
     fn merge(
         &mut self,
         other: PyRef<'_, PyHexFile>,
-        mode: Option<&str>,
+        mode: &str,
         offset: i64,
         range: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let options = MergeOptions {
-            mode: parse_merge_mode(mode)?,
+            mode: merge_mode(mode)?,
             offset,
-            range: range.map(parse_range_arg).transpose()?,
+            range: optional_range(range)?,
         };
-        self.inner
-            .merge(&other.inner, &options)
-            .map_err(value_error)
+        self.inner.merge(&other.inner, &options).map_err(py_err)
     }
 
-    fn offset(&mut self, offset: i64) -> PyResult<()> {
-        self.inner.offset_addresses(offset).map_err(value_error)
+    fn filter(&mut self, ranges: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.filter_ranges(&self::ranges(ranges)?);
+        Ok(())
+    }
+
+    fn offset(&mut self, delta: i64) -> PyResult<()> {
+        self.inner.offset_addresses(delta).map_err(py_err)
+    }
+
+    #[pyo3(signature = (*, fill=0xFF))]
+    fn fill_gaps(&mut self, fill: u8) -> PyResult<()> {
+        self.inner.fill_gaps(fill, u64::MAX).map_err(py_err)
     }
 
     #[pyo3(signature = (alignment, *, length=0, fill=0xFF))]
@@ -499,235 +530,145 @@ impl PyHexFile {
         self.inner.split(max_size);
     }
 
-    fn remove_small_blocks(&mut self, min_len: usize) {
-        self.inner.remove_small_blocks(min_len);
-    }
-
     fn swap(&mut self, mode: &str) -> PyResult<()> {
-        self.inner.swap_bytes(parse_swap_mode(mode)?);
+        self.inner.swap_bytes(swap_mode(mode)?);
         Ok(())
     }
 
-    #[pyo3(signature = (range, target=None))]
-    fn dspic_expand(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        self.inner
-            .dspic_expand(parse_range_arg(range)?, target)
-            .map_err(value_error)
+    fn remove_small_blocks(&mut self, min_length: usize) {
+        self.inner.remove_small_blocks(min_length);
     }
 
-    #[pyo3(signature = (range, target=None))]
-    fn dspic_shrink(&mut self, range: &Bound<'_, PyAny>, target: Option<u32>) -> PyResult<()> {
-        self.inner
-            .dspic_shrink(parse_range_arg(range)?, target)
-            .map_err(value_error)
-    }
-
-    fn dspic_clear_ghost(&mut self, range: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner
-            .dspic_clear_ghost(parse_range_arg(range)?)
-            .map_err(value_error)
-    }
-
-    fn remap(&mut self, start: u32, end: u32, linear: u32, size: u32, inc: u32) -> PyResult<()> {
-        self.inner
-            .remap(&RemapOptions {
-                start,
-                end,
-                linear,
-                size,
-                inc,
-            })
-            .map_err(value_error)
-    }
-
-    fn map_star12(&mut self) -> PyResult<()> {
-        self.inner.map_star12().map_err(value_error)
-    }
-
-    fn map_star12x(&mut self) -> PyResult<()> {
-        self.inner.map_star12x().map_err(value_error)
-    }
-
-    fn map_star08(&mut self) -> PyResult<()> {
-        self.inner.map_star08().map_err(value_error)
-    }
-
-    #[pyo3(signature = (method, key, *, metadata=false, placement=None, salt=None))]
-    fn sign(
+    #[pyo3(signature = (
+        algorithm,
+        *,
+        placement=None,
+        range=None,
+        reverse=false,
+        exclude=None,
+        forced_range=None,
+        forced_pattern=None,
+        constant=None,
+    ))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn checksum<'py>(
         &mut self,
-        py: Python<'_>,
-        method: &str,
-        key: &Bound<'_, PyAny>,
-        metadata: bool,
-        placement: Option<&Bound<'_, PyAny>>,
-        salt: Option<&[u8]>,
-    ) -> PyResult<Py<PyBytes>> {
-        let method = parse_signature_method(method, metadata)?;
-        let key = method
-            .scheme
-            .signing_key(&key_content(key)?)
-            .map_err(value_error)?;
+        py: Python<'py>,
+        algorithm: u8,
+        placement: Option<&Bound<'py, PyAny>>,
+        range: Option<&Bound<'py, PyAny>>,
+        reverse: bool,
+        exclude: Option<&Bound<'py, PyAny>>,
+        forced_range: Option<&Bound<'py, PyAny>>,
+        forced_pattern: Option<&[u8]>,
+        constant: Option<&[u8]>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let options = ChecksumArgs {
+            algorithm,
+            range,
+            reverse,
+            exclude,
+            forced_range,
+            forced_pattern,
+            constant,
+        }
+        .options()?;
+        let bytes = self
+            .inner
+            .checksum(&options, self::placement(placement)?)
+            .map_err(py_err)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+
+    #[pyo3(signature = (operation, *, placement=None))]
+    fn process_data<'py>(
+        &mut self,
+        py: Python<'py>,
+        operation: PyRef<'_, PyDataProcessing>,
+        placement: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Bound<'py, PyBytes>>> {
         let output = self
             .inner
-            .process_data(
-                &DataProcessing::Sign {
-                    method,
-                    key,
-                    salt: salt.map(<[u8]>::to_vec),
-                },
-                placement.map(parse_placement).transpose()?,
-            )
-            .map_err(value_error)?;
-        Ok(py_bytes(py, &output.unwrap_or_default()))
-    }
-
-    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
-    fn mac(
-        &mut self,
-        py: Python<'_>,
-        method: &str,
-        key: &[u8],
-        metadata: bool,
-        placement: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Py<PyBytes>> {
-        let output = self
-            .inner
-            .process_data(
-                &mac_operation(method, key, metadata)?,
-                placement.map(parse_placement).transpose()?,
-            )
-            .map_err(value_error)?;
-        Ok(py_bytes(py, &output.unwrap_or_default()))
-    }
-
-    #[pyo3(signature = (key=None))]
-    fn xor(&mut self, key: Option<&[u8]>) -> PyResult<()> {
-        let key = key.unwrap_or_default().to_vec();
-        self.inner
-            .process_data(&DataProcessing::Xor { key }, None)
-            .map_err(value_error)?;
-        Ok(())
-    }
-
-    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, placement=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn encrypt(
-        &mut self,
-        py: Python<'_>,
-        mode: &str,
-        key: &Bound<'_, PyAny>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-        aad: Option<&[u8]>,
-        placement: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Option<Py<PyBytes>>> {
-        let args = CipherArgs {
-            mode,
-            key,
-            iv,
-            padding,
-            aad: aad.unwrap_or_default(),
-        };
-        let output = self
-            .inner
-            .process_data(
-                &cipher_operation(args, false, None)?,
-                placement.map(parse_placement).transpose()?,
-            )
-            .map_err(value_error)?;
-        Ok(output.map(|tag| py_bytes(py, &tag)))
-    }
-
-    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, tag=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn decrypt(
-        &mut self,
-        mode: &str,
-        key: &Bound<'_, PyAny>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-        aad: Option<&[u8]>,
-        tag: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let args = CipherArgs {
-            mode,
-            key,
-            iv,
-            padding,
-            aad: aad.unwrap_or_default(),
-        };
-        self.inner
-            .process_data(&cipher_operation(args, true, tag)?, None)
-            .map_err(value_error)?;
-        Ok(())
-    }
-
-    #[pyo3(signature = (method="lzss", *, window_bits=None, length_bits=None, key=None, iv=None, padding=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn compress(
-        &mut self,
-        method: &str,
-        window_bits: Option<u8>,
-        length_bits: Option<u8>,
-        key: Option<&[u8]>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-    ) -> PyResult<()> {
-        let args = CompressionArgs {
-            method,
-            window_bits,
-            length_bits,
-            key,
-            iv,
-            padding,
-        };
-        self.inner
-            .process_data(&compression_operation(args, false)?, None)
-            .map_err(value_error)?;
-        Ok(())
-    }
-
-    #[pyo3(signature = (method="lzss", *, window_bits=None, length_bits=None, key=None, iv=None, padding=None))]
-    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
-    fn decompress(
-        &mut self,
-        method: &str,
-        window_bits: Option<u8>,
-        length_bits: Option<u8>,
-        key: Option<&[u8]>,
-        iv: Option<&[u8]>,
-        padding: Option<&str>,
-    ) -> PyResult<()> {
-        let args = CompressionArgs {
-            method,
-            window_bits,
-            length_bits,
-            key,
-            iv,
-            padding,
-        };
-        self.inner
-            .process_data(&compression_operation(args, true)?, None)
-            .map_err(value_error)?;
-        Ok(())
+            .process_data(&operation.inner, self::placement(placement)?)
+            .map_err(py_err)?;
+        Ok(output.map(|bytes| PyBytes::new(py, &bytes)))
     }
 
     #[pyo3(signature = (method, key, signature, *, metadata=false))]
-    fn verify_signature(
+    fn verify(
         &self,
         method: &str,
         key: &Bound<'_, PyAny>,
         signature: &[u8],
         metadata: bool,
     ) -> PyResult<()> {
-        let method = parse_signature_method(method, metadata)?;
+        let method = signature_method(method, metadata)?;
         let key = method
             .scheme
-            .verifying_key(&key_content(key)?)
-            .map_err(value_error)?;
+            .verifying_key(&key_file(key)?)
+            .map_err(py_err)?;
         self.inner
             .verify_signature(method, &key, signature)
-            .map_err(value_error)
+            .map_err(py_err)
+    }
+
+    #[pyo3(signature = (
+        *,
+        tag_begin,
+        tag_end,
+        block_checksum=None,
+        file_checksum=None,
+        validate_sum=false,
+        big_endian=false,
+        force_32bit=false,
+        alfi=false,
+        one_byte_count=false,
+        spare=None,
+    ))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn validation_structure(
+        &self,
+        tag_begin: Vec<u8>,
+        tag_end: Vec<u8>,
+        block_checksum: Option<u8>,
+        file_checksum: Option<u8>,
+        validate_sum: bool,
+        big_endian: bool,
+        force_32bit: bool,
+        alfi: bool,
+        one_byte_count: bool,
+        spare: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyValidationStructure> {
+        let options = ValidationArgs {
+            tag_begin,
+            tag_end,
+            block_checksum,
+            file_checksum,
+            validate_sum,
+            big_endian,
+            force_32bit,
+            alfi,
+            one_byte_count,
+            spare,
+        }
+        .options()?;
+        let inner = self.inner.validation_structure(&options).map_err(py_err)?;
+        Ok(PyValidationStructure { options, inner })
+    }
+
+    #[pyo3(signature = (*, group_id=0, mode=0, hash=20))]
+    fn hsm_validation_structure<'py>(
+        &self,
+        py: Python<'py>,
+        group_id: u32,
+        mode: u16,
+        hash: u8,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let structure = self
+            .inner
+            .hsm_validation_structure(&hsm_options(group_id, mode, hash)?)
+            .map_err(py_err)?;
+        Ok(PyBytes::new(py, &structure))
     }
 
     fn __repr__(&self) -> String {

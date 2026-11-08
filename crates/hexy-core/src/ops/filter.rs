@@ -1,6 +1,7 @@
 use super::{OpsError, materialized_len, pattern_bytes};
+use crate::range::merge_ranges;
 use crate::range::subtract_ranges;
-use crate::{AddressRange, HexFile, Segment, merge_ranges};
+use crate::{AddressRange, HexFile, Segment};
 
 /// Largest gap-fill span the CLI materializes.
 pub const DEFAULT_DENSE_SPAN_LIMIT: u64 = 256 * 1024 * 1024;
