@@ -220,6 +220,22 @@ def test_pipeline_places_checksums_in_order():
     assert result.hexfile.read(0x2000, 2) == b"\x14\x00"
 
 
+def test_large_dword_swap_matches_direct_and_pipeline_results():
+    data = bytes(range(16)) * (0x100_0000 // 16)
+    direct = hexy.HexFile.from_binary(data)
+    direct.swap("dword")
+    pipeline = hexy.Pipeline()
+    pipeline.swap("dword")
+    pipeline.checksum(0)
+
+    result = pipeline.apply(hexy.HexFile.from_binary(data))
+
+    expected = b"\x03\x02\x01\x00" + b"\x07\x06\x05\x04" * 3
+    assert direct.read(0, 16) == expected
+    assert result.hexfile.read(0, 16) == expected
+    assert result.checksums == [b"\xff\xf0"]
+
+
 def test_pipeline_removes_split_pieces_and_places_constant():
     # HexView 1.15.2: /SB:0x100 /RB=0x101 removes every piece; /CS16 writes a constant.
     pipeline = hexy.Pipeline()

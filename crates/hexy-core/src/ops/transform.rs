@@ -101,7 +101,9 @@ impl HexFile {
     ///   and ends on word boundaries;
     /// - a word is swapped when its first byte holds data; its missing bytes take the
     ///   value of the latest complete word (zero before one), and only bytes that hold
-    ///   data are written.
+    ///   data are written;
+    /// - for `DWord`, blocks of at least 16 MiB keep their first swapped word, then
+    ///   repeat their second swapped word through the remaining complete words.
     pub fn swap_bytes(&mut self, mode: SwapMode) {
         let width: usize = match mode {
             SwapMode::Word => 2,
@@ -115,6 +117,26 @@ impl HexFile {
             return;
         }
 
+        const LARGE_BLOCK: usize = 0x100_0000;
+        if width == 4 && self.total_bytes() >= LARGE_BLOCK && self.segments().len() > 1 {
+            self.set_segments(self.blocks());
+        }
+        self.swap_words(width);
+        if width == 4 {
+            for block in self
+                .segments_mut()
+                .iter_mut()
+                .filter(|b| b.len() >= LARGE_BLOCK)
+            {
+                let second = [block.data[4], block.data[5], block.data[6], block.data[7]];
+                for word in block.data[8..].chunks_exact_mut(4) {
+                    word.copy_from_slice(&second);
+                }
+            }
+        }
+    }
+
+    fn swap_words(&mut self, width: usize) {
         if let [segment] = self.segments_mut() {
             for chunk in segment.data.chunks_exact_mut(width) {
                 chunk.reverse();

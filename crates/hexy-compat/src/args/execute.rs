@@ -1,6 +1,6 @@
 use crate::{
     AddressMap, AlignOptions, ChecksumStage, Fill, FillData, HexFile, Merge, MergeMode,
-    MergeOptions, Pipeline, PipelineOutput, Segment, Stage,
+    MergeOptions, Pipeline, PipelineOutput, Stage,
 };
 
 use super::error::CliError;
@@ -237,7 +237,6 @@ impl Args {
                     execute_log(hexfile, &content)?;
                 }
             }
-            Stage::Swap if self.swap_long => repeat_second_swapped_word(hexfile)?,
             Stage::Checksum(index) => {
                 let (params, flag) = self.checksum_stage(index);
                 if let (ChecksumTarget::File(path), Some(bytes)) =
@@ -359,38 +358,6 @@ impl Args {
         }
         Err(ParseArgError::MissingInputFile.into())
     }
-}
-
-/// HexView quirk: after `/SWAPLONG`, every block of 16 MiB or more repeats its second
-/// swapped word after the first. The swap only runs on a span whose start and length
-/// are multiples of four.
-fn repeat_second_swapped_word(hexfile: &mut HexFile) -> Result<(), CliError> {
-    const LARGE_BLOCK: usize = 0x100_0000;
-    let (Some(start), Some(end)) = (hexfile.min_address(), hexfile.max_address()) else {
-        return Ok(());
-    };
-    let swapped = start % 4 == 0 && (u64::from(end - start) + 1) % 4 == 0;
-    if !swapped || hexfile.segments().iter().all(|s| s.len() < LARGE_BLOCK) {
-        return Ok(());
-    }
-    let blocks = std::mem::take(hexfile).into_segments();
-    *hexfile = HexFile::with_segments(
-        blocks
-            .into_iter()
-            .map(|block| {
-                if block.len() < LARGE_BLOCK {
-                    return Ok(block);
-                }
-                let (start, mut data) = block.into_parts();
-                let second = [data[4], data[5], data[6], data[7]];
-                for word in data[8..].chunks_exact_mut(4) {
-                    word.copy_from_slice(&second);
-                }
-                Segment::new(start, data).map_err(|e| CliError::Other(e.to_string()))
-            })
-            .collect::<Result<_, _>>()?,
-    );
-    Ok(())
 }
 
 /// `/FR` without `/FP` fills with fresh random bytes on every run.
