@@ -9,7 +9,7 @@ use pyo3::types::PyBytes;
 
 use crate::hexfile::PyHexFile;
 use crate::util::{
-    AesArgs, aes_operation, key_content, mac_operation, parse_fill_pattern, parse_merge_mode,
+    CipherArgs, cipher_operation, key_content, mac_operation, parse_fill_pattern, parse_merge_mode,
     parse_placement, parse_range_arg, parse_ranges_arg, parse_signature_method, parse_swap_mode,
     py_bytes, value_error,
 };
@@ -226,13 +226,14 @@ impl PyPipeline {
         Ok(())
     }
 
-    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
+    #[pyo3(signature = (method, key, *, metadata=false, placement=None, salt=None))]
     fn sign(
         &mut self,
         method: &str,
         key: &Bound<'_, PyAny>,
         metadata: bool,
         placement: Option<&Bound<'_, PyAny>>,
+        salt: Option<&[u8]>,
     ) -> PyResult<()> {
         let method = parse_signature_method(method, metadata)?;
         let key = method
@@ -240,7 +241,11 @@ impl PyPipeline {
             .signing_key(&key_content(key)?)
             .map_err(value_error)?;
         self.inner.data_processing = Some(DataProcessingStage {
-            operation: DataProcessing::Sign { method, key },
+            operation: DataProcessing::Sign {
+                method,
+                key,
+                salt: salt.map(<[u8]>::to_vec),
+            },
             placement: placement.map(parse_placement).transpose()?,
         });
         Ok(())
@@ -276,13 +281,13 @@ impl PyPipeline {
     fn encrypt(
         &mut self,
         mode: &str,
-        key: &[u8],
+        key: &Bound<'_, PyAny>,
         iv: Option<&[u8]>,
         padding: Option<&str>,
         aad: Option<&[u8]>,
         placement: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let args = AesArgs {
+        let args = CipherArgs {
             mode,
             key,
             iv,
@@ -290,7 +295,7 @@ impl PyPipeline {
             aad: aad.unwrap_or_default(),
         };
         self.inner.data_processing = Some(DataProcessingStage {
-            operation: aes_operation(args, false, None)?,
+            operation: cipher_operation(args, false, None)?,
             placement: placement.map(parse_placement).transpose()?,
         });
         Ok(())
@@ -301,13 +306,13 @@ impl PyPipeline {
     fn decrypt(
         &mut self,
         mode: &str,
-        key: &[u8],
+        key: &Bound<'_, PyAny>,
         iv: Option<&[u8]>,
         padding: Option<&str>,
         aad: Option<&[u8]>,
         tag: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let args = AesArgs {
+        let args = CipherArgs {
             mode,
             key,
             iv,
@@ -315,7 +320,7 @@ impl PyPipeline {
             aad: aad.unwrap_or_default(),
         };
         self.inner.data_processing = Some(DataProcessingStage {
-            operation: aes_operation(args, true, tag)?,
+            operation: cipher_operation(args, true, tag)?,
             placement: None,
         });
         Ok(())

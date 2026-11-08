@@ -142,6 +142,9 @@ fn parse_source(params: &str) -> ParamSource {
     }
 }
 
+/// HexView reads at most this many characters of `#SALT`.
+const MAX_SALT_TEXT: usize = 255;
+
 fn parse_options(text: &str) -> Result<ProcessingOptions, ParseArgError> {
     let mut options = ProcessingOptions::default();
     if text.is_empty() {
@@ -149,6 +152,7 @@ fn parse_options(text: &str) -> Result<ProcessingOptions, ParseArgError> {
     }
     for token in text.split('#') {
         if let Some(value) = token.strip_prefix("SALT=") {
+            let value = value.get(..MAX_SALT_TEXT).unwrap_or(value);
             options.salt = Some(parse_hex(token, value)?);
         } else if let Some(value) = token.strip_prefix("IV=") {
             options.iv = Some(parse_hex(token, value)?);
@@ -259,6 +263,15 @@ mod tests {
             .options;
         assert_eq!(options.lzss, Some((12, 4)));
         assert_eq!(options.tag, Some(DataInput::Hex(vec![0x00, 0x11])));
+
+        // HexView 1.15.2 reads 255 characters of `#SALT`, so the last digit pair of a
+        // longer salt is cut to one digit.
+        let salt = format!("k.pem#SALT={}", "cd".repeat(200));
+        let options = parse_data_processing(38, &salt).unwrap().options;
+        assert_eq!(
+            options.salt,
+            Some([[0xCD; 127].as_slice(), &[0x0C]].concat())
+        );
     }
 
     /// `/SV` key info drops `;param4` and `#` options; text after a second `!` is ignored.

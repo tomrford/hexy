@@ -9,12 +9,13 @@ A `DataProcessing` operation runs over the image's blocks (`HexFile::blocks`):
 
 | Operation | Effect | Output |
 |-----------|--------|--------|
-| `Sign { method, key }` | none | the signature |
+| `Sign { method, key, salt }` | none | the signature |
 | `Mac { method, key }` | none | the MAC |
 | `Xor { key }` | XORs the data | none |
 | `Encrypt` / `Decrypt { key, mode, padding }` | AES ECB, CBC or CTR, block by block | none |
 | `EncryptGcm(AesGcm)` | AES-GCM over all blocks as one stream | the tag |
 | `DecryptGcm { gcm, tag }` | AES-GCM decryption, then the tag check | none |
+| `RsaEncrypt` / `RsaDecrypt { key, padding }` | RSA, block by block | none |
 
 `process_data` returns the output and, with a `Placement`, also writes it into the
 image. `verify_signature` does not modify the image.
@@ -34,8 +35,13 @@ fn sign_and_verify(
         with_metadata: false,
     };
     let key = method.scheme.signing_key(private_key_file)?;
+    let sign = DataProcessing::Sign {
+        method,
+        key,
+        salt: None,
+    };
     let signature = hexfile
-        .process_data(&DataProcessing::Sign { method, key }, None)?
+        .process_data(&sign, None)?
         .unwrap_or_default();
 
     let key = method.scheme.verifying_key(public_key_file)?;
@@ -54,10 +60,20 @@ length as two big-endian `u32` values, as HexView 1.15.2 hashes them.
 
 | `SignatureScheme` | Algorithm |
 |-------------------|-----------|
-| `RsaPkcs1v15Sha256` | RSA PKCS #1 v1.5 over SHA-256 |
-| `RsaPssSha256` | RSA-PSS over SHA-256 with a random 32-byte salt |
+| `RsaPkcs1v15Md5`, `RsaPkcs1v15Sha1`, `RsaPkcs1v15Ripemd160`, `RsaPkcs1v15Sha256` | RSA PKCS #1 v1.5 over MD5, SHA-1, RIPEMD-160 or SHA-256 |
+| `RsaPssSha256` | RSA-PSS over SHA-256 |
+| `EcdsaP256Sha256` | ECDSA over P-256 and SHA-256 |
+| `Ed25519` | Ed25519 (no pre-hash) over a single block |
 | `Ed25519Ph` | Ed25519ph (SHA-512 pre-hash, empty context) |
-| `Ed25519Sha512` | Ed25519 over the SHA-512 digest of the payload |
+| `Ed25519PhSha512` | Ed25519ph over the SHA-512 digest of the payload |
+
+- RSA keys of any size work, including 3072 and 4096 bits.
+- RSA-PSS signs with `salt`, or with a random 32-byte salt, and verifies signatures
+  with any salt length, as HexView does. No other scheme takes a salt.
+- ECDSA signatures are r and s as 32-byte big-endian values. hexy signs with
+  deterministic nonces (RFC 6979), so its signatures differ from HexView's but verify
+  the same way.
+- `Ed25519` fails on an image of more than one block, `/SB` pieces included.
 
 `MacAlgorithm` is `HmacMd5`, `HmacSha1`, `HmacRipemd160`, `HmacSha256` or
 `CmacAes128`. HMAC uses at most the first 64 bytes of the key, as HexView does; CMAC
@@ -87,6 +103,13 @@ When a cipher fails, the blocks before the failing one stay replaced, as in HexV
   no output keeps its data, as in HexView. `GcmTag::Image` reads the tag from image
   bytes at the start or end of a block, which are not decrypted and stay in place. A
   tag mismatch fails after the data is decrypted.
+- `RsaEncrypt` and `RsaDecrypt`: each block is encrypted on its own, with random
+  padding. `RsaPadding::Pkcs1v15` encrypts a block of a whole number of key lengths
+  without padding, one key length at a time; any other block must fit one padded key
+  length. Decrypting a block of one key length removes PKCS #1 v1.5 padding, or
+  decrypts it without padding when the padding is not valid; longer blocks are
+  decrypted without padding. `OaepSha1` and `OaepSha256` (OAEP without a label)
+  encrypt blocks that fit one padded key length and decrypt blocks of one key length.
 
 ## Key material
 
@@ -112,19 +135,28 @@ RSA public keys:
 - hexy extensions: SPKI PEM, any of these in binary DER, and X.509 certificates in PEM
   or DER
 
-Ed25519 private keys:
+Ed25519 and P-256 keys share one ECC key reader, as in HexView, so either reads the
+other's key files. ECC private keys:
 
-- hex text: the raw 32-byte seed; shorter text is padded with zero bytes at the end and
-  longer text is cut after 32 bytes
-- PEM: `SEQUENCE { INTEGER, SEQUENCE { OID 1.3.101.114 }, OCTET STRING { OCTET STRING
-  seed } [, OCTET STRING { OCTET STRING public key }] }`
-- hexy extensions: the standard `id-Ed25519` OID (1.3.101.112), and binary DER
+- DER in PEM, binary or hex text:
+  - SEC1: `SEQUENCE { 1, OCTET STRING key [, [0] { OID prime256v1 }] [, [1] { BIT
+    STRING public key }] }`
+  - `SEQUENCE { 0, SEQUENCE { OID [, parameters] }, OCTET STRING { OCTET STRING key |
+    SEC1 key } [, OCTET STRING { OCTET STRING public key }] }`, with `ecPublicKey`
+    (1.2.840.10045.2.1) or `id-EdDSA25519-ph` (1.3.101.114); this includes PKCS #8
+- hex text that is not one of these: the raw key, an Ed25519 seed or a big-endian
+  P-256 scalar
+- shorter keys are padded with zero bytes at the end, and longer keys are cut after 32
+  bytes
+- hexy extension: the standard `id-Ed25519` OID (1.3.101.112)
 
-Ed25519 public keys:
+ECC public keys:
 
-- hex text: the raw 32-byte key, padded or cut like a seed
-- PEM: a private key in the form above that includes the public key
-- hexy extensions: SPKI in PEM or DER, binary DER, and X.509 certificates
+- a private key in the forms above that includes the public key; a P-256 public key is
+  `04`, X and Y
+- Ed25519: also the raw 32-byte key in hex text, padded or cut like a seed
+- hexy extensions: SPKI and X.509 certificates in PEM or DER, and the public key inside
+  a PKCS #8 P-256 key
 
 HexView rejects the hexy extensions; none of them is read differently by HexView.
 
@@ -147,19 +179,37 @@ The compat CLI owns the method numbers and the `/DP` parameter grammar.
 | `/DP2`, `/DP3` | `Encrypt`, `Decrypt` with `AesMode::Ecb` | |
 | `/DP4`, `/DP5` | `Mac` `HmacSha1` | `SignD_SHA1.txt`, `SignDAL_SHA1.txt` |
 | `/DP6`, `/DP7` | `Mac` `HmacRipemd160` | `SignD_Rmd160.txt`, `SignDAL_Rmd160.txt` |
+| `/DP8`, `/DP10` | `Sign` `RsaPkcs1v15Sha1` | `SignD_SHA1.RSA`, `SignDAL_SHA1.RSA` |
+| `/DP28`, `/DP9` | `Sign` `RsaPkcs1v15Ripemd160` | `SignD_RMD160.RSA`, `SignDAL_RMD160.RSA` |
 | `/DP11`, `/DP12` | `Encrypt`, `Decrypt` with `AesMode::Cbc` | |
 | `/DP13`, `/DP14` | `Mac` `HmacMd5` | `SignD_MD5.txt`, `SignDAL_MD5.txt` |
+| `/DP15`, `/DP16` | `Sign` `RsaPkcs1v15Md5` | `SignD_MD5.RSA`, `SignDAL_MD5.RSA` |
+| `/DP17`, `/DP18` | `RsaEncrypt`, `RsaDecrypt` with `RsaPadding::Pkcs1v15` | |
 | `/DP30`, `/DP31` | `Mac` `HmacSha256` | `SignD_SHA256.txt`, `SignDAL_SHA256.txt` |
 | `/DP32`, `/DP33` | `Sign` `RsaPkcs1v15Sha256` | `SignD_SHA256.RSA`, `SignDAL_SHA256.RSA` |
 | `/DP38`, `/DP39` | `Sign` `RsaPssSha256` | `SignD_PSS_SHA256.RSA`, `SignDAL_PSS_SHA256.RSA` |
+| `/DP40`, `/DP41` | `RsaEncrypt`, `RsaDecrypt` with `RsaPadding::OaepSha1` | |
+| `/DP42`, `/DP43` | `RsaEncrypt`, `RsaDecrypt` with `RsaPadding::OaepSha256` | |
 | `/DP44`, `/DP45` | `Mac` `CmacAes128` | `SignD_CmacAes.txt`, `SignDAL_CmacAes.txt` |
 | `/DP46`, `/DP47` | `Sign` `Ed25519Ph` | `SignD_ED25519.ECC`, `SignDAL_ED25519.ECC` |
-| `/DP48`, `/DP49` | `Sign` `Ed25519Sha512` | `SignD_SHA512_ED25519PH.ECC`, `SignDAL_SHA512_ED25519PH.ECC` |
+| `/DP48`, `/DP49` | `Sign` `Ed25519PhSha512` | `SignD_SHA512_ED25519PH.ECC`, `SignDAL_SHA512_ED25519PH.ECC` |
+| `/DP50`, `/DP51` | `Sign` `EcdsaP256Sha256` | `SignD_SHA256_ANSIP256.ECC`, `SignDAL_SHA256_ANSIP256.ECC` |
+| `/DP52` | `Sign` `Ed25519` | `SignD_ED25519.ECC` |
 | `/DP53`, `/DP54` | `Encrypt`, `Decrypt` with `AesMode::Ctr` | |
 | `/DP55`, `/DP56` | `EncryptGcm`, `DecryptGcm` | |
 
-The second method of each signature or MAC pair includes metadata. `/SV4` to `/SV11`
-verify `/DP32`, `/DP33`, `/DP38`, `/DP39` and `/DP46` to `/DP49`.
+The second signature or MAC method of each pair includes metadata. The RSA encryption
+methods read a public key (or the public part of a private key), and decryption a
+private key.
+
+| `/SV` | Verifies |
+|-------|----------|
+| `/SV0` to `/SV3` | `/DP28`, `/DP9`, `/DP8`, `/DP10` |
+| `/SV4` to `/SV7` | `/DP32`, `/DP33`, `/DP38`, `/DP39` |
+| `/SV8` to `/SV11` | `/DP46` to `/DP49` |
+| `/SV12` to `/SV14` | `/DP50` to `/DP52` |
+
+HexView 1.15.2 implements `/SV12` to `/SV14`, which its manual does not list.
 
 `/DPn[:@placement]:[param1][,param2,param3][;param4][#NAME=value]...`:
 
@@ -168,9 +218,12 @@ verify `/DP32`, `/DP33`, `/DP38`, `/DP39` and `/DP46` to `/DP49`.
 - param4 is the output file of signatures and MACs; without it, the output goes to the
   default file above. HMAC-SHA-1 and HMAC-RIPEMD-160 output text ends with CRLF
 - for AES, param4 is the padding, read from its first four letters ignoring case:
-  `PKCS` (PKCS #7), `ANSI` (ANSI X.923) or `RFC1` (RFC 1321); anything else is no padding
+  `PKCS` (PKCS #7), `ANSI` (ANSI X.923) or `RFC1` (RFC 1321); anything else is no padding.
+  RSA encryption ignores param4
 - everything after the first `#` is options: `#SALT=`, `#IV=`, `#AUTH=`, `#TAG=` and
   `#LZSS=` (or `#LZSSa,b`), case-sensitive; HexView ignores unknown options
+- `#SALT` is the `/DP38` and `/DP39` salt. HexView reads its first 255 characters, so
+  the 128th byte of a longer salt is a single digit. An empty `#SALT=` is no salt
 - `#IV` is the CBC and CTR IV, padded with zero bytes or cut to 16 bytes; an empty
   `#IV=` is no IV. For GCM it is the nonce, cut to 16 bytes
 - GCM `#AUTH` is hex text or a binary file (one with a byte from 0x80); HexView ignores

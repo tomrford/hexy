@@ -6,6 +6,7 @@
 
 use base64ct::{Base64, Encoding};
 use ed25519_dalek::{SigningKey as EdSigningKey, VerifyingKey as EdVerifyingKey};
+use p256::ecdsa::{SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey};
 use rsa::BigUint;
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
@@ -146,7 +147,7 @@ fn invalid_key(kind: &str) -> ProcessingError {
 }
 
 #[derive(Debug, Clone)]
-pub struct RsaPrivateKey(pub(super) rsa::RsaPrivateKey);
+pub struct RsaPrivateKey(pub(super) Box<rsa::RsaPrivateKey>);
 
 impl RsaPrivateKey {
     /// A HIS private key (`FF49` or `FF4B`) with modulus and private exponent.
@@ -175,7 +176,7 @@ impl RsaPrivateKey {
             private_exponent,
             Vec::new(),
         )
-        .map(Self)
+        .map(|key| Self(Box::new(key)))
         .map_err(|e| ProcessingError::InvalidKey(e.to_string()))
     }
 
@@ -191,26 +192,28 @@ impl RsaPrivateKey {
     }
 
     fn from_pkcs1_der(der: &[u8]) -> Option<Self> {
-        rsa::RsaPrivateKey::from_pkcs1_der(der).ok().map(Self)
+        rsa::RsaPrivateKey::from_pkcs1_der(der)
+            .ok()
+            .map(|key| Self(Box::new(key)))
     }
 
     fn from_der(der: &[u8]) -> Option<Self> {
         rsa::RsaPrivateKey::from_pkcs8_der(der)
             .ok()
-            .map(Self)
+            .map(|key| Self(Box::new(key)))
             .or_else(|| Self::from_pkcs1_der(der))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct RsaPublicKey(pub(super) rsa::RsaPublicKey);
+pub struct RsaPublicKey(pub(super) Box<rsa::RsaPublicKey>);
 
 impl RsaPublicKey {
     /// The modulus and public exponent of any HIS key (`7F49`, `7F4B`, `FF49`, `FF4B`).
     pub fn from_his_bytes(bytes: &[u8]) -> Result<Self, ProcessingError> {
         let key = HisRsaKey::parse(bytes).ok_or_else(|| invalid_key("HIS RSA key"))?;
         rsa::RsaPublicKey::new(key.modulus, key.public_exponent)
-            .map(Self)
+            .map(|key| Self(Box::new(key)))
             .map_err(|e| ProcessingError::InvalidKey(e.to_string()))
     }
 
@@ -218,7 +221,7 @@ impl RsaPublicKey {
     /// a private key, or an X.509 certificate, in DER or PEM. A private key gives its
     /// public part.
     pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
-        let public = |key: RsaPrivateKey| Self(key.0.to_public_key());
+        let public = |key: RsaPrivateKey| Self(Box::new(key.0.to_public_key()));
         match KeyContent::read(content) {
             KeyContent::Hex(bytes) => Self::from_his_bytes(&bytes)
                 .ok()
@@ -236,7 +239,7 @@ impl RsaPublicKey {
         rsa::RsaPublicKey::from_pkcs1_der(der)
             .or_else(|_| rsa::RsaPublicKey::from_public_key_der(der))
             .ok()
-            .map(Self)
+            .map(|key| Self(Box::new(key)))
     }
 }
 
@@ -249,104 +252,198 @@ fn certificate_spki(der: &[u8]) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// `id-Ed25519` (1.3.101.112) and the `id-EdDSA25519-ph` (1.3.101.114) HexView uses.
-fn is_ed25519_oid(algorithm: &[u8]) -> bool {
+/// `ecPublicKey` (1.2.840.10045.2.1).
+const OID_EC_PUBLIC_KEY: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01];
+/// `prime256v1` (1.2.840.10045.3.1.7).
+const OID_P256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
+
+/// Whether an `AlgorithmIdentifier` names an ECC key: `ecPublicKey`, with any
+/// parameters, or the `id-EdDSA25519-ph` (1.3.101.114) HexView uses for Ed25519; hexy
+/// also reads `id-Ed25519` (1.3.101.112).
+fn is_ecc_algorithm(algorithm: &[u8]) -> bool {
     matches!(
         read_tlv(algorithm),
-        Some((0x06, [0x2B, 0x65, 0x70 | 0x72], _))
+        Some((0x06, oid, _)) if oid == OID_EC_PUBLIC_KEY || matches!(oid, [0x2B, 0x65, 0x70 | 0x72])
     )
 }
 
-/// Seed and, if present, public key of an Ed25519 private key in DER: `SEQUENCE {
-/// version, SEQUENCE { OID }, OCTET STRING { OCTET STRING seed } [, OCTET STRING {
-/// OCTET STRING public } | [1] public] }`.
-fn ed25519_private_der(der: &[u8]) -> Option<([u8; 32], Option<[u8; 32]>)> {
-    let items = sequence(der)?;
-    let [(0x02, _), (0x30, algorithm), (0x04, private), rest @ ..] = items.as_slice() else {
-        return None;
-    };
-    if !is_ed25519_oid(algorithm) {
-        return None;
-    }
-    let inner = |octets: &[u8]| -> Option<[u8; 32]> {
-        let (0x04, value, _) = read_tlv(octets)? else {
-            return None;
-        };
-        value.try_into().ok()
-    };
-    let public = match rest.first() {
-        Some((0x04, public)) => Some(inner(public)?),
-        // PKCS #8 v2: `[1] IMPLICIT BIT STRING`.
-        Some((0x81, [0x00, public @ ..])) => Some((*public).try_into().ok()?),
-        _ => None,
-    };
-    Some((inner(private)?, public))
+/// The private key and, if present, the public key of an ECC private key in DER.
+struct EccKeyDer<'a> {
+    private: &'a [u8],
+    public: Option<&'a [u8]>,
 }
 
-/// Public key of an Ed25519 `SubjectPublicKeyInfo` in DER.
-fn ed25519_spki_der(der: &[u8]) -> Option<[u8; 32]> {
+/// An ECC private key in the DER forms HexView reads for Ed25519 and P-256 alike:
+///
+/// - SEC1: `SEQUENCE { 1, OCTET STRING key [, [0] { prime256v1 }] [, [1] { BIT STRING
+///   public key }] }`
+/// - `SEQUENCE { 0, AlgorithmIdentifier, OCTET STRING { OCTET STRING key | SEC1 key }
+///   [, OCTET STRING { OCTET STRING public key } | [1] public key] }`, which includes
+///   PKCS #8
+fn ecc_private_der(der: &[u8]) -> Option<EccKeyDer<'_>> {
+    let items = sequence(der)?;
+    match items.as_slice() {
+        [(0x02, [1]), (0x04, private), rest @ ..] => {
+            let mut key = EccKeyDer {
+                private,
+                public: None,
+            };
+            for (tag, value) in rest {
+                match (tag, read_tlv(value)?) {
+                    (0xA0, (0x06, OID_P256, [])) => {}
+                    (0xA1, (0x03, [0, public @ ..], [])) => key.public = Some(public),
+                    _ => return None,
+                }
+            }
+            Some(key)
+        }
+        [(0x02, [0 | 1]), (0x30, algorithm), (0x04, inner), rest @ ..]
+            if is_ecc_algorithm(algorithm) =>
+        {
+            let mut key = match read_tlv(inner)? {
+                (0x04, private, []) => EccKeyDer {
+                    private,
+                    public: None,
+                },
+                (0x30, _, []) => ecc_private_der(inner)?,
+                _ => return None,
+            };
+            match rest.first() {
+                Some((0x04, public)) => {
+                    let (0x04, public, []) = read_tlv(public)? else {
+                        return None;
+                    };
+                    key.public = Some(public);
+                }
+                // PKCS #8 v2: `[1] IMPLICIT BIT STRING`.
+                Some((0x81, [0x00, public @ ..])) => key.public = Some(public),
+                _ => {}
+            }
+            Some(key)
+        }
+        _ => None,
+    }
+}
+
+/// Public key of an ECC `SubjectPublicKeyInfo` in DER.
+fn ecc_spki_der(der: &[u8]) -> Option<&[u8]> {
     let items = sequence(der)?;
     let [(0x30, algorithm), (0x03, [0x00, public @ ..])] = items.as_slice() else {
         return None;
     };
-    is_ed25519_oid(algorithm)
-        .then(|| public.try_into().ok())
-        .flatten()
+    is_ecc_algorithm(algorithm).then_some(public)
 }
 
-/// HexView reads hex text as a raw 32-byte key: shorter text is padded with zero bytes
-/// at the end, and longer text is cut after 32 bytes.
-fn raw_ed25519(bytes: &[u8]) -> [u8; 32] {
+/// HexView reads raw ECC keys as 32 bytes: shorter keys are padded with zero bytes at
+/// the end, and longer keys are cut after 32 bytes.
+fn raw_ecc_key(bytes: &[u8]) -> [u8; 32] {
     let mut key = [0; 32];
     let len = bytes.len().min(32);
     key[..len].copy_from_slice(&bytes[..len]);
     key
 }
 
+/// The private key of an ECC key file: a key in DER, given in PEM, binary or hex text,
+/// or else the raw key in hex text.
+fn ecc_private_key(content: &[u8]) -> Option<[u8; 32]> {
+    match KeyContent::read(content) {
+        KeyContent::Hex(bytes) if bytes.is_empty() => None,
+        KeyContent::Hex(bytes) => Some(raw_ecc_key(
+            ecc_private_der(&bytes).map_or(bytes.as_slice(), |key| key.private),
+        )),
+        KeyContent::Der(der) => ecc_private_der(&der).map(|key| raw_ecc_key(key.private)),
+    }
+}
+
+/// The public key in ECC key DER: from a private key that includes it, an SPKI public
+/// key, or an X.509 certificate.
+fn ecc_public_der(der: &[u8]) -> Option<Vec<u8>> {
+    ecc_private_der(der)
+        .and_then(|key| key.public)
+        .or_else(|| ecc_spki_der(der))
+        .map(<[u8]>::to_vec)
+        .or_else(|| ecc_spki_der(&certificate_spki(der)?).map(<[u8]>::to_vec))
+}
+
 #[derive(Debug, Clone)]
-pub struct Ed25519PrivateKey(pub(super) EdSigningKey);
+pub struct Ed25519PrivateKey(pub(super) Box<EdSigningKey>);
 
 impl Ed25519PrivateKey {
     pub fn from_bytes(seed: &[u8; 32]) -> Self {
-        Self(EdSigningKey::from_bytes(seed))
+        Self(Box::new(EdSigningKey::from_bytes(seed)))
     }
 
-    /// A raw seed in hex text, or a PKCS #8 key in PEM or DER.
+    /// An ECC private key in PEM, DER or hex text, or a raw seed in hex text.
     pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
-        match KeyContent::read(content) {
-            KeyContent::Hex(raw) if !raw.is_empty() => Ok(Self::from_bytes(&raw_ed25519(&raw))),
-            KeyContent::Hex(_) => Err(invalid_key("empty Ed25519 private key")),
-            KeyContent::Der(der) => ed25519_private_der(&der)
-                .map(|(seed, _)| Self::from_bytes(&seed))
-                .ok_or_else(|| invalid_key("Ed25519 private key")),
-        }
+        ecc_private_key(content)
+            .map(|seed| Self::from_bytes(&seed))
+            .ok_or_else(|| invalid_key("Ed25519 private key"))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Ed25519PublicKey(pub(super) EdVerifyingKey);
+pub struct Ed25519PublicKey(pub(super) Box<EdVerifyingKey>);
 
 impl Ed25519PublicKey {
     pub fn from_bytes(public: &[u8; 32]) -> Result<Self, ProcessingError> {
         EdVerifyingKey::from_bytes(public)
-            .map(Self)
+            .map(|key| Self(Box::new(key)))
             .map_err(|e| ProcessingError::InvalidKey(e.to_string()))
     }
 
-    /// A raw key in hex text, a private key in PEM or DER that carries its public key,
-    /// an SPKI public key, or an X.509 certificate.
+    /// A private key that includes its public key, an SPKI public key, or an X.509
+    /// certificate, in PEM, DER or hex text; or a raw key in hex text.
     pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
-        let der = match KeyContent::read(content) {
-            KeyContent::Hex(raw) if !raw.is_empty() => return Self::from_bytes(&raw_ed25519(&raw)),
-            KeyContent::Hex(_) => return Err(invalid_key("empty Ed25519 public key")),
-            KeyContent::Der(der) => der,
+        let public = match KeyContent::read(content) {
+            KeyContent::Hex(bytes) if bytes.is_empty() => return Err(invalid_key("empty Ed25519 public key")),
+            KeyContent::Hex(bytes) => {
+                ecc_public_der(&bytes).unwrap_or_else(|| raw_ecc_key(&bytes).to_vec())
+            }
+            KeyContent::Der(der) => ecc_public_der(&der).unwrap_or_default(),
         };
-        ed25519_private_der(&der)
-            .and_then(|(_, public)| public)
-            .or_else(|| ed25519_spki_der(&der))
-            .or_else(|| ed25519_spki_der(&certificate_spki(&der)?))
-            .ok_or_else(|| invalid_key("Ed25519 public key"))
-            .and_then(|public| Self::from_bytes(&public))
+        let public = public
+            .try_into()
+            .map_err(|_| invalid_key("Ed25519 public key"))?;
+        Self::from_bytes(&public)
+    }
+}
+
+/// A P-256 private key.
+#[derive(Debug, Clone)]
+pub struct P256PrivateKey(pub(super) Box<P256SigningKey>);
+
+impl P256PrivateKey {
+    /// A big-endian scalar.
+    pub fn from_bytes(scalar: &[u8; 32]) -> Result<Self, ProcessingError> {
+        P256SigningKey::from_slice(scalar)
+            .map(|key| Self(Box::new(key)))
+            .map_err(|_| invalid_key("P-256 private key"))
+    }
+
+    /// An ECC private key in PEM, DER or hex text, or a raw scalar in hex text.
+    pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
+        let scalar = ecc_private_key(content).ok_or_else(|| invalid_key("P-256 private key"))?;
+        Self::from_bytes(&scalar)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct P256PublicKey(pub(super) Box<P256VerifyingKey>);
+
+impl P256PublicKey {
+    /// A SEC1 point: `04`, X and Y, or a compressed point.
+    pub fn from_sec1_bytes(point: &[u8]) -> Result<Self, ProcessingError> {
+        P256VerifyingKey::from_sec1_bytes(point)
+            .map(|key| Self(Box::new(key)))
+            .map_err(|_| invalid_key("P-256 public key"))
+    }
+
+    /// A private key that includes its public key, an SPKI public key, or an X.509
+    /// certificate, in PEM, DER or hex text.
+    pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
+        let (KeyContent::Hex(der) | KeyContent::Der(der)) = KeyContent::read(content);
+        let point = ecc_public_der(&der).ok_or_else(|| invalid_key("P-256 public key"))?;
+        Self::from_sec1_bytes(&point)
     }
 }
 

@@ -172,8 +172,7 @@ fn test_unimplemented_methods_rejected_before_outputs() {
         "/DP57",
         "/DP55:00112233445566778899AABBCCDDEEFF",
         "/DP56:00112233445566778899AABBCCDDEEFF#IV=0#TAG=tag.txt",
-        "/SV0:pub.txt!00",
-        "/DP38:k.pem#SALT=00",
+        "/DP25:rsa.txt",
     ] {
         let output = run(&input, &[flag, "/XI", "-o", &out_arg]);
         assert!(!output.status.success(), "{flag}");

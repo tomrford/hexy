@@ -7,6 +7,7 @@
 mod gcm;
 mod keys;
 mod mac;
+mod rsa_cipher;
 mod signature;
 mod symmetric;
 
@@ -16,22 +17,24 @@ use crate::{HexFile, OpsError, Placement, Segment};
 
 pub use gcm::{AesGcm, GcmTag};
 pub use keys::{
-    AesKey, Ed25519PrivateKey, Ed25519PublicKey, MacKey, RsaPrivateKey, RsaPublicKey,
-    decode_hex_text,
+    AesKey, Ed25519PrivateKey, Ed25519PublicKey, MacKey, P256PrivateKey, P256PublicKey,
+    RsaPrivateKey, RsaPublicKey, decode_hex_text,
 };
 pub use mac::{MacAlgorithm, MacMethod};
+pub use rsa_cipher::RsaPadding;
 pub use signature::{SignatureMethod, SignatureScheme, SigningKey, VerifyingKey};
 pub use symmetric::{AesMode, AesPadding};
 
 use symmetric::AesBlocks;
 
-#[allow(clippy::large_enum_variant)] // one operation per run; the RSA key's size is moot
 #[derive(Debug, Clone)]
 pub enum DataProcessing {
-    /// Sign the block payload; the output is the signature.
+    /// Sign the block payload; the output is the signature. `salt` is the RSA-PSS salt,
+    /// which no other scheme takes; without it, RSA-PSS uses a random 32-byte salt.
     Sign {
         method: SignatureMethod,
         key: SigningKey,
+        salt: Option<Vec<u8>>,
     },
     /// Authenticate the block payload; the output is the MAC.
     Mac { method: MacMethod, key: MacKey },
@@ -54,6 +57,16 @@ pub enum DataProcessing {
     EncryptGcm(AesGcm),
     /// Decrypt the data of all blocks as one AES-GCM stream and check the tag.
     DecryptGcm { gcm: AesGcm, tag: GcmTag },
+    /// Encrypt each block with an RSA public key.
+    RsaEncrypt {
+        key: RsaPublicKey,
+        padding: RsaPadding,
+    },
+    /// Decrypt each block with an RSA private key.
+    RsaDecrypt {
+        key: RsaPrivateKey,
+        padding: RsaPadding,
+    },
 }
 
 impl DataProcessing {
@@ -80,6 +93,12 @@ pub enum ProcessingError {
     #[error("invalid signature length {0}")]
     InvalidSignature(usize),
 
+    #[error("{0:?} takes no salt")]
+    UnusedSalt(SignatureScheme),
+
+    #[error("this method signs a single block of data, not {0}")]
+    MultipleBlocks(usize),
+
     #[error("signature verification failed")]
     VerificationFailed,
 
@@ -100,6 +119,9 @@ pub enum ProcessingError {
 
     #[error("AES-GCM tag verification failed")]
     TagMismatch,
+
+    #[error("RSA decryption needs blocks of the {0}-byte key length")]
+    RsaDataLength(usize),
 
     #[error("{0}")]
     Crypto(String),
@@ -129,15 +151,15 @@ impl HexFile {
         wrote_data: &mut bool,
     ) -> Result<Option<Vec<u8>>, ProcessingError> {
         let output = match operation {
-            DataProcessing::Sign { method, key } => Some(
-                method
-                    .scheme
-                    .sign(key, &payload(self, method.with_metadata)?)?,
-            ),
+            DataProcessing::Sign { method, key, salt } => Some(method.scheme.sign(
+                key,
+                &self.signed_payload(*method)?,
+                salt.as_deref(),
+            )?),
             DataProcessing::Mac { method, key } => Some(
                 method
                     .algorithm
-                    .compute(key, &payload(self, method.with_metadata)?)?,
+                    .compute(key, &payload(&self.blocks(), method.with_metadata)?)?,
             ),
             DataProcessing::Xor { key } => {
                 let key: &[u8] = if key.is_empty() { &[0xFF] } else { key };
@@ -159,6 +181,14 @@ impl HexFile {
                 gcm.decrypt(self, tag, wrote_data)?;
                 None
             }
+            DataProcessing::RsaEncrypt { key, padding } => {
+                self.transform_blocks(wrote_data, |data| padding.encrypt(key, data))?;
+                None
+            }
+            DataProcessing::RsaDecrypt { key, padding } => {
+                self.transform_blocks(wrote_data, |data| padding.decrypt(key, data))?;
+                None
+            }
         };
         if let (Some(placement), Some(output)) = (placement, &output)
             && let Some(target) = self.placement_range(placement, output.len())?
@@ -177,7 +207,16 @@ impl HexFile {
     ) -> Result<(), ProcessingError> {
         method
             .scheme
-            .verify(key, &payload(self, method.with_metadata)?, signature)
+            .verify(key, &self.signed_payload(method)?, signature)
+    }
+
+    /// The payload `method` signs; Ed25519 signs a single block.
+    fn signed_payload(&self, method: SignatureMethod) -> Result<Vec<u8>, ProcessingError> {
+        let blocks = self.blocks();
+        if method.scheme == SignatureScheme::Ed25519 && blocks.len() > 1 {
+            return Err(ProcessingError::MultipleBlocks(blocks.len()));
+        }
+        payload(&blocks, method.with_metadata)
     }
 
     /// Replace each block with `transform`'s output for it, in block order.
@@ -245,9 +284,9 @@ impl HexFile {
 
 /// The block data in address order; with metadata, each block is preceded by its start
 /// address and length as big-endian `u32`s.
-fn payload(hexfile: &HexFile, with_metadata: bool) -> Result<Vec<u8>, ProcessingError> {
+fn payload(blocks: &[Segment], with_metadata: bool) -> Result<Vec<u8>, ProcessingError> {
     let mut payload = Vec::new();
-    for block in hexfile.blocks() {
+    for block in blocks {
         if with_metadata {
             let len =
                 u32::try_from(block.len()).map_err(|_| ProcessingError::PayloadLengthOverflow)?;
@@ -457,7 +496,7 @@ mod tests {
             Segment::new(0x2000, vec![0xBB]).unwrap(),
         ]);
         file.split(0x100);
-        let payload = payload(&file, true).unwrap();
+        let payload = payload(&file.blocks(), true).unwrap();
         let mut expected = Vec::new();
         for (start, data) in [
             (0x1000u32, [0xAA; 0x100].as_slice()),

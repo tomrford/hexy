@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::types::PySegment;
 use crate::util::{
-    AesArgs, aes_operation, key_content, mac_operation, parse_fill_pattern, parse_intel_mode,
+    CipherArgs, cipher_operation, key_content, mac_operation, parse_fill_pattern, parse_intel_mode,
     parse_merge_mode, parse_placement, parse_range_arg, parse_ranges_arg, parse_signature_method,
     parse_srec_type, parse_swap_mode, py_bytes, value_error,
 };
@@ -416,7 +416,7 @@ impl PyHexFile {
         self.inner.map_star08().map_err(value_error)
     }
 
-    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
+    #[pyo3(signature = (method, key, *, metadata=false, placement=None, salt=None))]
     fn sign(
         &mut self,
         py: Python<'_>,
@@ -424,6 +424,7 @@ impl PyHexFile {
         key: &Bound<'_, PyAny>,
         metadata: bool,
         placement: Option<&Bound<'_, PyAny>>,
+        salt: Option<&[u8]>,
     ) -> PyResult<Py<PyBytes>> {
         let method = parse_signature_method(method, metadata)?;
         let key = method
@@ -433,7 +434,11 @@ impl PyHexFile {
         let output = self
             .inner
             .process_data(
-                &DataProcessing::Sign { method, key },
+                &DataProcessing::Sign {
+                    method,
+                    key,
+                    salt: salt.map(<[u8]>::to_vec),
+                },
                 placement.map(parse_placement).transpose()?,
             )
             .map_err(value_error)?;
@@ -474,13 +479,13 @@ impl PyHexFile {
         &mut self,
         py: Python<'_>,
         mode: &str,
-        key: &[u8],
+        key: &Bound<'_, PyAny>,
         iv: Option<&[u8]>,
         padding: Option<&str>,
         aad: Option<&[u8]>,
         placement: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Option<Py<PyBytes>>> {
-        let args = AesArgs {
+        let args = CipherArgs {
             mode,
             key,
             iv,
@@ -490,7 +495,7 @@ impl PyHexFile {
         let output = self
             .inner
             .process_data(
-                &aes_operation(args, false, None)?,
+                &cipher_operation(args, false, None)?,
                 placement.map(parse_placement).transpose()?,
             )
             .map_err(value_error)?;
@@ -502,13 +507,13 @@ impl PyHexFile {
     fn decrypt(
         &mut self,
         mode: &str,
-        key: &[u8],
+        key: &Bound<'_, PyAny>,
         iv: Option<&[u8]>,
         padding: Option<&str>,
         aad: Option<&[u8]>,
         tag: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let args = AesArgs {
+        let args = CipherArgs {
             mode,
             key,
             iv,
@@ -516,7 +521,7 @@ impl PyHexFile {
             aad: aad.unwrap_or_default(),
         };
         self.inner
-            .process_data(&aes_operation(args, true, tag)?, None)
+            .process_data(&cipher_operation(args, true, tag)?, None)
             .map_err(value_error)?;
         Ok(())
     }

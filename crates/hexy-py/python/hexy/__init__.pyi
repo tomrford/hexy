@@ -12,13 +12,23 @@ IntelHexMode = Literal[
 SRecordType = Literal["auto", "s1", "s2", "s3", "1", "2", "3"]
 Placement = Literal["append", "begin", "prepend", "overwrite_end"]
 SignatureMethod = Literal[
-    "rsa-pkcs1v15-sha256", "rsa-pss-sha256", "ed25519ph", "ed25519-sha512"
+    "rsa-pkcs1v15-md5",
+    "rsa-pkcs1v15-sha1",
+    "rsa-pkcs1v15-ripemd160",
+    "rsa-pkcs1v15-sha256",
+    "rsa-pss-sha256",
+    "ecdsa-p256-sha256",
+    "ed25519",
+    "ed25519ph",
+    "ed25519ph-sha512",
 ]
 Key = bytes | str
 MacMethod = Literal[
     "hmac-md5", "hmac-sha1", "hmac-ripemd160", "hmac-sha256", "cmac-aes128"
 ]
-AesMode = Literal["ecb", "cbc", "ctr", "gcm"]
+CipherMode = Literal[
+    "ecb", "cbc", "ctr", "gcm", "rsa-pkcs1v15", "rsa-oaep-sha1", "rsa-oaep-sha256"
+]
 AesPadding = Literal["pkcs7", "ansix923", "rfc1321"]
 
 class AddressRange:
@@ -156,13 +166,16 @@ class HexFile:
         *,
         metadata: bool = False,
         placement: int | Placement | None = None,
+        salt: bytes | None = None,
     ) -> bytes:
         """Sign the block data in address order and return the signature (`/DP`).
         `metadata` precedes each block with its big-endian start address and
         length. `key` is a key file's content or key text, read as HexView reads
-        it: HIS or PKCS #1 hex text, PKCS #8 or PKCS #1 PEM or DER for RSA; a hex
-        seed or PKCS #8 PEM or DER for Ed25519. With `placement`, the signature is
-        also written into the image."""
+        it: HIS or PKCS #1 hex text, PKCS #8 or PKCS #1 PEM or DER for RSA; a raw
+        hex key, or an ECC key in PEM, DER or hex text DER, for Ed25519 and P-256.
+        `salt` is the RSA-PSS salt, a random 32 bytes without it. ECDSA is
+        deterministic (RFC 6979) and returns r and s; `ed25519` signs a single
+        block. With `placement`, the signature is also written into the image."""
     def mac(
         self,
         method: MacMethod,
@@ -178,25 +191,29 @@ class HexFile:
         the data (`/DP1`)."""
     def encrypt(
         self,
-        mode: AesMode,
-        key: bytes,
+        mode: CipherMode,
+        key: Key,
         *,
         iv: bytes | None = None,
         padding: AesPadding | None = None,
         aad: bytes | None = None,
         placement: int | Placement | None = None,
     ) -> bytes | None:
-        """Encrypt with AES as HexView does (`/DP`); the key length picks AES-128,
-        -192 or -256. ECB, CBC and CTR encrypt each block on its own, after adding
-        `padding`; without `iv`, CBC and CTR take the first 16 bytes of the first
-        block as the IV and leave them in place. GCM encrypts all blocks as one
-        stream with `iv` as the nonce and `aad` as additional data, and returns the
-        tag, which `placement` also writes into the image; each block takes the
-        whole 16-byte units done by its end and the last block the rest."""
+        """Encrypt with AES or RSA as HexView does (`/DP`). AES takes the raw key
+        as bytes, whose length picks AES-128, -192 or -256. ECB, CBC and CTR
+        encrypt each block on its own, after adding `padding`; without `iv`, CBC
+        and CTR take the first 16 bytes of the first block as the IV and leave
+        them in place. GCM encrypts all blocks as one stream with `iv` as the nonce
+        and `aad` as additional data, and returns the tag, which `placement` also
+        writes into the image; each block takes the whole 16-byte units done by
+        its end and the last block the rest. RSA modes take a public or private
+        key as `sign` reads it and encrypt each block on its own with random
+        padding; `rsa-pkcs1v15` encrypts a whole number of key lengths without
+        padding, and other blocks must fit one padded key length."""
     def decrypt(
         self,
-        mode: AesMode,
-        key: bytes,
+        mode: CipherMode,
+        key: Key,
         *,
         iv: bytes | None = None,
         padding: AesPadding | None = None,
@@ -206,7 +223,9 @@ class HexFile:
         """Reverse `encrypt` (`/DP`); padding is checked and removed, except after
         CTR. GCM checks `tag`, given as bytes or as an image range at the start or
         end of a block that stays in place; on a mismatch it raises `ValueError`,
-        and the data stays decrypted."""
+        and the data stays decrypted. RSA modes take a private key and blocks of a
+        whole number of key lengths; `rsa-pkcs1v15` decrypts a block of one key
+        length without padding when its padding is not valid."""
     def verify_signature(
         self,
         method: SignatureMethod,
@@ -216,8 +235,9 @@ class HexFile:
         metadata: bool = False,
     ) -> None:
         """Verify `signature` over the block data (`/SV`); raises `ValueError` if it
-        does not match. `key` is a public or private key in the forms `sign` reads,
-        or a PKCS #1 or SPKI public key, or an X.509 certificate."""
+        does not match. `key` is a public or private key in the forms `sign` reads
+        (an ECC private key must include its public key), a PKCS #1 or SPKI public
+        key, or an X.509 certificate. RSA-PSS accepts any salt length."""
 
 class PipelineResult:
     @property
@@ -290,6 +310,7 @@ class Pipeline:
         *,
         metadata: bool = False,
         placement: int | Placement | None = None,
+        salt: bytes | None = None,
     ) -> None:
         """Sign after the checksum stages (`/DP`); see `HexFile.sign`."""
     def mac(
@@ -305,8 +326,8 @@ class Pipeline:
         """XOR after the checksum stages (`/DP`); see `HexFile.xor`."""
     def encrypt(
         self,
-        mode: AesMode,
-        key: bytes,
+        mode: CipherMode,
+        key: Key,
         *,
         iv: bytes | None = None,
         padding: AesPadding | None = None,
@@ -316,8 +337,8 @@ class Pipeline:
         """Encrypt after the checksum stages (`/DP`); see `HexFile.encrypt`."""
     def decrypt(
         self,
-        mode: AesMode,
-        key: bytes,
+        mode: CipherMode,
+        key: Key,
         *,
         iv: bytes | None = None,
         padding: AesPadding | None = None,
