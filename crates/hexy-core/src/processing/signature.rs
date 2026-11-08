@@ -73,11 +73,17 @@ impl SignatureScheme {
         match (self, key) {
             (Self::RsaPkcs1v15Sha256, SigningKey::Rsa(key)) => {
                 let signer = RsaPkcs1v15SigningKey::<Sha256>::new(key.0.clone());
-                Ok(signer.sign(payload).to_vec())
+                signer
+                    .try_sign(payload)
+                    .map(|signature| signature.to_vec())
+                    .map_err(|e| ProcessingError::Crypto(e.to_string()))
             }
             (Self::RsaPssSha256, SigningKey::Rsa(key)) => {
                 let signer = RsaPssSigningKey::<Sha256>::new(key.0.clone());
-                Ok(signer.sign(payload).to_vec())
+                signer
+                    .try_sign(payload)
+                    .map(|signature| signature.to_vec())
+                    .map_err(|e| ProcessingError::Crypto(e.to_string()))
             }
             (Self::Ed25519Ph, SigningKey::Ed25519(key)) => key
                 .0

@@ -157,6 +157,18 @@ impl RsaPrivateKey {
         let private_exponent = key
             .private_exponent
             .ok_or_else(|| invalid_key("HIS RSA private exponent"))?;
+        if private_exponent.bits() == 0 {
+            return Err(ProcessingError::InvalidKey(
+                "HIS RSA private exponent must be nonzero".to_owned(),
+            ));
+        }
+        // Prime recovery runs before the RSA crate validates these components.
+        rsa::RsaPublicKey::new_with_max_size(
+            key.modulus.clone(),
+            key.public_exponent.clone(),
+            usize::MAX,
+        )
+        .map_err(|e| ProcessingError::InvalidKey(e.to_string()))?;
         rsa::RsaPrivateKey::from_components(
             key.modulus,
             key.public_exponent,

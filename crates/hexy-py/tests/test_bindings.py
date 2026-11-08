@@ -308,3 +308,14 @@ def test_sign_and_verify_match_hexview():
     result = pipeline.apply(source)
     assert result.data_processing == RSA_METADATA
     assert result.hexfile.read(0x3000, 128) == RSA_METADATA
+
+
+def test_signing_reports_small_pss_key_as_value_error():
+    source = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
+    key = (KEYS / "rsa_512_test.pem").read_bytes()
+
+    with pytest.raises(ValueError):
+        source.sign("rsa-pss-sha256", key, placement="append")
+
+    assert source.read(0x1000, 2) == b"\x01\x02"
+    assert source.total_bytes == 2

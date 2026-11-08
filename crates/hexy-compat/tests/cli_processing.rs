@@ -111,7 +111,12 @@ fn test_sv_sees_placed_output_and_failures_still_export() {
     assert_eq!(image.read_bytes_contiguous(0x2010, 128), Some(signature));
     assert!(dir.join("SignD_SHA256.RSA").exists());
 
-    for dp in ["/DP32:missing.pem", "/DP99:rsa.txt", "/DP32"] {
+    for dp in [
+        "/DP32:missing.pem",
+        "/DP99:rsa.txt",
+        "/DP32",
+        "/DP32:FF490A81008203010001910101",
+    ] {
         std::fs::remove_file(&out).unwrap();
         let output = run(&input, &[dp, "/XI", "-o", &out_arg]);
         assert!(!output.status.success(), "{dp}");

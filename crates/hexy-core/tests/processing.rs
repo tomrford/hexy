@@ -4,7 +4,8 @@
 //! over [`image`] with the keys in `tests/fixtures/keys`.
 
 use hexy_core::{
-    DataProcessing, HexFile, Placement, ProcessingError, Segment, SignatureMethod, SignatureScheme,
+    DataProcessing, HexFile, Placement, ProcessingError, RsaPrivateKey, Segment, SignatureMethod,
+    SignatureScheme,
 };
 
 const RSA_DATA: &str = "41350b17ea084b17eaaa4296a855b28bd6361c70a6996ea4e8e61ae113f4e93580446fca0b2ec193ff7cdea4e7e8d2ce4743e171cdf1ba077e0a8c9d78884bcdf6270926b7a364e0a4a1611eeeb9babad060ba1133c9cba837db7eccba0851d9638d2fcdb4b09c31bdce3ecb1c9ea29d8b4b8f27f4e7b80521b16accd1669ac6";
@@ -170,4 +171,39 @@ fn test_placement_writes_output_into_image() {
         hexfile.read_bytes_contiguous(0x2010, output.len()),
         Some(output)
     );
+}
+
+#[test]
+fn test_invalid_his_zero_modulus_returns_error() {
+    let key = hex("FF490A81008203010001910101");
+    assert!(matches!(
+        RsaPrivateKey::from_his_bytes(&key),
+        Err(ProcessingError::InvalidKey(_))
+    ));
+}
+
+#[test]
+fn test_invalid_his_zero_private_exponent_returns_error() {
+    assert!(matches!(
+        RsaPrivateKey::from_key_file(b"FF490C810301080782030100019100"),
+        Err(ProcessingError::InvalidKey(_))
+    ));
+}
+
+#[test]
+fn test_invalid_pss_key_size_returns_error_without_changing_image() {
+    // This valid 512-bit key cannot fit SHA-256 and PSS's 32-byte salt.
+    let method = method(SignatureScheme::RsaPssSha256, false);
+    let key = method.scheme.signing_key(&key("rsa_512_test.pem")).unwrap();
+    let mut image = image();
+    let original = image.clone();
+
+    assert!(matches!(
+        image.process_data(
+            &DataProcessing::Sign { method, key },
+            Some(Placement::Append)
+        ),
+        Err(ProcessingError::Crypto(_))
+    ));
+    assert_eq!(image, original);
 }
