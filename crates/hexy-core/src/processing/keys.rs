@@ -347,11 +347,13 @@ fn raw_ecc_key(bytes: &[u8]) -> [u8; 32] {
 /// or else the raw key in hex text.
 fn ecc_private_key(content: &[u8]) -> Option<[u8; 32]> {
     match KeyContent::read(content) {
-        KeyContent::Hex(bytes) if bytes.is_empty() => None,
-        KeyContent::Hex(bytes) => Some(raw_ecc_key(
-            ecc_private_der(&bytes).map_or(bytes.as_slice(), |key| key.private),
-        )),
-        KeyContent::Der(der) => ecc_private_der(&der).map(|key| raw_ecc_key(key.private)),
+        KeyContent::Hex(bytes) => {
+            let private = ecc_private_der(&bytes).map_or(bytes.as_slice(), |key| key.private);
+            (!private.is_empty()).then(|| raw_ecc_key(private))
+        }
+        KeyContent::Der(der) => ecc_private_der(&der)
+            .filter(|key| !key.private.is_empty())
+            .map(|key| raw_ecc_key(key.private)),
     }
 }
 
@@ -395,7 +397,9 @@ impl Ed25519PublicKey {
     /// certificate, in PEM, DER or hex text; or a raw key in hex text.
     pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
         let public = match KeyContent::read(content) {
-            KeyContent::Hex(bytes) if bytes.is_empty() => return Err(invalid_key("empty Ed25519 public key")),
+            KeyContent::Hex(bytes) if bytes.is_empty() => {
+                return Err(invalid_key("empty Ed25519 public key"));
+            }
             KeyContent::Hex(bytes) => {
                 ecc_public_der(&bytes).unwrap_or_else(|| raw_ecc_key(&bytes).to_vec())
             }

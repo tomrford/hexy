@@ -113,15 +113,13 @@ impl SignatureScheme {
         }
         let crypto = |e: rsa::signature::Error| ProcessingError::Crypto(e.to_string());
         match (self, key) {
-            (Self::RsaPkcs1v15Md5, SigningKey::Rsa(key)) => Ok(sign_pkcs1v15::<Md5>(key, payload)),
-            (Self::RsaPkcs1v15Sha1, SigningKey::Rsa(key)) => {
-                Ok(sign_pkcs1v15::<Sha1>(key, payload))
-            }
+            (Self::RsaPkcs1v15Md5, SigningKey::Rsa(key)) => sign_pkcs1v15::<Md5>(key, payload),
+            (Self::RsaPkcs1v15Sha1, SigningKey::Rsa(key)) => sign_pkcs1v15::<Sha1>(key, payload),
             (Self::RsaPkcs1v15Ripemd160, SigningKey::Rsa(key)) => {
-                Ok(sign_pkcs1v15::<Ripemd160>(key, payload))
+                sign_pkcs1v15::<Ripemd160>(key, payload)
             }
             (Self::RsaPkcs1v15Sha256, SigningKey::Rsa(key)) => {
-                Ok(sign_pkcs1v15::<Sha256>(key, payload))
+                sign_pkcs1v15::<Sha256>(key, payload)
             }
             (Self::RsaPssSha256, SigningKey::Rsa(key)) => {
                 let key = key.0.as_ref().clone();
@@ -198,10 +196,14 @@ impl SignatureScheme {
     }
 }
 
-fn sign_pkcs1v15<D: Digest + AssociatedOid>(key: &RsaPrivateKey, payload: &[u8]) -> Vec<u8> {
+fn sign_pkcs1v15<D: Digest + AssociatedOid>(
+    key: &RsaPrivateKey,
+    payload: &[u8],
+) -> Result<Vec<u8>, ProcessingError> {
     RsaPkcs1v15SigningKey::<D>::new(key.0.as_ref().clone())
-        .sign(payload)
-        .to_vec()
+        .try_sign(payload)
+        .map(|signature| signature.to_vec())
+        .map_err(|e| ProcessingError::Crypto(e.to_string()))
 }
 
 fn verify_pkcs1v15<D: Digest + AssociatedOid>(
@@ -222,10 +224,10 @@ fn pss_salt_len(key: &rsa::RsaPublicKey, signature: &[u8]) -> Option<usize> {
     let hash_len = Sha256::output_size();
     let em_bits = key.n().bits() - 1;
     let em_len = em_bits.div_ceil(8);
+    let db_len = em_len.checked_sub(hash_len + 1).filter(|&len| len != 0)?;
     let message = rsa_encrypt(key, &BigUint::from_bytes_be(signature)).ok()?;
     let mut em = message.to_bytes_be();
     em.splice(0..0, vec![0; em_len.checked_sub(em.len())?]);
-    let db_len = em_len.checked_sub(hash_len + 1)?;
     let hash = &em[db_len..em_len - 1];
     let mut db = Vec::with_capacity(db_len);
     for counter in 0u32.. {

@@ -223,9 +223,10 @@ class HexFile:
         """Reverse `encrypt` (`/DP`); padding is checked and removed, except after
         CTR. GCM checks `tag`, given as bytes or as an image range at the start or
         end of a block that stays in place; on a mismatch it raises `ValueError`,
-        and the data stays decrypted. RSA modes take a private key and blocks of a
-        whole number of key lengths; `rsa-pkcs1v15` decrypts a block of one key
-        length without padding when its padding is not valid."""
+        and the data stays decrypted. RSA modes take a private key. OAEP needs
+        exactly one key length per block; `rsa-pkcs1v15` also accepts whole
+        numbers of key lengths, and decrypts a single key length without padding
+        when its padding is not valid."""
     def verify_signature(
         self,
         method: SignatureMethod,

@@ -67,7 +67,7 @@ length as two big-endian `u32` values, as HexView 1.15.2 hashes them.
 | `Ed25519Ph` | Ed25519ph (SHA-512 pre-hash, empty context) |
 | `Ed25519PhSha512` | Ed25519ph over the SHA-512 digest of the payload |
 
-- RSA keys of any size work, including 3072 and 4096 bits.
+- RSA keys of 3072 and 4096 bits are supported.
 - RSA-PSS signs with `salt`, or with a random 32-byte salt, and verifies signatures
   with any salt length, as HexView does. No other scheme takes a salt.
 - ECDSA signatures are r and s as 32-byte big-endian values. hexy signs with

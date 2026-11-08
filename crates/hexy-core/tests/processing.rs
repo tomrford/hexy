@@ -299,8 +299,13 @@ fn test_signing_rejects_public_his_key() {
 
 #[test]
 fn test_empty_ed25519_key_material_is_rejected() {
-    for scheme in [SignatureScheme::Ed25519Ph, SignatureScheme::Ed25519PhSha512] {
-        for content in [b"".as_slice(), b" \r\n,", b"0x"] {
+    let empty_pkcs8 = hex("300E020100300506032B657004020400");
+    for scheme in [
+        SignatureScheme::Ed25519,
+        SignatureScheme::Ed25519Ph,
+        SignatureScheme::Ed25519PhSha512,
+    ] {
+        for content in [b"".as_slice(), b" \r\n,", b"0x", empty_pkcs8.as_slice()] {
             assert!(matches!(
                 scheme.signing_key(content),
                 Err(ProcessingError::InvalidKey(_))
@@ -315,14 +320,73 @@ fn test_empty_ed25519_key_material_is_rejected() {
         let short = scheme.signing_key(b"00").unwrap();
         let full = scheme.signing_key("00".repeat(32).as_bytes()).unwrap();
         assert_eq!(
-            image()
-                .process_data(&DataProcessing::Sign { method, key: short, salt: None }, None)
+            single_block(vec![0xAA; 16])
+                .process_data(
+                    &DataProcessing::Sign {
+                        method,
+                        key: short,
+                        salt: None
+                    },
+                    None
+                )
                 .unwrap(),
-            image()
-                .process_data(&DataProcessing::Sign { method, key: full, salt: None }, None)
+            single_block(vec![0xAA; 16])
+                .process_data(
+                    &DataProcessing::Sign {
+                        method,
+                        key: full,
+                        salt: None
+                    },
+                    None
+                )
                 .unwrap()
         );
     }
+}
+
+#[test]
+fn test_pkcs1_key_too_small_returns_error_without_changing_image() {
+    use rsa::pkcs8::EncodePrivateKey;
+    let private = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 256).unwrap();
+    let der = private.to_pkcs8_der().unwrap();
+    for scheme in [
+        SignatureScheme::RsaPkcs1v15Md5,
+        SignatureScheme::RsaPkcs1v15Sha1,
+        SignatureScheme::RsaPkcs1v15Ripemd160,
+        SignatureScheme::RsaPkcs1v15Sha256,
+    ] {
+        let method = method(scheme, false);
+        let key = scheme.signing_key(der.as_bytes()).unwrap();
+        let mut file = image();
+        let before = file.clone();
+        assert!(matches!(
+            file.process_data(
+                &DataProcessing::Sign {
+                    method,
+                    key,
+                    salt: None
+                },
+                Some(Placement::Append)
+            ),
+            Err(ProcessingError::Crypto(_))
+        ));
+        assert_eq!(file, before);
+    }
+}
+
+#[test]
+fn test_pss_verification_with_tiny_public_key_returns_error() {
+    // A 264-bit modulus leaves no room for the SHA-256 PSS data block.
+    let mut public = hex("7F49288121");
+    public.extend([0x80]);
+    public.extend([0; 31]);
+    public.extend([1, 0x82, 3, 1, 0, 1]);
+    let method = method(SignatureScheme::RsaPssSha256, false);
+    let key = hexy_core::VerifyingKey::Rsa(RsaPublicKey::from_his_bytes(&public).unwrap());
+    assert!(matches!(
+        image().verify_signature(method, &key, &[0; 33]),
+        Err(ProcessingError::VerificationFailed)
+    ));
 }
 
 #[test]
@@ -375,7 +439,11 @@ fn test_invalid_pss_key_size_returns_error_without_changing_image() {
 
     assert!(matches!(
         image.process_data(
-            &DataProcessing::Sign { method, key, salt: None },
+            &DataProcessing::Sign {
+                method,
+                key,
+                salt: None
+            },
             Some(Placement::Append)
         ),
         Err(ProcessingError::Crypto(_))
