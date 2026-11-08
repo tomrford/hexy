@@ -1,6 +1,20 @@
 import hexy
 
 
+def test_zero_line_length_srec_exports_only_termination(tmp_path):
+    source = hexy.HexFile.from_binary(b"\xaa", 0xFFFF_FFFF)
+    for record_type, expected in [
+        ("auto", b"S9030000FC\r\n"),
+        ("s1", b"S9030000FC\r\n"),
+        ("s2", b"S804000000FB\r\n"),
+        ("s3", b"S70500000000FA\r\n"),
+    ]:
+        assert source.to_srec(bytes_per_line=0, record_type=record_type) == expected
+        path = tmp_path / f"{record_type}.s19"
+        source.write_srec(path, bytes_per_line=0, record_type=record_type)
+        assert path.read_bytes() == expected
+
+
 def test_file_autodetect_and_write_helpers(tmp_path):
     source = hexy.HexFile.from_binary(b"\xde\xad\xbe\xef", 0x1000)
     intel_path = tmp_path / "firmware.hex"

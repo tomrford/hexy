@@ -118,9 +118,6 @@ pub(super) fn write_output_for_args(
     });
     match format {
         OutputFormat::IntelHex(options) => hexfile.write_intel_hex_file(&path, options)?,
-        OutputFormat::SRecord(options) if options.bytes_per_line == 0 => {
-            HexFile::new().write_srec_file(&path, options)?;
-        }
         OutputFormat::SRecord(options) => hexfile.write_srec_file(&path, options)?,
         OutputFormat::Binary => hexfile.write_binary_file(&path, &Default::default())?,
         OutputFormat::HexAscii(options) => hexfile.write_hex_ascii_file(&path, options)?,

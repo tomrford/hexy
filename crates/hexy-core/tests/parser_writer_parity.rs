@@ -1,6 +1,7 @@
 use hexy_core::{
-    AutoFormat, BinaryWriteOptions, HexFile, IntelHexWriteOptions, ParseError, SRecordWriteOptions,
-    Segment, detect_format, parse_auto, parse_intel_hex, write_binary, write_intel_hex, write_srec,
+    AutoFormat, BinaryWriteOptions, HexFile, IntelHexWriteOptions, ParseError, SRecordType,
+    SRecordWriteOptions, Segment, detect_format, parse_auto, parse_intel_hex, write_binary,
+    write_intel_hex, write_srec,
 };
 
 #[test]
@@ -103,4 +104,21 @@ fn srecord_writers_keep_split_blocks() {
         output,
         b"S1061000010203E3\r\nS104100304E4\r\nS9030000FC\r\n"
     );
+}
+
+#[test]
+fn srecord_zero_line_length_writes_only_termination() {
+    let image = HexFile::with_segments(vec![Segment::new(u32::MAX, vec![0xAA]).unwrap()]);
+    for (record_type, expected) in [
+        (None, b"S9030000FC\r\n".as_slice()),
+        (Some(SRecordType::S1), b"S9030000FC\r\n".as_slice()),
+        (Some(SRecordType::S2), b"S804000000FB\r\n".as_slice()),
+        (Some(SRecordType::S3), b"S70500000000FA\r\n".as_slice()),
+    ] {
+        let options = SRecordWriteOptions {
+            bytes_per_line: 0,
+            record_type,
+        };
+        assert_eq!(write_srec(&image, &options).unwrap(), expected);
+    }
 }
