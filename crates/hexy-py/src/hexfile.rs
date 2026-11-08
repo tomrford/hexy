@@ -10,9 +10,10 @@ use std::path::PathBuf;
 
 use crate::types::PySegment;
 use crate::util::{
-    CipherArgs, cipher_operation, key_content, mac_operation, parse_fill_pattern, parse_intel_mode,
-    parse_merge_mode, parse_placement, parse_range_arg, parse_ranges_arg, parse_signature_method,
-    parse_srec_type, parse_swap_mode, py_bytes, value_error,
+    CipherArgs, CompressionArgs, cipher_operation, compression_operation, key_content,
+    mac_operation, parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_placement,
+    parse_range_arg, parse_ranges_arg, parse_signature_method, parse_srec_type, parse_swap_mode,
+    py_bytes, value_error,
 };
 
 #[pyclass(name = "HexFile", skip_from_py_object)]
@@ -522,6 +523,56 @@ impl PyHexFile {
         };
         self.inner
             .process_data(&cipher_operation(args, true, tag)?, None)
+            .map_err(value_error)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (method="lzss", *, window_bits=None, length_bits=None, key=None, iv=None, padding=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn compress(
+        &mut self,
+        method: &str,
+        window_bits: Option<u8>,
+        length_bits: Option<u8>,
+        key: Option<&[u8]>,
+        iv: Option<&[u8]>,
+        padding: Option<&str>,
+    ) -> PyResult<()> {
+        let args = CompressionArgs {
+            method,
+            window_bits,
+            length_bits,
+            key,
+            iv,
+            padding,
+        };
+        self.inner
+            .process_data(&compression_operation(args, false)?, None)
+            .map_err(value_error)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (method="lzss", *, window_bits=None, length_bits=None, key=None, iv=None, padding=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn decompress(
+        &mut self,
+        method: &str,
+        window_bits: Option<u8>,
+        length_bits: Option<u8>,
+        key: Option<&[u8]>,
+        iv: Option<&[u8]>,
+        padding: Option<&str>,
+    ) -> PyResult<()> {
+        let args = CompressionArgs {
+            method,
+            window_bits,
+            length_bits,
+            key,
+            iv,
+            padding,
+        };
+        self.inner
+            .process_data(&compression_operation(args, true)?, None)
             .map_err(value_error)?;
         Ok(())
     }

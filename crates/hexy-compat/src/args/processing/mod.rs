@@ -9,9 +9,9 @@ mod params;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    AesGcm, AesKey, AesMode, AesPadding, DataProcessing, DataProcessingStage, GcmTag, MacAlgorithm,
-    MacKey, MacMethod, ProcessingError, RsaPadding, RsaPrivateKey, RsaPublicKey, SignatureMethod,
-    SignatureScheme, VerifyStage, decode_hex_text,
+    AesGcm, AesKey, AesMode, AesPadding, Compression, DataProcessing, DataProcessingStage, GcmTag,
+    Lzss, LzssAes, MacAlgorithm, MacKey, MacMethod, ProcessingError, RsaPadding, RsaPrivateKey,
+    RsaPublicKey, SignatureMethod, SignatureScheme, VerifyStage, decode_hex_text,
 };
 
 use super::error::CliError;
@@ -67,6 +67,18 @@ enum Method {
         padding: RsaPadding,
         decrypt: bool,
     },
+    /// LZSS (`#LZSS` sets its bits when `variable`) or ARLE.
+    Compress {
+        arle: bool,
+        variable: bool,
+        decompress: bool,
+    },
+    /// LZSS and AES-CBC: param4 is the padding, `#IV` the IV (zero without it), and
+    /// `#LZSS` sets the LZSS bits when `variable`.
+    LzssAes {
+        variable: bool,
+        decrypt: bool,
+    },
 }
 
 fn dp_method(number: u8) -> Option<Method> {
@@ -91,6 +103,12 @@ fn dp_method(number: u8) -> Option<Method> {
     };
     let aes = |cipher, decrypt| Method::Aes { cipher, decrypt };
     let rsa = |padding, decrypt| Method::Rsa { padding, decrypt };
+    let lzss = |variable, decompress| Method::Compress {
+        arle: false,
+        variable,
+        decompress,
+    };
+    let lzss_aes = |variable, decrypt| Method::LzssAes { variable, decrypt };
     Some(match number {
         0 => Method::None,
         1 => Method::Xor,
@@ -111,11 +129,20 @@ fn dp_method(number: u8) -> Option<Method> {
         16 => sign(RsaPkcs1v15Md5, true, "SignDAL_MD5.RSA"),
         17 => rsa(RsaPadding::Pkcs1v15, false),
         18 => rsa(RsaPadding::Pkcs1v15, true),
+        26 => lzss(false, false),
+        27 => lzss(false, true),
         28 => sign(RsaPkcs1v15Ripemd160, false, "SignD_RMD160.RSA"),
         30 => mac(HmacSha256, false, "SignD_SHA256.txt", false),
         31 => mac(HmacSha256, true, "SignDAL_SHA256.txt", false),
         32 => sign(RsaPkcs1v15Sha256, false, "SignD_SHA256.RSA"),
         33 => sign(RsaPkcs1v15Sha256, true, "SignDAL_SHA256.RSA"),
+        34 => lzss_aes(false, false),
+        35 => lzss_aes(false, true),
+        36 | 37 => Method::Compress {
+            arle: true,
+            variable: false,
+            decompress: number == 37,
+        },
         38 => sign(RsaPssSha256, false, "SignD_PSS_SHA256.RSA"),
         39 => sign(RsaPssSha256, true, "SignDAL_PSS_SHA256.RSA"),
         40 => rsa(RsaPadding::OaepSha1, false),
@@ -135,6 +162,10 @@ fn dp_method(number: u8) -> Option<Method> {
         54 => aes(Cipher::Ctr, true),
         55 => Method::Gcm { decrypt: false },
         56 => Method::Gcm { decrypt: true },
+        57 => lzss(true, false),
+        58 => lzss(true, true),
+        59 => lzss_aes(true, false),
+        60 => lzss_aes(true, true),
         _ => return None,
     })
 }
@@ -198,6 +229,17 @@ pub(super) fn validate_data_processing(
                 }
             }
         }
+        Method::Compress { variable, .. } => {
+            if variable {
+                used.push("#LZSS");
+            }
+        }
+        Method::LzssAes { variable, .. } => {
+            used.push("#IV");
+            if variable {
+                used.push("#LZSS");
+            }
+        }
         Method::None | Method::Xor | Method::Mac(..) | Method::Rsa { .. } => {}
     }
     for name in options.names().filter(|name| !used.contains(name)) {
@@ -238,18 +280,7 @@ pub(super) fn data_processing_stage(
         },
         Method::Aes { cipher, decrypt } => {
             let key = AesKey::from_key_file(&key()?).map_err(error)?;
-            let iv = params
-                .options
-                .iv
-                .as_deref()
-                .filter(|iv| !iv.is_empty())
-                .map(|iv| {
-                    // HexView pads a short IV with zero bytes and cuts a long one.
-                    let mut block = [0; 16];
-                    let len = iv.len().min(16);
-                    block[..len].copy_from_slice(&iv[..len]);
-                    block
-                });
+            let iv = aes_iv(params);
             let mode = match cipher {
                 Cipher::Ecb => AesMode::Ecb,
                 Cipher::Cbc => AesMode::Cbc { iv },
@@ -313,11 +344,93 @@ pub(super) fn data_processing_stage(
             key: RsaPrivateKey::from_key_file(&key()?).map_err(error)?,
             padding,
         },
+        Method::Compress {
+            arle,
+            variable,
+            decompress,
+        } => {
+            let compression = if arle {
+                Compression::Arle
+            } else if variable {
+                Compression::Lzss(variable_lzss(params)?)
+            } else {
+                Compression::Lzss(Lzss::default())
+            };
+            if decompress {
+                DataProcessing::Decompress(compression)
+            } else {
+                DataProcessing::Compress(compression)
+            }
+        }
+        Method::LzssAes { variable, decrypt } => {
+            let lzss_aes = LzssAes {
+                // HexView takes LZSS bits it cannot use here as the default.
+                lzss: params
+                    .options
+                    .lzss
+                    .as_deref()
+                    .filter(|_| variable)
+                    .and_then(|text| lzss_bits(text).ok())
+                    .unwrap_or_default(),
+                key: AesKey::from_key_file(&key()?).map_err(error)?,
+                iv: aes_iv(params).unwrap_or_default(),
+                padding: params.param4.as_deref().and_then(padding),
+            };
+            if decrypt {
+                DataProcessing::DecryptDecompress(lzss_aes)
+            } else {
+                DataProcessing::CompressEncrypt(lzss_aes)
+            }
+        }
     };
     Ok(Some(DataProcessingStage {
         operation,
         placement: params.placement,
     }))
+}
+
+/// The CBC or CTR IV: `#IV`, which HexView pads with zero bytes or cuts to 16 bytes; an
+/// empty `#IV` is none.
+fn aes_iv(params: &DataProcessingParams) -> Option<[u8; 16]> {
+    let iv = params.options.iv.as_deref().filter(|iv| !iv.is_empty())?;
+    let mut block = [0; 16];
+    let len = iv.len().min(16);
+    block[..len].copy_from_slice(&iv[..len]);
+    Some(block)
+}
+
+/// The LZSS bits of `/DP57` and `/DP58`: `#LZSS`, or the default when the parameter is
+/// empty. HexView fails the stage on any other parameter.
+fn variable_lzss(params: &DataProcessingParams) -> Result<Lzss, String> {
+    match params.options.lzss.as_deref() {
+        Some(text) => lzss_bits(text),
+        None if !params.has_parameter => Ok(Lzss::default()),
+        None => Err("LZSS parameter failure: no #LZSS=window,length".to_owned()),
+    }
+}
+
+/// `#LZSS` bits, read as C's `sscanf("%d,%d")` reads them: each number may follow
+/// whitespace and a sign, and text after the second number is ignored.
+fn lzss_bits(text: &str) -> Result<Lzss, String> {
+    let error = || format!("LZSS parameter failure: #LZSS={text}");
+    let (window, rest) = scan_int(text).ok_or_else(error)?;
+    let (length, _) = scan_int(rest.strip_prefix(',').ok_or_else(error)?).ok_or_else(error)?;
+    let bits = |n: i64| u8::try_from(n).unwrap_or(u8::MAX);
+    Lzss::new(bits(window), bits(length)).map_err(|e| e.to_string())
+}
+
+/// A decimal integer after optional whitespace and sign, and the text after it.
+fn scan_int(text: &str) -> Option<(i64, &str)> {
+    let text = text.trim_start();
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let rest = unsigned.trim_start_matches(|c: char| c.is_ascii_digit());
+    let digits = &unsigned[..unsigned.len() - rest.len()];
+    if digits.is_empty() {
+        return None;
+    }
+    // Numbers too large for i64 are invalid bits all the same.
+    let value = digits.parse::<i64>().unwrap_or(i64::MAX);
+    Some((if text.starts_with('-') { -value } else { value }, rest))
 }
 
 /// The AES-GCM nonce: `#IV`, of which HexView uses at most 16 bytes.
@@ -445,5 +558,16 @@ mod tests {
         assert_eq!(padding("Rfc1"), Some(AesPadding::Rfc1321));
         assert_eq!(padding("RFC"), None);
         assert_eq!(padding("FOO"), None);
+    }
+
+    /// HexView 1.15.2 reads `#LZSS` as C's `sscanf("%d,%d")`.
+    #[test]
+    fn test_lzss_bits_forms() {
+        for text in [" +12, 05,3x", "012,5", "12,5;x"] {
+            assert_eq!(lzss_bits(text).ok(), Lzss::new(12, 5).ok(), "{text}");
+        }
+        for text in ["12a,5", "12", "0x0c,5", ",", "4,4", "12,-1"] {
+            assert!(lzss_bits(text).is_err(), "{text}");
+        }
     }
 }

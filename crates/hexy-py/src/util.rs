@@ -1,7 +1,8 @@
 use hexy_core::{
-    AddressRange, AesGcm, AesKey, AesMode, AesPadding, DataProcessing, GcmTag, IntelHexMode,
-    MacAlgorithm, MacKey, MacMethod, MergeMode, Placement, RsaPadding, RsaPrivateKey, RsaPublicKey,
-    SRecordType, SignatureMethod, SignatureScheme, SwapMode, parse_compat_ranges,
+    AddressRange, AesGcm, AesKey, AesMode, AesPadding, Compression, DataProcessing, GcmTag,
+    IntelHexMode, Lzss, LzssAes, MacAlgorithm, MacKey, MacMethod, MergeMode, Placement, RsaPadding,
+    RsaPrivateKey, RsaPublicKey, SRecordType, SignatureMethod, SignatureScheme, SwapMode,
+    parse_compat_ranges,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -265,7 +266,16 @@ pub(crate) fn cipher_operation(
             )));
         }
     };
-    let padding = match args.padding.map(str::to_ascii_lowercase).as_deref() {
+    let padding = parse_aes_padding(args.padding)?;
+    Ok(if decrypt {
+        DataProcessing::Decrypt { key, mode, padding }
+    } else {
+        DataProcessing::Encrypt { key, mode, padding }
+    })
+}
+
+fn parse_aes_padding(padding: Option<&str>) -> PyResult<Option<AesPadding>> {
+    Ok(match padding.map(str::to_ascii_lowercase).as_deref() {
         None => None,
         Some("pkcs7") => Some(AesPadding::Pkcs7),
         Some("ansix923") => Some(AesPadding::AnsiX923),
@@ -275,10 +285,77 @@ pub(crate) fn cipher_operation(
                 "unknown padding '{other}', expected 'pkcs7', 'ansix923' or 'rfc1321'"
             )));
         }
+    })
+}
+
+/// The arguments shared by `compress` and `decompress`.
+pub(crate) struct CompressionArgs<'a> {
+    pub method: &'a str,
+    pub window_bits: Option<u8>,
+    pub length_bits: Option<u8>,
+    pub key: Option<&'a [u8]>,
+    pub iv: Option<&'a [u8]>,
+    pub padding: Option<&'a str>,
+}
+
+/// LZSS (with AES-CBC when given a key) or ARLE compression or decompression.
+pub(crate) fn compression_operation(
+    args: CompressionArgs<'_>,
+    decompress: bool,
+) -> PyResult<DataProcessing> {
+    let lzss = match args.method.to_ascii_lowercase().as_str() {
+        "lzss" => match (args.window_bits, args.length_bits) {
+            (None, None) => Lzss::default(),
+            (Some(window), Some(length)) => Lzss::new(window, length).map_err(value_error)?,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "window_bits and length_bits go together",
+                ));
+            }
+        },
+        "arle" => {
+            if args.window_bits.is_some() || args.length_bits.is_some() || args.key.is_some() {
+                return Err(PyValueError::new_err(
+                    "arle takes no window_bits, length_bits or key",
+                ));
+            }
+            let compression = Compression::Arle;
+            return Ok(if decompress {
+                DataProcessing::Decompress(compression)
+            } else {
+                DataProcessing::Compress(compression)
+            });
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown compression '{other}', expected 'lzss' or 'arle'"
+            )));
+        }
     };
-    Ok(if decrypt {
-        DataProcessing::Decrypt { key, mode, padding }
+    let Some(key) = args.key else {
+        if args.iv.is_some() || args.padding.is_some() {
+            return Err(PyValueError::new_err("iv and padding need a key"));
+        }
+        let compression = Compression::Lzss(lzss);
+        return Ok(if decompress {
+            DataProcessing::Decompress(compression)
+        } else {
+            DataProcessing::Compress(compression)
+        });
+    };
+    let lzss_aes = LzssAes {
+        lzss,
+        key: AesKey::new(key).map_err(value_error)?,
+        iv: match args.iv {
+            Some(iv) => <[u8; 16]>::try_from(iv)
+                .map_err(|_| PyValueError::new_err("iv must be 16 bytes"))?,
+            None => [0; 16],
+        },
+        padding: parse_aes_padding(args.padding)?,
+    };
+    Ok(if decompress {
+        DataProcessing::DecryptDecompress(lzss_aes)
     } else {
-        DataProcessing::Encrypt { key, mode, padding }
+        DataProcessing::CompressEncrypt(lzss_aes)
     })
 }
