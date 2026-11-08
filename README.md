@@ -10,7 +10,7 @@ Hexy is a reusable binary file modification library based on a cleanroom impleme
 | `hexy-compat` | `cargo install hexy-compat` | Running HexView-style slash-flag workflows from the shell (installs the `hexy` command) |
 | `hexy-py` | `pip install hexy-py` | Scripting in Python with in-memory hex editing and `Pipeline` recipes |
 
-`hexy-compat` is the HexView-compatible CLI built on `hexy-core`. `hexy-py` wraps a subset of the core API for Python. Coverage differs between surfaces — see [known divergences](docs/known-divergences.md) for what each crate exposes and where HexView parity is still incomplete.
+`hexy-compat` is the HexView 1.15.2-compatible CLI built on `hexy-core`, and `hexy-py` exposes the core API to Python. See [known divergences](docs/known-divergences.md) for what each crate owns and where hexy's behaviour differs from HexView's.
 
 For the full slash-flag reference, see [cli-reference.md](skill/hexy-compat/references/cli-reference.md).
 
@@ -46,7 +46,7 @@ Local development uses rustup (`cargo`) and `uv`. CI installs the same tools dir
 ```bash
 cargo build
 cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked
 cargo run -p hexy-compat -- /XI input.hex -o output.hex
 uv run --directory crates/hexy-py --group dev maturin develop
 uv run --directory crates/hexy-py --group dev pytest tests
@@ -79,11 +79,11 @@ See [cli-reference.md](skill/hexy-compat/references/cli-reference.md) for flag s
 use hexy_core::{AddressRange, IntelHexWriteOptions, parse_intel_hex, write_intel_hex};
 
 let mut hf = parse_intel_hex(data)?;
-hf.cut(AddressRange::from_start_end(0x800, 0x8FF)?);
+hf.cut_ranges(&[AddressRange::from_start_end(0x800, 0x8FF)?]);
 let out = write_intel_hex(&hf, &IntelHexWriteOptions::default());
 ```
 
-`Pipeline` reproduces a CLI run: set the stages its flags configure, in any order, and `run` applies them in HexView order. It returns the checksum and data processing bytes for the caller to write.
+`Pipeline` reproduces a CLI run: set the stages its flags configure, in any order, and `run` applies them in HexView order. It returns the checksum, data processing and validation structure bytes for the caller to write.
 
 ```rust
 use hexy_core::{AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, Pipeline};

@@ -151,7 +151,7 @@ pub struct RsaPrivateKey(pub(super) Box<rsa::RsaPrivateKey>);
 
 impl RsaPrivateKey {
     /// A HIS private key (`FF49` or `FF4B`) with modulus and private exponent.
-    pub fn from_his_bytes(bytes: &[u8]) -> Result<Self, ProcessingError> {
+    fn from_his_bytes(bytes: &[u8]) -> Result<Self, ProcessingError> {
         let key = HisRsaKey::parse(bytes)
             .filter(|key| key.private)
             .ok_or_else(|| invalid_key("HIS RSA private key"))?;
@@ -210,7 +210,7 @@ pub struct RsaPublicKey(pub(super) Box<rsa::RsaPublicKey>);
 
 impl RsaPublicKey {
     /// The modulus and public exponent of any HIS key (`7F49`, `7F4B`, `FF49`, `FF4B`).
-    pub fn from_his_bytes(bytes: &[u8]) -> Result<Self, ProcessingError> {
+    fn from_his_bytes(bytes: &[u8]) -> Result<Self, ProcessingError> {
         let key = HisRsaKey::parse(bytes).ok_or_else(|| invalid_key("HIS RSA key"))?;
         rsa::RsaPublicKey::new(key.modulus, key.public_exponent)
             .map(|key| Self(Box::new(key)))
@@ -436,7 +436,7 @@ pub struct P256PublicKey(pub(super) Box<P256VerifyingKey>);
 
 impl P256PublicKey {
     /// A SEC1 point: `04`, X and Y, or a compressed point.
-    pub fn from_sec1_bytes(point: &[u8]) -> Result<Self, ProcessingError> {
+    fn from_sec1_bytes(point: &[u8]) -> Result<Self, ProcessingError> {
         P256VerifyingKey::from_sec1_bytes(point)
             .map(|key| Self(Box::new(key)))
             .map_err(|_| invalid_key("P-256 public key"))

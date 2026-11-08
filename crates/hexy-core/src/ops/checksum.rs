@@ -140,7 +140,7 @@ impl ChecksumAlgorithm {
     }
 
     /// Whether this algorithm's native output format is little-endian.
-    pub fn native_little_endian(&self) -> bool {
+    fn native_little_endian(&self) -> bool {
         matches!(
             self,
             Self::ByteSumLe

@@ -16,11 +16,14 @@ CI clippy is the release gate. Workspace warning lints are useful cleanup signal
 
 ## Structure
 
-- `crates/hexy-core/src/lib.rs` - Module declarations + public re-exports
-- `crates/hexy-compat/src/main.rs` - Compat CLI entry point
-- `crates/hexy-core/src/` - Core library modules
-- `crates/hexy-compat/src/args/` - Compat CLI parser/executor modules
-- `crates/hexy-py/src/` - PyO3 bindings over `hexy-core`
+- `crates/hexy-core/src/` - Core library; `lib.rs` re-exports the public API
+  - `hexfile.rs`, `segment.rs`, `range.rs` - Data model and HexView range text
+  - `pipeline.rs` - `Pipeline`, HexView's stage order
+  - `ops/` - Image operations, checksums, banked maps, validation structures
+  - `processing/` - `/DP` and `/SV`: signatures, MACs, ciphers, compression, keys
+  - `io/` - Parsers, writers and file helpers, including the C, flash kernel, Ford and GAC exports
+- `crates/hexy-compat/src/` - `hexy` CLI; `args/` parses flags (`parse*.rs`, `types.rs`), builds and runs the `Pipeline` (`execute.rs`), reads `/DP` and `/SV` parameters (`processing/`), `/vs` INI settings (`validation.rs`) and exports (`export.rs`)
+- `crates/hexy-py/` - PyO3 bindings over `hexy-core`; `python/hexy/__init__.pyi` documents the Python API, and `tests/test_cli_equivalence.py` checks CLI and `Pipeline` runs match
 
 ### Backlog
 Backlog lives in GitHub Issues.

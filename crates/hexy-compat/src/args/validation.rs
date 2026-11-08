@@ -10,7 +10,7 @@ use crate::{
 
 use super::error::CliError;
 use super::export::load_export_ini;
-use super::io::{ReadProvider, checksum_constant};
+use super::io::checksum_constant;
 use super::parse_util::{parse_lenient_number, parse_ranges};
 use super::processing::{DataProcessingParams, data_processing_stage, parse_data_processing};
 use super::report::Report;
@@ -32,12 +32,8 @@ impl Validation {
     /// 0. A tag is its hex digits as HEX ASCII data, or with `IdTag...Length` the hex
     /// value in that many bytes. A tag with a length but no value makes HexView build
     /// the structure but neither insert nor sum it.
-    pub(super) fn from_ini(
-        args: &Args,
-        provider: &impl ReadProvider,
-        report: &Report,
-    ) -> Result<Option<Self>, CliError> {
-        let ini = load_export_ini(args, provider, "VALIDATION")?;
+    pub(super) fn from_ini(args: &Args, report: &Report) -> Result<Option<Self>, CliError> {
+        let ini = load_export_ini(args, "VALIDATION")?;
         if ini.is_empty() {
             report.warn("/vs: the INI file has no [VALIDATION] section");
             return Ok(None);
@@ -56,7 +52,7 @@ impl Validation {
             }
             match ChecksumAlgorithm::try_from(parse_lenient_number(value).min(255) as u8) {
                 Ok(ChecksumAlgorithm::Constant(_)) => Ok(Some(ChecksumAlgorithm::Constant(
-                    checksum_constant(provider).map_err(CliError::Other)?,
+                    checksum_constant().map_err(CliError::Other)?,
                 ))),
                 Ok(algorithm) => Ok(Some(algorithm)),
                 // HexView writes an empty checksum and fails the run.
@@ -138,23 +134,20 @@ pub(super) fn hsm_validation_stage(
     args: &Args,
     placement: Option<Placement>,
     dir: &Path,
-    provider: &impl ReadProvider,
 ) -> Result<HsmValidationStage, String> {
-    let ini = load_export_ini(args, provider, "HSMBOOT").map_err(|e| e.to_string())?;
+    let ini = load_export_ini(args, "HSMBOOT").map_err(|e| e.to_string())?;
     let text = |key: &str| ini.get(key).map_or("", String::as_str).trim();
     let hash = match text("hash_method") {
         "" => ChecksumAlgorithm::Sha256,
         method => match ChecksumAlgorithm::try_from(parse_lenient_number(method).min(255) as u8)
             .map_err(|e| e.to_string())?
         {
-            ChecksumAlgorithm::Constant(_) => {
-                ChecksumAlgorithm::Constant(checksum_constant(provider)?)
-            }
+            ChecksumAlgorithm::Constant(_) => ChecksumAlgorithm::Constant(checksum_constant()?),
             algorithm => algorithm,
         },
     };
-    let signature = match hsm_signature_params(args, provider)? {
-        Some(params) => data_processing_stage(&params, dir, provider)?.map(|stage| stage.operation),
+    let signature = match hsm_signature_params(args)? {
+        Some(params) => data_processing_stage(&params, dir)?.map(|stage| stage.operation),
         None => None,
     };
     Ok(HsmValidationStage {
@@ -169,11 +162,8 @@ pub(super) fn hsm_validation_stage(
 }
 
 /// The `/DP` parameters of the `[HSMBOOT]` signature, which also name its output file.
-pub(super) fn hsm_signature_params(
-    args: &Args,
-    provider: &impl ReadProvider,
-) -> Result<Option<DataProcessingParams>, String> {
-    let ini = load_export_ini(args, provider, "HSMBOOT").map_err(|e| e.to_string())?;
+pub(super) fn hsm_signature_params(args: &Args) -> Result<Option<DataProcessingParams>, String> {
+    let ini = load_export_ini(args, "HSMBOOT").map_err(|e| e.to_string())?;
     let text = |key: &str| ini.get(key).map_or("", String::as_str).trim();
     match text("signature_method") {
         "" => Ok(None),

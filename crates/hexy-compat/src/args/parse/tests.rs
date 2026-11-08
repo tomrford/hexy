@@ -28,18 +28,31 @@ fn test_output_params_follow_hexview() {
     assert_eq!(options.mode, crate::IntelHexMode::Auto);
 }
 
+/// `/AD` and `/AF` read their value after `:`, `=` or nothing; without a separator the
+/// value is hex, and a binary `/AD` value is ignored.
 #[test]
-fn test_parse_ad_no_separator_hex() {
-    let mut args = Args::default();
-    parse_option(&mut args, "AD10").unwrap();
-    assert_eq!(args.align_address, Some(0x10));
-}
-
-#[test]
-fn test_parse_af_no_separator_hex() {
-    let mut args = Args::default();
-    parse_option(&mut args, "AF0A").unwrap();
-    assert_eq!(args.align_fill, 0x0A);
+fn test_parse_align_value_forms() {
+    let parse = |opt: &str| {
+        let mut args = Args::default();
+        parse_option(&mut args, opt).unwrap();
+        args
+    };
+    for (opt, address) in [
+        ("AD10", Some(0x10)),
+        ("AD:10", Some(10)),
+        ("AD:0b100", None),
+    ] {
+        assert_eq!(parse(opt).align_address, address, "{opt}");
+    }
+    for (opt, fill) in [
+        ("AF0A", 0x0A),
+        ("AFCD", 0xCD),
+        ("AF:0xCD", 0xCD),
+        ("AF=0xCD", 0xCD),
+    ] {
+        assert_eq!(parse(opt).align_fill, fill, "{opt}");
+    }
+    assert_eq!(parse("AF:0b10101010").align_fill, 0xAA);
 }
 
 #[test]

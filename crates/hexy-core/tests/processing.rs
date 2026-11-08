@@ -382,7 +382,9 @@ fn test_pss_verification_with_tiny_public_key_returns_error() {
     public.extend([0; 31]);
     public.extend([1, 0x82, 3, 1, 0, 1]);
     let method = method(SignatureScheme::RsaPssSha256, false);
-    let key = hexy_core::VerifyingKey::Rsa(RsaPublicKey::from_his_bytes(&public).unwrap());
+    let public_text: String = public.iter().map(|byte| format!("{byte:02X}")).collect();
+    let key =
+        hexy_core::VerifyingKey::Rsa(RsaPublicKey::from_key_file(public_text.as_bytes()).unwrap());
     assert!(matches!(
         image().verify_signature(method, &key, &[0; 33]),
         Err(ProcessingError::VerificationFailed)
@@ -414,9 +416,8 @@ fn test_placement_writes_output_into_image() {
 
 #[test]
 fn test_invalid_his_zero_modulus_returns_error() {
-    let key = hex("FF490A81008203010001910101");
     assert!(matches!(
-        RsaPrivateKey::from_his_bytes(&key),
+        RsaPrivateKey::from_key_file(b"FF490A81008203010001910101"),
         Err(ProcessingError::InvalidKey(_))
     ));
 }

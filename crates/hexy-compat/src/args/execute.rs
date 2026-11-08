@@ -7,10 +7,7 @@ use crate::{
 
 use super::error::CliError;
 use super::export::write_output_for_args;
-use super::io::{
-    FsProvider, ReadProvider, checksum_options, load_input, write_checksum_text,
-    write_data_processing_text,
-};
+use super::io::{checksum_options, load_input, write_checksum_text, write_data_processing_text};
 use super::log::execute_log;
 use super::processing::{
     data_processing_output, data_processing_stage, validate_data_processing,
@@ -49,10 +46,9 @@ impl Args {
 
     /// Execute the parsed arguments in compatibility processing order.
     pub(super) fn execute(&self, report: &Report) -> Result<(), CliError> {
-        let provider = &FsProvider;
         self.validate_supported_features(report)?;
 
-        let mut hexfile = self.load_hexfile(provider, report)?;
+        let mut hexfile = self.load_hexfile(report)?;
         // HexView joins adjacent data into one block when it loads a file.
         hexfile.normalize();
         let mut pipeline = self.pipeline(report);
@@ -61,13 +57,13 @@ impl Args {
         let dir = self.processing_dir();
         let mut stage_error = None;
         for stage in pipeline.stages() {
-            self.before_stage(stage, &mut pipeline, provider)?;
+            self.before_stage(stage, &mut pipeline)?;
             let result = if let Stage::Merge(index) = stage {
-                self.merge_stage(index, &mut pipeline, &mut hexfile, &mut output, provider)?;
+                self.merge_stage(index, &mut pipeline, &mut hexfile, &mut output)?;
                 Ok(())
             } else {
                 let prepared = if stage == Stage::Validation && self.validation {
-                    Validation::from_ini(self, provider, report)
+                    Validation::from_ini(self, report)
                         .map(|prepared| {
                             pipeline.validation =
                                 prepared.as_ref().map(|validation| validation.stage.clone());
@@ -78,7 +74,7 @@ impl Args {
                     Ok(())
                 };
                 prepared
-                    .and_then(|()| self.prepare_stage(stage, &mut pipeline, &dir, provider))
+                    .and_then(|()| self.prepare_stage(stage, &mut pipeline, &dir))
                     .and_then(|()| {
                         pipeline
                             .run_stage(stage, &mut hexfile, &mut output)
@@ -93,9 +89,7 @@ impl Args {
             });
             match result {
                 Ok(()) => {
-                    if let Err(error) =
-                        self.after_stage(stage, &mut hexfile, &output, &dir, provider)
-                    {
+                    if let Err(error) = self.after_stage(stage, &mut hexfile, &output, &dir) {
                         if !matches!(stage, Stage::Merge(_) | Stage::AddressFilter) {
                             return Err(error);
                         }
@@ -126,7 +120,7 @@ impl Args {
                 }
             }
         }
-        write_output_for_args(self, &hexfile, provider, report)?;
+        write_output_for_args(self, &hexfile, report)?;
         stage_error.map_or(Ok(()), Err)
     }
 
@@ -141,25 +135,24 @@ impl Args {
 
     /// `/DP` and `/SV` parameters are read when their stage runs, so that a method
     /// HexView does not know fails only its stage and `/SV` can read `/DP`'s output.
-    fn prepare_stage<P: ReadProvider>(
+    fn prepare_stage(
         &self,
         stage: Stage,
         pipeline: &mut Pipeline,
         dir: &Path,
-        provider: &P,
     ) -> Result<(), String> {
         match stage {
             Stage::HsmValidation => {
                 pipeline.hsm_validation = self
                     .hsm_validation
-                    .map(|placement| hsm_validation_stage(self, placement, dir, provider))
+                    .map(|placement| hsm_validation_stage(self, placement, dir))
                     .transpose()?;
             }
             Stage::DataProcessing => {
                 pipeline.data_processing = self
                     .data_processing
                     .as_ref()
-                    .map(|params| data_processing_stage(params, dir, provider))
+                    .map(|params| data_processing_stage(params, dir))
                     .transpose()?
                     .flatten();
             }
@@ -167,7 +160,7 @@ impl Args {
                 pipeline.verify = self
                     .signature_verify
                     .as_ref()
-                    .map(|params| verify_stage(params, dir, provider))
+                    .map(|params| verify_stage(params, dir))
                     .transpose()?;
             }
             _ => {}
@@ -246,15 +239,10 @@ impl Args {
     }
 
     /// Preparation failures are fatal, after side effects from earlier stages.
-    fn before_stage<P: ReadProvider>(
-        &self,
-        stage: Stage,
-        pipeline: &mut Pipeline,
-        provider: &P,
-    ) -> Result<(), CliError> {
+    fn before_stage(&self, stage: Stage, pipeline: &mut Pipeline) -> Result<(), CliError> {
         if let Stage::Checksum(index) = stage {
             let (params, flag) = self.checksum_stage(index);
-            pipeline.checksums[index].options = checksum_options(params, provider)
+            pipeline.checksums[index].options = checksum_options(params)
                 .map_err(|error| CliError::Other(format!("{flag}: {error}")))?;
         }
         Ok(())
@@ -262,13 +250,12 @@ impl Args {
 
     /// Resolve each wildcard group at its stage and apply matches before reading
     /// later files. Only the first match receives the group's offset and range.
-    fn merge_stage<P: ReadProvider>(
+    fn merge_stage(
         &self,
         index: usize,
         pipeline: &mut Pipeline,
         hexfile: &mut HexFile,
         output: &mut PipelineOutput,
-        provider: &P,
     ) -> Result<(), CliError> {
         let Some(spec) = &self.merge else {
             return Ok(());
@@ -278,7 +265,7 @@ impl Args {
         for (match_index, path) in merge_files(&params.file)?.iter().enumerate() {
             let first = match_index == 0;
             pipeline.merges[index] = Merge {
-                file: load_input(provider, path)?,
+                file: load_input(path)?,
                 options: MergeOptions {
                     mode: spec.mode,
                     offset: params.offset.filter(|_| first).unwrap_or(0),
@@ -294,13 +281,12 @@ impl Args {
 
     /// Compat side effects between stages: `/L` runs after `/AR`, and checksum and
     /// data processing files are written as soon as their bytes exist.
-    fn after_stage<P: ReadProvider>(
+    fn after_stage(
         &self,
         stage: Stage,
         hexfile: &mut HexFile,
         output: &PipelineOutput,
         dir: &Path,
-        provider: &P,
     ) -> Result<(), CliError> {
         match stage {
             Stage::Merge(index) => {
@@ -317,7 +303,7 @@ impl Args {
                 if let Some(content) = self
                     .log_file
                     .as_deref()
-                    .and_then(|path| provider.read_bytes(path).ok())
+                    .and_then(|path| std::fs::read(path).ok())
                 {
                     execute_log(hexfile, &String::from_utf8_lossy(&content))?;
                 }
@@ -333,7 +319,7 @@ impl Args {
             }
             Stage::HsmValidation => {
                 if let Some(signature) = &output.hsm_signature
-                    && let Some(params) = hsm_signature_params(self, provider)
+                    && let Some(params) = hsm_signature_params(self)
                         .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?
                     && let Some((path, crlf)) = data_processing_output(&params, dir)
                 {
@@ -443,21 +429,17 @@ impl Args {
 
     /// The positional input file, or without one the last import. HexView ignores an
     /// import next to an input file with a warning, and starts empty without either.
-    fn load_hexfile<P: ReadProvider>(
-        &self,
-        provider: &P,
-        report: &Report,
-    ) -> Result<HexFile, CliError> {
+    fn load_hexfile(&self, report: &Report) -> Result<HexFile, CliError> {
         if let Some(ref path) = self.input_file {
             if self.import.is_some() {
                 report.warn("cannot import a file next to an input file; ignoring the import");
             }
-            return load_input(provider, path);
+            return load_input(path);
         }
         let Some(import) = &self.import else {
             return Ok(HexFile::new());
         };
-        let content = provider.read_bytes(&import.file)?;
+        let content = std::fs::read(&import.file)?;
         Ok(match import.kind {
             ImportKind::Binary => crate::parse_binary(&content, import.offset)?,
             ImportKind::HexAscii => crate::parse_hex_ascii(&content, import.offset)?,
