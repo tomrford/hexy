@@ -10,7 +10,7 @@ produce output, such as a signature, which can also be placed into the image:
 
 ```rust
 use hexy_core::{
-    DataProcessing, HexFile, Placement, ProcessingError, SignatureMethod, SignatureScheme,
+    DataProcessing, HexFile, ProcessingError, SignatureMethod, SignatureScheme,
 };
 
 fn sign_and_verify(
@@ -24,7 +24,7 @@ fn sign_and_verify(
     };
     let key = method.scheme.signing_key(private_key_file)?;
     let signature = hexfile
-        .process_data(&DataProcessing::Sign { method, key }, Some(Placement::Append))?
+        .process_data(&DataProcessing::Sign { method, key }, None)?
         .unwrap_or_default();
 
     let key = method.scheme.verifying_key(public_key_file)?;
