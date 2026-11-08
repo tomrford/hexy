@@ -116,8 +116,9 @@ When a cipher fails, the blocks before the failing one stay replaced, as in HexV
 ### Compression
 
 Compression replaces each block's data from its start address, like a cipher; a block
-that grows overwrites what follows it. hexy's compressed output is byte for byte
-HexView's, so other tools that decompress HexView's output read hexy's.
+that grows overwrites what follows it. LZSS output matches HexView byte for byte.
+ARLE has documented differences for some interior-zero patterns; see
+[known divergences](known-divergences.md).
 
 `Lzss` holds the window and length field sizes in bits, 10 and 4 by default (Ford
 SWDL005), with `0 < length < window < 16`. The stream is MSB-first bits:
