@@ -221,7 +221,7 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 
 `/SVn:keyinfo!signatureinfo`
 - Verify a signature after `/DP`, so a placed signature is part of the verified data. Supported methods are `/SV4` through `/SV11`.
-- `keyinfo` takes the `/DP` param1 forms; a private key gives its public key.
+- `keyinfo` takes the `/DP` param1 forms. RSA private keys supply their public key; Ed25519 private PEM/DER must include the public key.
 - `signatureinfo` is hex text inline, or a file of hex text such as a `/DP` output file.
 - A failed verification is reported like a failed `/DP`.
 

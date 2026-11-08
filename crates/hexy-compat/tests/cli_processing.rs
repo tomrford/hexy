@@ -104,11 +104,14 @@ fn test_processing_paths_accept_quoted_fields() {
     for source in [
         "\"private key.txt\"",
         "\"key file.ini\",\"Keys\",\"Private\"",
+        " private key.txt ",
+        " key file.ini , Keys , Private ",
+        " \"key file.ini\" , \"Keys\" , \"Private\" ",
     ] {
-        let dp = format!("/DP32:{source};\"signature file.txt\"");
+        let dp = format!("/DP32:{source}; \"signature file.txt\" ");
         assert_success(&run(
             &input,
-            &[&dp, "/SV4:\"public key.txt\"!\"signature file.txt\""],
+            &[&dp, "/SV4: \"public key.txt\" ! \"signature file.txt\" "],
         ));
         assert_eq!(
             std::fs::read_to_string(dir.join("signature file.txt")).unwrap(),

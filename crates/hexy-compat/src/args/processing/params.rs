@@ -103,7 +103,7 @@ pub(in crate::args) fn parse_data_processing(
             "/DP{method} has more than one ';'"
         )));
     }
-    let param4 = strip_quotes(param4);
+    let param4 = strip_quotes(param4.trim());
     Ok(DataProcessingParams {
         method,
         placement,
@@ -120,19 +120,21 @@ pub(in crate::args) fn parse_signature_verify(method: u8, value: &str) -> Signat
     SignatureVerifyParams {
         method,
         key: parse_source(key_params),
-        signature: parts.next().map(|value| strip_quotes(value).to_owned()),
+        signature: parts
+            .next()
+            .map(|value| strip_quotes(value.trim()).to_owned()),
     }
 }
 
 fn parse_source(params: &str) -> ParamSource {
     if let [file, section, key] = params.split(',').collect::<Vec<_>>()[..] {
         return ParamSource::Ini {
-            file: PathBuf::from(strip_quotes(file)),
-            section: strip_quotes(section).to_owned(),
-            key: strip_quotes(key).to_owned(),
+            file: PathBuf::from(strip_quotes(file.trim())),
+            section: strip_quotes(section.trim()).to_owned(),
+            key: strip_quotes(key.trim()).to_owned(),
         };
     }
-    let params = strip_quotes(params);
+    let params = strip_quotes(params.trim());
     if decode_hex_text(params.as_bytes()).is_some() {
         ParamSource::Inline(params.to_owned())
     } else {
@@ -170,7 +172,7 @@ fn parse_hex(token: &str, value: &str) -> Result<Vec<u8>, ParseArgError> {
 }
 
 fn parse_data_input(value: &str) -> Result<DataInput, ParseArgError> {
-    let value = strip_quotes(value);
+    let value = strip_quotes(value.trim());
     if let Some(range) = value.strip_prefix('@') {
         let (start, length) = range
             .split_once(',')
