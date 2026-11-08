@@ -134,6 +134,31 @@ class HexFile:
     ) -> bytes:
         """A CCP/XCP flash kernel file (`/XK`) of a single-block image. Header values
         are written as given; by default they describe the block."""
+    def validation_structure(
+        self,
+        *,
+        tag_begin: bytes,
+        tag_end: bytes,
+        block_checksum: int | None = None,
+        file_checksum: int | None = None,
+        validate_sum: bool = False,
+        big_endian: bool = False,
+        force_32bit: bool = False,
+        alfi: bool = False,
+        one_byte_count: bool = False,
+        spare: RangesLike | None = None,
+    ) -> bytes:
+        """HexView's `/vs` validation structure over the blocks, leaving out `spare`:
+        the tags, block count, each block's address, length and `block_checksum`
+        method result, the `file_checksum` result over all blocks, and with
+        `validate_sum` the 16-bit sum of those bytes. Addresses and lengths take 32
+        bits when forced or when a block ends above 0xFFFF."""
+    def hsm_validation_structure(
+        self, *, group_id: int = 0, mode: int = 0, hash: int = 20
+    ) -> bytes:
+        """HexView's `/vshsm` structure over the blocks: big-endian group ID, segment
+        count, and each block's address, length, mode and `hash` checksum method
+        result."""
     def to_gac_swil(self) -> bytes:
         """A GAC software interlock file (`/XGACSWIL`): the block count, each block's
         big-endian address and length, then the data."""

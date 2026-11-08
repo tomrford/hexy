@@ -416,3 +416,22 @@ fn test_cli_constant_checksum_reads_expdatproc_ini() {
         "0x08, 0x15"
     );
 }
+
+#[test]
+fn test_cli_validation_config_error_preserves_earlier_output() {
+    let dir = temp_dir("cli_validation_config_order");
+    write_file(&dir.join("in.bin"), &[1, 2, 3, 4]);
+    write_file(&dir.join("in.ini"), b"[VALIDATION]\nBlockChecksumType=16\n");
+    write_file(&dir.join("expdatproc.ini"), b"[constant]\nNumBytes=0\n");
+    let output = run_in(
+        &dir,
+        &["/IN:in.bin", "/CS0:cs.txt", "/vs", "/XN", "-o", "out.bin"],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/vs"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("cs.txt")).unwrap(),
+        "0x00, 0x0A"
+    );
+    assert_eq!(std::fs::read(dir.join("out.bin")).unwrap(), [1, 2, 3, 4]);
+}

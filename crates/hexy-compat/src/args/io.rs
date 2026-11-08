@@ -67,7 +67,7 @@ pub(super) fn checksum_options(
 /// Method 16 bytes from `[constant]` in `expdatproc.ini` in the working directory, as
 /// HexView's expdatproc reads them: `NumBytes` (default 2) bytes taken as digit pairs
 /// from `HexDataString` (default `0815`), a trailing single digit making the last byte.
-fn checksum_constant(provider: &impl ReadProvider) -> Result<Vec<u8>, String> {
+pub(super) fn checksum_constant(provider: &impl ReadProvider) -> Result<Vec<u8>, String> {
     let ini = load_ini_or_empty(Path::new("expdatproc.ini"), provider, Some("constant"))
         .map_err(|e| format!("expdatproc.ini: {e}"))?;
     let num_bytes = ini

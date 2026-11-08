@@ -18,12 +18,13 @@ pub use io::{
 };
 pub use ops::{
     AlignOptions, BankedMapOptions, ChecksumAlgorithm, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT,
-    FillOptions, ForcedRange, MapCollision, MergeMode, MergeOptions, OpsError, RemapOptions,
-    SwapMode,
+    FillOptions, ForcedRange, HsmValidationOptions, MapCollision, MergeMode, MergeOptions,
+    OpsError, RemapOptions, SwapMode, ValidationBlock, ValidationCOptions, ValidationOptions,
+    ValidationStructure, write_validation_c,
 };
 pub use pipeline::{
-    AddressMap, ChecksumStage, DataProcessingStage, DspicOp, Fill, FillData, Merge, Pipeline,
-    PipelineError, PipelineOutput, Stage, VerifyStage,
+    AddressMap, ChecksumStage, DataProcessingStage, DspicOp, Fill, FillData, HsmValidationStage,
+    Merge, Pipeline, PipelineError, PipelineOutput, Stage, ValidationStage, VerifyStage,
 };
 pub use processing::{
     AesGcm, AesKey, AesMode, AesPadding, Compression, DataProcessing, Ed25519PrivateKey,

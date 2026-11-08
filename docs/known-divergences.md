@@ -18,6 +18,7 @@ Hexy has three public surfaces:
 - binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file helpers, and HexView's C-array, CCP/XCP flash kernel, GAC software interlock and Ford Intel HEX writers
 - filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, address scaling, banked mapping, and remap operations
 - checksum calculation and writeback through `ChecksumOptions` and a `Placement`
+- HexView's validation structures (`/vs`, `/vshsm`) and the `/vs` C files
 - data processing (signing) and signature verification, with typed key readers for HexView's key formats
 - `Pipeline`, the HexView stage order with typed parameters per stage, which the compat CLI and `hexy-py` both drive
 
@@ -31,6 +32,7 @@ Hexy has three public surfaces:
 - checksum methods 0-22 through `/CS*` and `/CSR*`, including the `expdatproc.ini` constant (`/CS16`)
 - additional feature: sequential multi-checksum execution through `/CSM*` and `/CSMR*`
 - signing and verification through the supported `/DP` and `/SV` subset, with HexView's full `/DP` parameter grammar
+- validation structures (`/vs`, `/vshsm`)
 - output through Intel HEX (`/XI`), S-Record (`/XS`), binary (`/XN`), HEX ASCII (`/XA`), C arrays (`/XC`), CCP/XCP flash kernels (`/XK`), GAC software interlock files (`/XGACSWIL`), Ford Intel HEX (`/XF`), Porsche (`/XP`), and separate binaries (`/XSB`)
 
 `hexy-compat` does not expose every `hexy-core` operation as an independent CLI feature. Library-only surface includes segment append/prepend, arbitrary sparse reads, `to_bytes`-style contiguous inspection, standalone address scaling/unscaling APIs, direct banked-map configuration, direct C-code writer options, and the typed key readers.
@@ -44,6 +46,7 @@ Hexy has three public surfaces:
 - segment inspection, sparse reads, contiguous byte export, direct byte writes, normalization, append/prepend segment operations, filter, cut, fill, gap fill, merge, offset, align, split, small-block removal, byte swap, dsPIC transforms, remap, and S08/S12/S12X mapping
 - `Pipeline`, which applies stages in hexy CLI order, including checksum calculation and writeback, signing and verification
 - signing and verification on `HexFile`
+- the `/vs` and `/vshsm` validation structure bytes on `HexFile`
 
 `hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
 
@@ -84,7 +87,9 @@ Do not claim these areas as drop-in compatible with HexView yet.
 - a negative range length such as `/CR:8,-4`: HexView leaves overlapping blocks; hexy skips the range
 - `/IN` or `/IA` data that would reach past `0xFFFFFFFF`: HexView wraps it around to address 0; hexy fails
 - `/XF` with `FLASH ERASE SECTORS` in the INI file: HexView sometimes writes the block list instead, depending on the value and on `FLASH INDICATOR` and `DOWNLOAD FORMAT` (for example a `:start,length` list with `FLASH INDICATOR=1`); hexy always writes the INI text
+- `/vs` with a checksum method that fails on the data, such as method 5 on an odd length: HexView still writes its C files; hexy fails the stage without them
+- `/vs` with more than 255 blocks in a one-byte count: both write the count modulo 256
 - `/L` lines `FileOpen<name>` without a blank, such as `FileOpenx`: HexView fails for some names; hexy empties the image like any other `FileOpen` with a name
-- HexView options for OEM containers, GM headers, VBF files, validation structures and external DLLs (`/XG*`, `/XGAC`, `/XGMFBL`, `/XV`, `/XVBF`, `/XVBFSUBST`, `/MVBF`, `/XB`, `/xfca_sign`, `/vs`, `/vshsm`, `/PB`, `/expdat`): hexy rejects them; see [the CLI reference](../skill/hexy-compat/references/cli-reference.md)
+- HexView options for OEM containers, GM headers, VBF files and external DLLs (`/XG*`, `/XGAC`, `/XGMFBL`, `/XV`, `/XVBF`, `/XVBFSUBST`, `/MVBF`, `/XB`, `/xfca_sign`, `/PB`, `/expdat`): hexy rejects them; see [the CLI reference](../skill/hexy-compat/references/cli-reference.md)
 
 The boundary here is compatibility claims, not implementation status. Resolved HexView parity findings are not kept as open divergences.

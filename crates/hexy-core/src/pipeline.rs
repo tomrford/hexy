@@ -15,8 +15,9 @@ use thiserror::Error;
 
 use crate::{
     AddressRange, AlignOptions, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT, DataProcessing,
-    FillOptions, HexFile, MergeOptions, OpsError, Placement, ProcessingError, RemapOptions,
-    SignatureMethod, SwapMode, VerifyingKey,
+    FillOptions, HexFile, HsmValidationOptions, MergeOptions, OpsError, Placement, ProcessingError,
+    RemapOptions, Segment, SignatureMethod, SwapMode, ValidationOptions, ValidationStructure,
+    VerifyingKey,
 };
 
 /// One address-mapping operation; HexView applies at most one per run.
@@ -70,6 +71,27 @@ pub struct DataProcessingStage {
     pub placement: Option<Placement>,
 }
 
+/// HexView's validation structure (`/vs`), built after the other stages.
+#[derive(Debug, Clone)]
+pub struct ValidationStage {
+    pub options: ValidationOptions,
+    /// Where the structure is inserted as a block of its own. As in HexView, it is not
+    /// inserted where it would overlap data.
+    pub address: Option<u32>,
+}
+
+/// The vHSM validation structure (`/vshsm`), built after the other stages. An optional
+/// signature over it goes just before it, in the same block. As in HexView, neither is inserted where
+/// they would overlap data.
+#[derive(Debug, Clone)]
+pub struct HsmValidationStage {
+    pub options: HsmValidationOptions,
+    /// `None` builds the structure, and any signature, without inserting it.
+    pub placement: Option<Placement>,
+    /// A data processing signature or MAC over the structure.
+    pub signature: Option<DataProcessing>,
+}
+
 #[derive(Debug, Clone)]
 pub struct VerifyStage {
     pub method: SignatureMethod,
@@ -97,6 +119,8 @@ pub enum Stage {
     Checksum(usize),
     DataProcessing,
     Verify,
+    Validation,
+    HsmValidation,
 }
 
 impl Stage {
@@ -121,7 +145,12 @@ impl Stage {
             Self::RemoveSmallBlocks,
         ])
         .chain((0..checksum_count).map(Self::Checksum))
-        .chain([Self::DataProcessing, Self::Verify])
+        .chain([
+            Self::DataProcessing,
+            Self::Verify,
+            Self::Validation,
+            Self::HsmValidation,
+        ])
     }
 }
 
@@ -140,6 +169,9 @@ pub struct PipelineOutput {
     pub checksums: Vec<Vec<u8>>,
     /// The data processing output, such as a signature.
     pub data_processing: Option<Vec<u8>>,
+    pub validation: Option<ValidationStructure>,
+    /// The signature over the vHSM validation structure.
+    pub hsm_signature: Option<Vec<u8>>,
 }
 
 /// Stage parameters; unset stages are skipped.
@@ -166,6 +198,8 @@ pub struct Pipeline {
     pub checksums: Vec<ChecksumStage>,
     pub data_processing: Option<DataProcessingStage>,
     pub verify: Option<VerifyStage>,
+    pub validation: Option<ValidationStage>,
+    pub hsm_validation: Option<HsmValidationStage>,
 }
 
 impl Pipeline {
@@ -197,7 +231,13 @@ impl Pipeline {
             return result;
         }
         let places_data = match stage {
-            Stage::Split | Stage::RemoveSmallBlocks | Stage::Swap | Stage::Verify => false,
+            // The validation structure stays a block of its own.
+            Stage::Split
+            | Stage::RemoveSmallBlocks
+            | Stage::Swap
+            | Stage::Verify
+            | Stage::HsmValidation
+            | Stage::Validation => false,
             Stage::AddressMap => self.address_map.is_some(),
             Stage::DspicExpand => !self.dspic_expand.is_empty(),
             Stage::DspicShrink => !self.dspic_shrink.is_empty(),
@@ -328,7 +368,75 @@ impl Pipeline {
                     hexfile.verify_signature(stage.method, &stage.key, &stage.signature)?;
                 }
             }
+            Stage::HsmValidation => {
+                if let Some(stage) = &self.hsm_validation {
+                    let structure = hexfile.hsm_validation_structure(&stage.options)?;
+                    let range = match stage.placement {
+                        Some(placement) => hexfile.placement_range(placement, structure.len())?,
+                        None => None,
+                    };
+                    let start = range.map_or(0, |range| range.start());
+                    let mut block = Segment::new(start, structure).map_err(OpsError::from)?;
+                    let signature = match &stage.signature {
+                        // A cipher or XOR changes the structure itself.
+                        Some(operation) => {
+                            let mut processed = HexFile::with_segments(vec![block.clone()]);
+                            let signature = processed.process_data(operation, None)?;
+                            if let Some(data) = processed.into_segments().pop() {
+                                block = data;
+                            }
+                            signature
+                        }
+                        None => None,
+                    };
+                    output.hsm_signature.clone_from(&signature);
+                    let Some(range) = range else {
+                        return Ok(());
+                    };
+                    let block = match &signature {
+                        // The signature and the structure form one block.
+                        Some(signature) => {
+                            let start = range.start().checked_sub(signature.len() as u32).ok_or(
+                                OpsError::AddressOverflow {
+                                    address: range.start(),
+                                },
+                            )?;
+                            let data = [signature.as_slice(), block.data()].concat();
+                            Segment::new(start, data).map_err(OpsError::from)?
+                        }
+                        None => block,
+                    };
+                    insert_free(hexfile, vec![block]);
+                }
+            }
+            Stage::Validation => {
+                if let Some(stage) = &self.validation {
+                    let structure = hexfile.validation_structure(&stage.options)?;
+                    // HexView inserts no structure without blocks.
+                    if let Some(address) = stage.address.filter(|_| !structure.blocks.is_empty()) {
+                        let block = Segment::new(address, structure.bytes.clone())
+                            .map_err(OpsError::from)?;
+                        insert_free(hexfile, vec![block]);
+                    }
+                    output.validation = Some(structure);
+                }
+            }
         }
         Ok(())
+    }
+}
+
+/// Add `blocks` as blocks of their own unless one overlaps data.
+fn insert_free(hexfile: &mut HexFile, blocks: Vec<Segment>) {
+    let free = blocks.iter().all(|block| {
+        hexfile.segments().iter().all(|segment| {
+            segment.end_address() < block.start_address()
+                || segment.start_address() > block.end_address()
+        })
+    });
+    if free {
+        for block in blocks {
+            hexfile.append_segment(block);
+        }
     }
 }

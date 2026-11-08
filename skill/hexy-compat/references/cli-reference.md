@@ -40,7 +40,8 @@ The external compatibility target also supports additional proprietary or OEM-sp
 16. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
 17. Apply supported data processing (signing, MACs, XOR, AES, RSA encryption, compression) with `/DP`.
 18. Apply supported signature verification with `/SV`.
-19. Export with `/X...` and `-o`.
+19. Build validation structures with `/vs`, then `/vshsm`.
+20. Export with `/X...` and `-o`.
 
 ## Input and runtime
 
@@ -237,6 +238,22 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 - `signatureinfo` is hex text inline, or a file of hex text such as a `/DP` output file.
 - A failed verification is reported like a failed `/DP`.
 
+## Validation structures
+
+`/vs`
+- Build HexView's validation structure over the blocks, configured by `[VALIDATION]` in the INI file. Without that section it is skipped with a warning.
+- Layout: `IdTagBegin`, the block count, an address and length format identifier with `WriteALFI=1` (`0x22` or `0x44`), each block's address, length and `BlockChecksumType` checksum, the `FileChecksumType` checksum over all blocks, `IdTagEnd`, and with `ValidateChecksum=1` the 16-bit sum of those bytes. Checksum methods are `/CS` numbers; a missing or negative one leaves its checksum out, and an unknown one leaves it empty and fails the run.
+- Addresses and lengths take 16 bits, or 32 bits with `Force32BitFormat=1` or when a block ends above `0xFFFF`. The count takes one byte, or two with 32-bit addresses unless `ForceBlockSize1Byte=1`. `EndianType` 0 writes them little-endian; any other value, or none, big-endian. Checksums keep their method's byte order.
+- A tag's hex digits are its bytes, read like `/IA` data, or with `IdTagBeginLength` or `IdTagEndLength` its hex value in that many bytes. A missing tag is left out, but a tag with a length and no value, or an image without blocks or of a single byte, leaves the structure neither inserted nor summed. Flags count as set when they are not 0, signed or not.
+- `SpareRange` lists ranges left out of the blocks. With `InsertData=1` the structure is inserted at `BaseAddress` as a block of its own, unless it would overlap data.
+- With `GenerateCFiles=1`, `CFilename` and `HFilename`, HexView's `ValidateInfo` C initializer and its struct definitions are written there.
+
+`/vshsm:@placement`
+- Build the vHSM validation structure, configured by `[HSMBOOT]`, after `/vs`: big-endian `GROUP_ID` (4 bytes), the block count (2), and each block's address (4), length (4), `MODE` (2) and `HASH_METHOD` checksum (default 20, SHA-256).
+- `SIGNATURE_METHOD` and `SIGNATURE_PARAM` are a `/DP` method and parameter for a signature over the structure, written just before it in the same block and to the `/DP` output file.
+- `placement` is an address read like `/XI` values (`@1234h` is decimal 1234) or `@end` or `@append` for after the data; without it the structure goes to address 0, and other words insert nothing. Nothing is inserted where it would overlap data. `[HSMBOOT]` numbers are `0x` hex or decimal.
+- A cipher or XOR method as `SIGNATURE_METHOD` changes the inserted structure itself.
+
 ## Output and export
 
 `-o output.ext`
@@ -245,11 +262,11 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 - Without an `/X...` flag nothing is exported, even with `-o`.
 
 `/XI[:reclinelen[:rectype]]`
-- Export Intel HEX, 32 bytes per record by default or for length 0.
+- Export Intel HEX, 32 bytes per record by default or for length 0. Each block starts new records, as `/SB` pieces and validation structures show.
 - `rectype` 1 forces extended linear and 2 extended segment address records; others select automatically (segment records up to 1 MiB). An extended address record is written only where the upper address changes, starting from zero.
 
 `/XS[:reclinelen[:rectype]]`
-- Export Motorola S-Record, 32 bytes per record by default.
+- Export Motorola S-Record, 32 bytes per record by default; each block starts new records.
 - `rectype` 0, 1 and 2 force S1, S2 and S3 records; others select automatically.
 - A record length of 0, including an empty one (`/XS::2`), writes only the termination record, as HexView does.
 
@@ -301,6 +318,5 @@ These HexView options are rejected, because their formats or DLLs are not docume
 - `/XG`, `/XGC`, `/XGCC`, `/XGCS`, `/XGCR`, `/XGCK` and `/XGC_*` (GM file headers, defined in GMW3110), `/XGMFBL` (GM-FBL header info) and `/XGAC` (GAC file header)
 - `/XV` (VAG SGML container), `/XVBF`, `/XVBFSUBST` and `/MVBF` (Ford and Volvo VBF), `/XB` (Fiat binary and parameter files) and `/xfca_sign` (FCA header)
 - `/PB` (post-build DLL) and `/expdat` (alternative data processing DLL)
-- `/vs` and `/vshsm` (validation structures)
 
 The GM header parameters (`/DLS`, `/DCID`, `/MPFH`, `/MODID`, `/PN`, `/SWMI`, `/sigver`, `/sigkeyid`, `/gmad`, `/gmal`, `/XML`), `/DIFF` (which needs a diff DLL HexView does not ship) and the `/tms570-parity` and `/tms570-ECC` options, which HexView 1.15.2 does not recognize, are reported as unrecognized and have no effect.

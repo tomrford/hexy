@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     DEFAULT_INTEL_HEX_BYTES_PER_LINE, DEFAULT_SREC_BYTES_PER_LINE, HexAsciiWriteOptions,
-    IntelHexMode, IntelHexWriteOptions, MergeMode, SRecordType, SRecordWriteOptions,
+    IntelHexMode, IntelHexWriteOptions, MergeMode, Placement, SRecordType, SRecordWriteOptions,
 };
 
 use super::parse_util::{
@@ -27,15 +27,7 @@ fn parse_hex_no_sep(raw: &str) -> Result<u32, ParseArgError> {
 fn reject_unsupported(key_upper: &str) -> Result<(), ParseArgError> {
     let unsupported = matches!(
         key_upper,
-        "PB" | "EXPDAT"
-            | "MVBF"
-            | "XVBFSUBST"
-            | "XFCA_SIGN"
-            | "VS"
-            | "VSHSM"
-            | "XV"
-            | "XVBF"
-            | "XB"
+        "PB" | "EXPDAT" | "MVBF" | "XVBFSUBST" | "XFCA_SIGN" | "XV" | "XVBF" | "XB"
     ) || (key_upper.starts_with("XG") && key_upper != "XGACSWIL");
     if unsupported {
         return Err(ParseArgError::InvalidOption(format!(
@@ -56,6 +48,8 @@ fn parse_simple_flag(args: &mut Args, opt_upper: &str) -> bool {
         "S12MAP" => args.s12_map = true,
         "S12XMAP" => args.s12x_map = true,
         "AL" => args.align_length = Some(0),
+        "VS" => args.validation = true,
+        "VSHSM" => args.hsm_validation = Some(Some(Placement::Address(0))),
         // Disclaimer acceptance and license path: HexView runtime switches with no effect here.
         "G" | "M" => {}
         _ => return false,
@@ -247,6 +241,19 @@ fn parse_value_option(
                 .map(|segment| segment.into_parts().1);
         }
         "REMAP" => args.remap = Some(parse_remap(value)?),
+        // HexView reads the address as a lenient number, places the structure at 0
+        // without one and after the data for `@end` or `@append`, and inserts nothing
+        // for other words.
+        "VSHSM" => {
+            let target = value.strip_prefix('@').unwrap_or("");
+            args.hsm_validation = Some(match target.to_ascii_uppercase().as_str() {
+                "END" | "APPEND" => Some(Placement::Append),
+                _ if target.is_empty() || target.starts_with(|c: char| c.is_ascii_digit()) => {
+                    Some(Placement::Address(parse_lenient_number(target)))
+                }
+                _ => None,
+            });
+        }
         _ => return Ok(false),
     }
     Ok(true)
