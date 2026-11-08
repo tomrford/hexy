@@ -91,6 +91,32 @@ fn test_dp_ini_key_and_sv_of_dp_output() {
     assert_eq!(text, output_text(RSA_DATA));
 }
 
+#[test]
+fn test_processing_paths_accept_quoted_fields() {
+    let (dir, input) = input("dp_quoted");
+    let private = fixture("rsa_his_private.txt");
+    write_file(&dir.join("private key.txt"), &private);
+    write_file(&dir.join("public key.txt"), &fixture("rsa_his_public.txt"));
+    write_file(
+        &dir.join("key file.ini"),
+        format!("[Keys]\nPrivate={}\n", String::from_utf8(private).unwrap()).as_bytes(),
+    );
+    for source in [
+        "\"private key.txt\"",
+        "\"key file.ini\",\"Keys\",\"Private\"",
+    ] {
+        let dp = format!("/DP32:{source};\"signature file.txt\"");
+        assert_success(&run(
+            &input,
+            &[&dp, "/SV4:\"public key.txt\"!\"signature file.txt\""],
+        ));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("signature file.txt")).unwrap(),
+            output_text(RSA_DATA)
+        );
+    }
+}
+
 /// `/SV` runs after `/DP` places its output, and neither failure stops the export.
 #[test]
 fn test_sv_sees_placed_output_and_failures_still_export() {
@@ -111,11 +137,19 @@ fn test_sv_sees_placed_output_and_failures_still_export() {
     assert_eq!(image.read_bytes_contiguous(0x2010, 128), Some(signature));
     assert!(dir.join("SignD_SHA256.RSA").exists());
 
+    write_file(&dir.join("empty.key"), b"");
+    write_file(&dir.join("empty.ini"), b"[Keys]\nPrivate=\n");
     for dp in [
         "/DP32:missing.pem",
         "/DP99:rsa.txt",
         "/DP32",
         "/DP32:FF490A81008203010001910101",
+        "/DP46",
+        "/DP47",
+        "/DP48",
+        "/DP49",
+        "/DP46:empty.key",
+        "/DP46:empty.ini,Keys,Private",
     ] {
         std::fs::remove_file(&out).unwrap();
         let output = run(&input, &[dp, "/XI", "-o", &out_arg]);

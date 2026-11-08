@@ -155,6 +155,34 @@ fn test_signing_rejects_public_his_key() {
 }
 
 #[test]
+fn test_empty_ed25519_key_material_is_rejected() {
+    for scheme in [SignatureScheme::Ed25519Ph, SignatureScheme::Ed25519Sha512] {
+        for content in [b"".as_slice(), b" \r\n,", b"0x"] {
+            assert!(matches!(
+                scheme.signing_key(content),
+                Err(ProcessingError::InvalidKey(_))
+            ));
+            assert!(matches!(
+                scheme.verifying_key(content),
+                Err(ProcessingError::InvalidKey(_))
+            ));
+        }
+        // A deliberately supplied short seed still takes the documented zero padding.
+        let method = method(scheme, false);
+        let short = scheme.signing_key(b"00").unwrap();
+        let full = scheme.signing_key("00".repeat(32).as_bytes()).unwrap();
+        assert_eq!(
+            image()
+                .process_data(&DataProcessing::Sign { method, key: short }, None)
+                .unwrap(),
+            image()
+                .process_data(&DataProcessing::Sign { method, key: full }, None)
+                .unwrap()
+        );
+    }
+}
+
+#[test]
 fn test_placement_writes_output_into_image() {
     let method = method(SignatureScheme::Ed25519Ph, false);
     let key = method.scheme.signing_key(&key("ed25519_seed.txt")).unwrap();

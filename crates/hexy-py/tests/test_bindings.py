@@ -319,3 +319,13 @@ def test_signing_reports_small_pss_key_as_value_error():
 
     assert source.read(0x1000, 2) == b"\x01\x02"
     assert source.total_bytes == 2
+
+
+def test_signing_rejects_empty_ed25519_key_material():
+    source = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
+    for method in ("ed25519ph", "ed25519-sha512"):
+        for key in (b"", b" \r\n,", b"0x"):
+            with pytest.raises(ValueError):
+                source.sign(method, key, placement="append")
+    assert source.read(0x1000, 2) == b"\x01\x02"
+    assert source.total_bytes == 2

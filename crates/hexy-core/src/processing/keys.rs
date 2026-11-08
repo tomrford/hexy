@@ -314,7 +314,8 @@ impl Ed25519PrivateKey {
     /// A raw seed in hex text, or a PKCS #8 key in PEM or DER.
     pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
         match KeyContent::read(content) {
-            KeyContent::Hex(raw) => Ok(Self::from_bytes(&raw_ed25519(&raw))),
+            KeyContent::Hex(raw) if !raw.is_empty() => Ok(Self::from_bytes(&raw_ed25519(&raw))),
+            KeyContent::Hex(_) => Err(invalid_key("empty Ed25519 private key")),
             KeyContent::Der(der) => ed25519_private_der(&der)
                 .map(|(seed, _)| Self::from_bytes(&seed))
                 .ok_or_else(|| invalid_key("Ed25519 private key")),
@@ -336,7 +337,8 @@ impl Ed25519PublicKey {
     /// an SPKI public key, or an X.509 certificate.
     pub fn from_key_file(content: &[u8]) -> Result<Self, ProcessingError> {
         let der = match KeyContent::read(content) {
-            KeyContent::Hex(raw) => return Self::from_bytes(&raw_ed25519(&raw)),
+            KeyContent::Hex(raw) if !raw.is_empty() => return Self::from_bytes(&raw_ed25519(&raw)),
+            KeyContent::Hex(_) => return Err(invalid_key("empty Ed25519 public key")),
             KeyContent::Der(der) => der,
         };
         ed25519_private_der(&der)
