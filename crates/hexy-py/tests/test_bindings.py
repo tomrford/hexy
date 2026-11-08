@@ -357,3 +357,17 @@ def test_large_dword_swap_matches_direct_and_pipeline_results():
     assert result.hexfile.read(0, 16) == expected
     assert result.checksums == [b"\xff\xf0"]
 
+
+
+def test_validation_c_preserves_long_tags_and_explicit_overrides():
+    structure = hexy.HexFile.from_binary(b"\xaa\xbb", 0x10).validation_structure(
+        tag_begin=b"\x01\x02\x03\x04\x05",
+        tag_end=b"\x06\x07\x08\x09\x0a",
+        validate_sum=True,
+    )
+    c, _ = structure.to_c("v.c", "v.h")
+    assert b"{0x01, 0x02, 0x03, 0x04, 0x05}" in c
+    assert b"{0x06, 0x07, 0x08, 0x09, 0x0A}" in c
+    c, _ = structure.to_c("v.c", "v.h", tag_begin_value=1, tag_end_value=2)
+    assert b"{0x00, 0x00, 0x00, 0x00, 0x01}" in c
+    assert b"{0x00, 0x00, 0x00, 0x00, 0x02}" in c

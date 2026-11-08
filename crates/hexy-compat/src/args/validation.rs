@@ -117,8 +117,8 @@ impl Validation {
                     c_file_name: c_file_name.clone(),
                     h_file_name: h_file_name.clone(),
                     created: chrono::Local::now().fixed_offset(),
-                    tag_begin_value: self.tag_values.0,
-                    tag_end_value: self.tag_values.1,
+                    tag_begin_value: Some(self.tag_values.0),
+                    tag_end_value: Some(self.tag_values.1),
                 },
             );
             std::fs::write(c_file_name, c)?;

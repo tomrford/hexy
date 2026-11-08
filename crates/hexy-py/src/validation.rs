@@ -107,10 +107,6 @@ impl PyValidationStructure {
         tag_end_value: Option<u32>,
         created: Option<DateTime<FixedOffset>>,
     ) -> (Bound<'py, PyBytes>, Bound<'py, PyBytes>) {
-        let value = |tag: &[u8]| {
-            tag.iter()
-                .fold(0u32, |acc, &byte| acc << 8 | u32::from(byte))
-        };
         let (c, h) = write_validation_c(
             &self.options,
             &self.inner,
@@ -118,8 +114,8 @@ impl PyValidationStructure {
                 c_file_name,
                 h_file_name,
                 created: created.unwrap_or_else(|| chrono::Local::now().fixed_offset()),
-                tag_begin_value: tag_begin_value.unwrap_or_else(|| value(&self.options.tag_begin)),
-                tag_end_value: tag_end_value.unwrap_or_else(|| value(&self.options.tag_end)),
+                tag_begin_value,
+                tag_end_value,
             },
         );
         (PyBytes::new(py, &c), PyBytes::new(py, &h))

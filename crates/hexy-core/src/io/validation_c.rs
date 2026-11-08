@@ -16,10 +16,10 @@ pub struct ValidationCOptions {
     pub h_file_name: String,
     /// When the files were created, written in its local time.
     pub created: DateTime<FixedOffset>,
-    /// The tag values HexView writes in the `.c` file: C's reading of the tag text,
-    /// which need not match the tag bytes.
-    pub tag_begin_value: u32,
-    pub tag_end_value: u32,
+    /// Optional numeric tag overrides, such as C's reading of the CLI tag text.
+    /// Without an override, preserve the tag bytes (read big-endian for scalars).
+    pub tag_begin_value: Option<u32>,
+    pub tag_end_value: Option<u32>,
 }
 
 /// The `.c` and `.h` files HexView writes for a validation structure: `ValidateInfo` as
@@ -51,18 +51,24 @@ pub fn write_validation_c(
         None => format!("\tunsigned char  {name}[{len}];\r\n"),
     };
     let tag_suffix = |len: usize| if len == 4 { "ul" } else { "u" };
-    let tag_value = |value: u32, len: usize| {
-        if scalar(len).is_some() {
-            return format!("0x{value:X}{}", tag_suffix(len));
+    let tag_value = |value: Option<u32>, tag: &[u8]| {
+        if scalar(tag.len()).is_some() {
+            let value = value.unwrap_or_else(|| {
+                tag.iter()
+                    .fold(0u32, |acc, &byte| acc << 8 | u32::from(byte))
+            });
+            return format!("0x{value:X}{}", tag_suffix(tag.len()));
         }
-        let bytes = value.to_be_bytes();
-        let elements: Vec<String> = (0..len)
-            .map(|index| {
-                let remaining = len - index;
-                let byte = if remaining <= bytes.len() {
-                    bytes[bytes.len() - remaining]
-                } else {
-                    0
+        let override_bytes = value.map(u32::to_be_bytes);
+        let elements: Vec<String> = tag
+            .iter()
+            .enumerate()
+            .map(|(index, &byte)| {
+                let remaining = tag.len() - index;
+                let byte = match &override_bytes {
+                    Some(bytes) if remaining <= bytes.len() => bytes[bytes.len() - remaining],
+                    Some(_) => 0,
+                    None => byte,
                 };
                 format!("0x{byte:02X}")
             })
@@ -89,7 +95,7 @@ pub fn write_validation_c(
         let _ = write!(
             c,
             "\t{},\t\t/* Magic Tag begin */\r\n",
-            tag_value(names.tag_begin_value, options.tag_begin.len())
+            tag_value(names.tag_begin_value, &options.tag_begin)
         );
     }
     let mut needs_comma = false;
@@ -155,7 +161,7 @@ pub fn write_validation_c(
         let _ = write!(
             c,
             "\t{separator}{}\t\t/* Magic Tag end */\r\n",
-            tag_value(names.tag_end_value, options.tag_end.len())
+            tag_value(names.tag_end_value, &options.tag_end)
         );
         needs_comma = true;
     }
@@ -256,8 +262,8 @@ mod tests {
                 c_file_name: "v.c".to_owned(),
                 h_file_name: "v.h".to_owned(),
                 created: DateTime::parse_from_rfc3339("2026-11-07T22:36:43+01:00").unwrap(),
-                tag_begin_value: 0x1234,
-                tag_end_value: 0x4321,
+                tag_begin_value: Some(0x1234),
+                tag_end_value: Some(0x4321),
             },
         );
         assert!(String::from_utf8_lossy(&c).ends_with("const tValidateInfo ValidateInfo = {\r\n\t0x1234u,\t\t/* Magic Tag begin */\r\n\t2\t\t/* Number of block elements */\r\n\t,0x1000u, 0x13u, 0x04C0\r\n\t,0x2000u, 0x20u, 0x0DD0\r\n\t,0xBA9FF711ul\t\t/* Total file checksum*/\r\n\t,0x4321u\t\t/* Magic Tag end */\r\n\t,0x511u\t/* 16-bit byte-sum on validation area. */};\r\n\r\n#define VALIDATEINFO_STOP_SEC_CONST\r\n#include \"memmap.h\"\r\n"));
