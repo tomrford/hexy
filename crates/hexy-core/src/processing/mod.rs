@@ -118,6 +118,16 @@ impl HexFile {
         operation: &DataProcessing,
         placement: Option<Placement>,
     ) -> Result<Option<Vec<u8>>, ProcessingError> {
+        self.process_data_tracked(operation, placement, &mut false)
+    }
+
+    /// Record committed writes so the pipeline can normalize a partially failed stage.
+    pub(crate) fn process_data_tracked(
+        &mut self,
+        operation: &DataProcessing,
+        placement: Option<Placement>,
+        wrote_data: &mut bool,
+    ) -> Result<Option<Vec<u8>>, ProcessingError> {
         let output = match operation {
             DataProcessing::Sign { method, key } => Some(
                 method
@@ -132,7 +142,7 @@ impl HexFile {
             DataProcessing::Xor { key } => {
                 let key: &[u8] = if key.is_empty() { &[0xFF] } else { key };
                 let mut stream = key.iter().cycle();
-                self.transform_blocks(|data| {
+                self.transform_blocks(wrote_data, |data| {
                     Ok(data.iter().zip(&mut stream).map(|(b, k)| b ^ k).collect())
                 })?;
                 None
@@ -141,12 +151,12 @@ impl HexFile {
             | DataProcessing::Decrypt { key, mode, padding } => {
                 let decrypt = matches!(operation, DataProcessing::Decrypt { .. });
                 let mut aes = AesBlocks::new(key, *mode, *padding, decrypt);
-                self.transform_blocks(|data| aes.process(data))?;
+                self.transform_blocks(wrote_data, |data| aes.process(data))?;
                 None
             }
-            DataProcessing::EncryptGcm(gcm) => Some(gcm.encrypt(self)?),
+            DataProcessing::EncryptGcm(gcm) => Some(gcm.encrypt(self, wrote_data)?),
             DataProcessing::DecryptGcm { gcm, tag } => {
-                gcm.decrypt(self, tag)?;
+                gcm.decrypt(self, tag, wrote_data)?;
                 None
             }
         };
@@ -154,6 +164,7 @@ impl HexFile {
             && let Some(target) = self.placement_range(placement, output.len())?
         {
             self.write_bytes(target.start(), output)?;
+            *wrote_data |= !output.is_empty();
         }
         Ok(output)
     }
@@ -172,6 +183,7 @@ impl HexFile {
     /// Replace each block with `transform`'s output for it, in block order.
     fn transform_blocks(
         &mut self,
+        wrote_data: &mut bool,
         mut transform: impl FnMut(&[u8]) -> Result<Vec<u8>, ProcessingError>,
     ) -> Result<(), ProcessingError> {
         let blocks = self.blocks();
@@ -186,7 +198,7 @@ impl HexFile {
                 }
             }
         }
-        self.replace_blocks(&blocks, outputs, Vec::new())?;
+        self.replace_blocks(&blocks, outputs, Vec::new(), wrote_data)?;
         result
     }
 
@@ -198,8 +210,10 @@ impl HexFile {
         blocks: &[Segment],
         outputs: Vec<Vec<u8>>,
         kept: Vec<Segment>,
+        wrote_data: &mut bool,
     ) -> Result<(), ProcessingError> {
         let mut replaced = Vec::with_capacity(outputs.len());
+        let mut wrote_replacement = false;
         let mut result = Ok(());
         for (block, output) in blocks.iter().zip(outputs) {
             if output.is_empty() {
@@ -207,17 +221,24 @@ impl HexFile {
                 continue;
             }
             match Segment::new(block.start_address, output) {
-                Ok(segment) => replaced.push(segment),
+                Ok(segment) => {
+                    replaced.push(segment);
+                    wrote_replacement = true;
+                }
                 Err(e) => {
                     result = Err(OpsError::from(e).into());
                     break;
                 }
             }
         }
+        if !wrote_replacement {
+            return result;
+        }
         let mut segments = blocks[replaced.len()..].to_vec();
         segments.extend(replaced);
         segments.extend(kept);
         self.set_segments(segments);
+        *wrote_data = true;
         result
     }
 }

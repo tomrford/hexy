@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
 
 use hexy_core::{
-    AddressRange, AesKey, AesMode, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage,
-    DataProcessing, DataProcessingStage, Fill, FillData, HexFile, Merge, MergeMode, MergeOptions,
-    Pipeline, Placement, Segment, SwapMode,
+    AddressRange, AesGcm, AesKey, AesMode, AesPadding, AlignOptions, ChecksumAlgorithm,
+    ChecksumOptions, ChecksumStage, DataProcessing, DataProcessingStage, Fill, FillData, GcmTag,
+    HexFile, Merge, MergeMode, MergeOptions, Pipeline, Placement, Segment, SwapMode,
 };
 
 /// Bytes `(seed + 7 * i) & 0xFF`, the harness fixture pattern.
@@ -125,6 +125,86 @@ fn test_failed_checksum_placement_keeps_split_blocks() {
 }
 
 #[test]
+fn test_failed_cipher_before_write_keeps_image() {
+    let split = |start, len, size| {
+        let mut file = hexfile(&[(start, len, 1)]);
+        file.split(size);
+        file
+    };
+    let key = AesKey::new(&[0; 16]).unwrap();
+    let ecb = DataProcessing::Encrypt {
+        key: key.clone(),
+        mode: AesMode::Ecb,
+        padding: None,
+    };
+    let gcm = AesGcm {
+        key: key.clone(),
+        nonce: vec![0; 12],
+        aad: Vec::new(),
+    };
+    let cases = [
+        (
+            "unaligned",
+            hexfile(&[(0x1000, 17, 1), (0x1004, 4, 2), (0x1011, 17, 3)]),
+            ecb,
+        ),
+        (
+            "short IV",
+            split(0x1000, 16, 8),
+            DataProcessing::Encrypt {
+                key: key.clone(),
+                mode: AesMode::Cbc { iv: None },
+                padding: None,
+            },
+        ),
+        (
+            "empty nonce",
+            split(0x1000, 32, 16),
+            DataProcessing::EncryptGcm(AesGcm {
+                nonce: Vec::new(),
+                ..gcm.clone()
+            }),
+        ),
+        (
+            "tag location",
+            split(0x1000, 32, 16),
+            DataProcessing::DecryptGcm {
+                gcm,
+                tag: GcmTag::Image(range(0x1004, 0x1007)),
+            },
+        ),
+        (
+            "first output overflows",
+            split(u32::MAX - 14, 15, 8),
+            DataProcessing::Encrypt {
+                key,
+                mode: AesMode::Ecb,
+                padding: Some(AesPadding::Pkcs7),
+            },
+        ),
+    ];
+    let mut changed = Vec::new();
+    for (name, mut file, operation) in cases {
+        let before = file.clone();
+        let pipeline = Pipeline {
+            data_processing: Some(DataProcessingStage {
+                operation,
+                placement: None,
+            }),
+            ..Default::default()
+        };
+        assert!(pipeline.run(&mut file).is_err(), "{name}");
+        if file != before {
+            changed.push(name);
+        }
+    }
+    assert!(
+        changed.is_empty(),
+        "pre-write failures changed the image: {changed:?}"
+    );
+}
+
+#[test]
 fn test_partially_failed_cipher_normalizes_replaced_blocks() {
     let mut file = HexFile::with_segments(vec![
         Segment::new(0x1000, vec![0; 32]).unwrap(),
@@ -154,6 +234,63 @@ fn test_partially_failed_cipher_normalizes_replaced_blocks() {
     assert_eq!(blocks[0].data(), ciphertext.repeat(2));
     assert_eq!(blocks[1].start_address(), 0x2000);
     assert_eq!(blocks[1].data(), [0xAA]);
+}
+
+#[test]
+fn test_gcm_failure_after_write_normalizes_replaced_blocks() {
+    let gcm = AesGcm {
+        key: AesKey::new(&[0; 16]).unwrap(),
+        nonce: vec![0; 12],
+        aad: Vec::new(),
+    };
+    // NIST's zero-key, zero-nonce GCM vector, first plaintext/ciphertext block.
+    let plain = [0; 16];
+    let cipher = [
+        0x03, 0x88, 0xDA, 0xCE, 0x60, 0xB6, 0xA3, 0x92, 0xF3, 0x28, 0xC2, 0xB9, 0x71, 0xB2, 0xFE,
+        0x78,
+    ];
+    let cases = [
+        (
+            "tag mismatch",
+            cipher,
+            DataProcessing::DecryptGcm {
+                gcm: gcm.clone(),
+                tag: GcmTag::Bytes(vec![0; 16]),
+            },
+            plain,
+        ),
+        (
+            "tag placement overflow",
+            plain,
+            DataProcessing::EncryptGcm(gcm),
+            cipher,
+        ),
+    ];
+    let mut unnormalized = Vec::new();
+    for (name, input, operation, expected_prefix) in cases {
+        let mut file = HexFile::with_segments(vec![Segment::new(0x1000, input.repeat(2)).unwrap()]);
+        file.split(16);
+        let pipeline = Pipeline {
+            data_processing: Some(DataProcessingStage {
+                operation,
+                placement: Some(Placement::Address(u32::MAX)),
+            }),
+            ..Default::default()
+        };
+        assert!(pipeline.run(&mut file).is_err(), "{name}");
+        assert_eq!(
+            file.read_bytes_contiguous(0x1000, 16).unwrap(),
+            expected_prefix,
+            "{name}"
+        );
+        if file.blocks().len() != 1 {
+            unnormalized.push(name);
+        }
+    }
+    assert!(
+        unnormalized.is_empty(),
+        "post-write failures left split blocks: {unnormalized:?}"
+    );
 }
 
 #[test]

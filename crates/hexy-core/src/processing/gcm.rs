@@ -29,11 +29,15 @@ pub struct AesGcm {
 
 impl AesGcm {
     /// Encrypt the blocks in place and return the tag.
-    pub(super) fn encrypt(&self, hexfile: &mut HexFile) -> Result<Vec<u8>, ProcessingError> {
+    pub(super) fn encrypt(
+        &self,
+        hexfile: &mut HexFile,
+        wrote_data: &mut bool,
+    ) -> Result<Vec<u8>, ProcessingError> {
         let blocks = hexfile.blocks();
         let stream: Vec<u8> = blocks.iter().flat_map(|b| b.data.iter().copied()).collect();
         let (output, tag) = self.run(&stream, true)?;
-        hexfile.replace_blocks(&blocks, layout(&blocks, &output), Vec::new())?;
+        hexfile.replace_blocks(&blocks, layout(&blocks, &output), Vec::new(), wrote_data)?;
         Ok(tag.to_vec())
     }
 
@@ -43,6 +47,7 @@ impl AesGcm {
         &self,
         hexfile: &mut HexFile,
         tag: &GcmTag,
+        wrote_data: &mut bool,
     ) -> Result<(), ProcessingError> {
         let (blocks, kept, expected) = match tag {
             GcmTag::Bytes(bytes) => (hexfile.blocks(), Vec::new(), bytes.clone()),
@@ -54,7 +59,7 @@ impl AesGcm {
         };
         let stream: Vec<u8> = blocks.iter().flat_map(|b| b.data.iter().copied()).collect();
         let (output, tag) = self.run(&stream, false)?;
-        hexfile.replace_blocks(&blocks, layout(&blocks, &output), kept)?;
+        hexfile.replace_blocks(&blocks, layout(&blocks, &output), kept, wrote_data)?;
         if tag.as_slice() != expected.as_slice() {
             return Err(ProcessingError::TagMismatch);
         }
