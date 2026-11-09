@@ -1,5 +1,6 @@
 use hexy_core::{
-    AddressRange, IntelHexMode, MergeMode, Placement, SRecordType, SwapMode, parse_compat_ranges,
+    AddressRange, IntelHexMode, MergeMode, Placement, SRecordType, SignatureMethod,
+    SignatureScheme, SwapMode, parse_compat_ranges,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -118,4 +119,33 @@ pub(crate) fn parse_placement(obj: &Bound<'_, PyAny>) -> PyResult<Placement> {
             "unknown placement '{other}', expected 'append', 'begin', 'prepend' or 'overwrite_end'"
         ))),
     }
+}
+
+/// A signature method from its Python name.
+pub(crate) fn parse_signature_method(scheme: &str, metadata: bool) -> PyResult<SignatureMethod> {
+    let scheme = match scheme.to_ascii_lowercase().as_str() {
+        "rsa-pkcs1v15-sha256" => SignatureScheme::RsaPkcs1v15Sha256,
+        "rsa-pss-sha256" => SignatureScheme::RsaPssSha256,
+        "ed25519ph" => SignatureScheme::Ed25519Ph,
+        "ed25519-sha512" => SignatureScheme::Ed25519Sha512,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown signature method '{other}'"
+            )));
+        }
+    };
+    Ok(SignatureMethod {
+        scheme,
+        with_metadata: metadata,
+    })
+}
+
+/// Key file content as bytes, or key text as str.
+pub(crate) fn key_content(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(bytes) = obj.extract::<&[u8]>() {
+        return Ok(bytes.to_vec());
+    }
+    obj.extract::<String>()
+        .map(String::into_bytes)
+        .map_err(|_| PyTypeError::new_err("expected key bytes or key text"))
 }

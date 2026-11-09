@@ -11,6 +11,10 @@ IntelHexMode = Literal[
 ]
 SRecordType = Literal["auto", "s1", "s2", "s3", "1", "2", "3"]
 Placement = Literal["append", "begin", "prepend", "overwrite_end"]
+SignatureMethod = Literal[
+    "rsa-pkcs1v15-sha256", "rsa-pss-sha256", "ed25519ph", "ed25519-sha512"
+]
+Key = bytes | str
 
 class AddressRange:
     def __init__(
@@ -140,12 +144,40 @@ class HexFile:
     def map_star12(self) -> None: ...
     def map_star12x(self) -> None: ...
     def map_star08(self) -> None: ...
+    def sign(
+        self,
+        method: SignatureMethod,
+        key: Key,
+        *,
+        metadata: bool = False,
+        placement: int | Placement | None = None,
+    ) -> bytes:
+        """Sign the block data in address order and return the signature (`/DP`).
+        `metadata` precedes each block with its big-endian start address and
+        length. `key` is a key file's content or key text, read as HexView reads
+        it: HIS or PKCS #1 hex text, PKCS #8 or PKCS #1 PEM or DER for RSA; a hex
+        seed or PKCS #8 PEM or DER for Ed25519. With `placement`, the signature is
+        also written into the image."""
+    def verify_signature(
+        self,
+        method: SignatureMethod,
+        key: Key,
+        signature: bytes,
+        *,
+        metadata: bool = False,
+    ) -> None:
+        """Verify `signature` over the block data (`/SV`); raises `ValueError` if it
+        does not match. `key` is a public or private key in the forms `sign` reads,
+        or a PKCS #1 or SPKI public key, or an X.509 certificate."""
 
 class PipelineResult:
     @property
     def hexfile(self) -> HexFile: ...
     @property
     def checksums(self) -> list[bytes]: ...
+    @property
+    def data_processing(self) -> bytes | None:
+        """The data processing output, such as a signature."""
 
 class Pipeline:
     """HexView-ordered recipe: each method configures one stage, and `apply` runs
@@ -201,3 +233,22 @@ class Pipeline:
         included even where it holds no data, with gaps taking `forced_pattern`
         (default 0xFF). Algorithm 16 writes `constant` (default 08 15) instead of
         a checksum."""
+    def sign(
+        self,
+        method: SignatureMethod,
+        key: Key,
+        *,
+        metadata: bool = False,
+        placement: int | Placement | None = None,
+    ) -> None:
+        """Sign after the checksum stages (`/DP`); see `HexFile.sign`."""
+    def verify(
+        self,
+        method: SignatureMethod,
+        key: Key,
+        signature: bytes,
+        *,
+        metadata: bool = False,
+    ) -> None:
+        """Verify after the data processing stage (`/SV`); see
+        `HexFile.verify_signature`."""

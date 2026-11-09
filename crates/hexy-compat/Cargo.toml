@@ -11,10 +11,6 @@ keywords = ["hex", "firmware", "intel-hex", "srec"]
 hexy-core = { path = "../hexy-core", version = "0.3.0" }
 thiserror.workspace = true
 
-[dev-dependencies]
-ed25519-dalek.workspace = true
-rsa.workspace = true
-
 [[bin]]
 name = "hexy"
 path = "src/main.rs"

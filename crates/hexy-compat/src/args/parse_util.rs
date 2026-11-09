@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use crate::{AddressRange, AddressRangeError, DspicOp, ForcedRange, Placement, RemapOptions};
 
-use super::types::{
-    ChecksumParams, ChecksumTarget, DataProcessingParams, ImportParam, MergeParam, ParseArgError,
-    SignatureVerifyParams,
-};
+use super::types::{ChecksumParams, ChecksumTarget, ImportParam, MergeParam, ParseArgError};
 
 pub(super) fn split_option(opt: &str) -> Option<(&str, &str)> {
     match (opt.find(':'), opt.find('=')) {
@@ -335,7 +332,7 @@ pub(super) fn parse_checksum(
     })
 }
 
-fn parse_placement_target(target: &str) -> Result<Placement, ParseArgError> {
+pub(super) fn parse_placement_target(target: &str) -> Result<Placement, ParseArgError> {
     let target_upper = target.to_ascii_uppercase();
     match target_upper.as_str() {
         "APPEND" => Ok(Placement::Append),
@@ -345,73 +342,6 @@ fn parse_placement_target(target: &str) -> Result<Placement, ParseArgError> {
         "END" => Ok(Placement::OverwriteEnd),
         _ => Ok(Placement::Address(parse_number(target)?)),
     }
-}
-
-pub(super) fn parse_data_processing_params(
-    method: u8,
-    value: &str,
-) -> Result<DataProcessingParams, ParseArgError> {
-    let (params_part, output_file) = if let Some((left, right)) = value.split_once(';') {
-        let output = strip_quotes(right).trim();
-        let output_file = if output.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(output))
-        };
-        (left, output_file)
-    } else {
-        (value, None)
-    };
-
-    let (placement, key_and_meta) = if let Some(rest) = params_part.strip_prefix('@') {
-        let (placement_raw, right) = rest.split_once(':').ok_or_else(|| {
-            ParseArgError::InvalidOption("data processing placement missing ':'".to_owned())
-        })?;
-        (Some(parse_placement_target(placement_raw)?), right)
-    } else {
-        (None, params_part)
-    };
-
-    let key_info = strip_quotes(key_and_meta)
-        .split(',')
-        .next()
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_owned();
-    if key_info.is_empty() {
-        return Err(ParseArgError::MissingValue(format!("/DP{method} keyinfo")));
-    }
-
-    Ok(DataProcessingParams {
-        method,
-        placement,
-        key_info,
-        output_file,
-    })
-}
-
-pub(super) fn parse_signature_verify_params(
-    method: u8,
-    value: &str,
-) -> Result<SignatureVerifyParams, ParseArgError> {
-    let (key_raw, signature_raw) = value.split_once('!').ok_or_else(|| {
-        ParseArgError::InvalidOption("signature verification requires keyinfo!signatureinfo".into())
-    })?;
-    let key_info = strip_quotes(key_raw).trim().to_owned();
-    let signature_info = strip_quotes(signature_raw).trim().to_owned();
-    if key_info.is_empty() {
-        return Err(ParseArgError::MissingValue(format!("/SV{method} keyinfo")));
-    }
-    if signature_info.is_empty() {
-        return Err(ParseArgError::MissingValue(format!(
-            "/SV{method} signatureinfo"
-        )));
-    }
-    Ok(SignatureVerifyParams {
-        method,
-        key_info,
-        signature_info,
-    })
 }
 
 pub(super) fn parse_dspic_op(s: &str) -> Result<DspicOp, ParseArgError> {
@@ -594,21 +524,6 @@ mod tests {
     fn test_parse_checksum_multi_range_rejected() {
         let result = parse_checksum("0", "@append;0x1000-0x1001:0x2000-0x2001", false);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_data_processing_params_with_placement_and_output() {
-        let params = parse_data_processing_params(32, "@append:key.pem;sig.bin").unwrap();
-        assert!(matches!(params.placement, Some(Placement::Append)));
-        assert_eq!(params.key_info, "key.pem");
-        assert_eq!(params.output_file, Some(PathBuf::from("sig.bin")));
-    }
-
-    #[test]
-    fn test_parse_signature_verify_params() {
-        let params = parse_signature_verify_params(4, "pub.pem!sig.bin").unwrap();
-        assert_eq!(params.key_info, "pub.pem");
-        assert_eq!(params.signature_info, "sig.bin");
     }
 
     #[test]

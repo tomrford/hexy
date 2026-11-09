@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use crate::{
     AddressMap, AlignOptions, ChecksumStage, Fill, FillData, HexFile, Merge, MergeMode,
     MergeOptions, Pipeline, PipelineOutput, Stage,
@@ -7,11 +9,12 @@ use super::error::CliError;
 use super::io::{
     FsProvider, ReadProvider, checksum_options, load_binary_input, load_hex_ascii_input,
     load_input, load_intel_hex_16bit_input, validate_porsche_output_args, write_checksum_text,
-    write_output_for_args, write_signature_text,
+    write_data_processing_text, write_output_for_args,
 };
 use super::log::execute_log;
-use super::signature::{
-    data_processing_method, sign_options, signature_verify_method, verify_options,
+use super::processing::{
+    data_processing_output, data_processing_stage, validate_data_processing,
+    validate_signature_verify, verify_stage,
 };
 use super::types::{Args, ChecksumParams, ChecksumTarget, OutputFormat, ParseArgError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,18 +47,10 @@ impl Args {
             ));
         }
         if let Some(ref params) = self.data_processing {
-            data_processing_method(params.method)?;
+            validate_data_processing(params, self.silent)?;
         }
         if let Some(ref params) = self.signature_verify {
-            signature_verify_method(params.method)?;
-        }
-        if let (Some(dp), Some(sv)) = (&self.data_processing, &self.signature_verify)
-            && dp.placement.is_some()
-        {
-            return Err(CliError::Unsupported(format!(
-                "placed data processing (/DP{}) cannot be combined with signature verification (/SV{}) in one command",
-                dp.method, sv.method
-            )));
+            validate_signature_verify(params)?;
         }
         if self.import_binary.is_some() && self.import_hex_ascii.is_some() {
             return Err(CliError::Unsupported(
@@ -99,7 +94,8 @@ impl Args {
         hexfile.normalize();
         let mut pipeline = self.pipeline();
         let mut output = PipelineOutput::default();
-        let mut checksum_error = None;
+        let dir = self.processing_dir();
+        let mut stage_error = None;
         let checksum_count = if matches!(self.output_format, Some(OutputFormat::Porsche)) {
             0
         } else {
@@ -108,20 +104,70 @@ impl Args {
         let merge_count = self.merge_transparent.len() + self.merge_opaque.len();
         for stage in Stage::in_order(merge_count, checksum_count) {
             self.before_stage(stage, &mut pipeline, provider)?;
-            match pipeline.run_stage(stage, &mut hexfile, &mut output) {
-                Ok(()) => self.after_stage(stage, &mut hexfile, &output, provider)?,
+            let result = self
+                .prepare_stage(stage, &mut pipeline, &dir, provider)
+                .and_then(|()| {
+                    pipeline
+                        .run_stage(stage, &mut hexfile, &mut output)
+                        .map_err(|e| e.to_string())
+                });
+            match result {
+                Ok(()) => self.after_stage(stage, &mut hexfile, &output, &dir, provider)?,
                 Err(e) => {
                     let error = CliError::Other(format!("{}: {e}", self.stage_flag(stage)));
-                    if !matches!(stage, Stage::Checksum(_)) {
+                    if !matches!(
+                        stage,
+                        Stage::Checksum(_) | Stage::DataProcessing | Stage::Verify
+                    ) {
                         return Err(error);
                     }
-                    checksum_error.get_or_insert(error);
-                    output.checksums.push(Vec::new());
+                    stage_error.get_or_insert(error);
+                    if let Stage::Checksum(_) = stage {
+                        output.checksums.push(Vec::new());
+                    }
                 }
             }
         }
         write_output_for_args(self, &hexfile, provider)?;
-        checksum_error.map_or(Ok(()), Err)
+        stage_error.map_or(Ok(()), Err)
+    }
+
+    /// The folder `/DP` and `/SV` file references resolve against.
+    fn processing_dir(&self) -> PathBuf {
+        self.input_file
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    }
+
+    /// `/DP` and `/SV` parameters are read when their stage runs, so that `/SV` can
+    /// read the output file of `/DP`.
+    fn prepare_stage<P: ReadProvider>(
+        &self,
+        stage: Stage,
+        pipeline: &mut Pipeline,
+        dir: &Path,
+        provider: &P,
+    ) -> Result<(), String> {
+        match stage {
+            Stage::DataProcessing => {
+                pipeline.data_processing = self
+                    .data_processing
+                    .as_ref()
+                    .map(|params| data_processing_stage(params, dir, provider))
+                    .transpose()?;
+            }
+            Stage::Verify => {
+                pipeline.verify = self
+                    .signature_verify
+                    .as_ref()
+                    .map(|params| verify_stage(params, dir, provider))
+                    .transpose()?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// The core pipeline for these flags; each field is set only from its own flags.
@@ -200,32 +246,19 @@ impl Args {
                     },
                 });
             }
-            Stage::Sign => {
-                pipeline.sign = self
-                    .data_processing
-                    .as_ref()
-                    .map(sign_options)
-                    .transpose()?;
-            }
-            Stage::Verify => {
-                pipeline.verify = self
-                    .signature_verify
-                    .as_ref()
-                    .map(verify_options)
-                    .transpose()?;
-            }
             _ => {}
         }
         Ok(())
     }
 
     /// Compat side effects between stages: `/L` runs after `/AR`, and checksum and
-    /// signature file targets are written as soon as their bytes exist.
+    /// data processing files are written as soon as their bytes exist.
     fn after_stage<P: ReadProvider>(
         &self,
         stage: Stage,
         hexfile: &mut HexFile,
         output: &PipelineOutput,
+        dir: &Path,
         provider: &P,
     ) -> Result<(), CliError> {
         match stage {
@@ -246,11 +279,11 @@ impl Args {
                         .map_err(|e| CliError::Other(format!("{flag}: {e}")))?;
                 }
             }
-            Stage::Sign => {
-                if let (Some(dp), Some(signature)) = (&self.data_processing, &output.signature)
-                    && let Some(path) = &dp.output_file
+            Stage::DataProcessing => {
+                if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing)
+                    && let Some(path) = data_processing_output(dp, dir)
                 {
-                    write_signature_text(path, signature)
+                    write_data_processing_text(&path, bytes)
                         .map_err(|e| CliError::Other(format!("/DP{}: {e}", dp.method)))?;
                 }
             }
@@ -280,7 +313,7 @@ impl Args {
             Stage::RemoveSmallBlocks => "/RB",
             Stage::Swap => "/SWAPWORD/SWAPLONG",
             Stage::Checksum(index) => return self.checksum_stage(index).1,
-            Stage::Sign => {
+            Stage::DataProcessing => {
                 let method = self.data_processing.as_ref().map_or(0, |dp| dp.method);
                 return format!("/DP{method}");
             }

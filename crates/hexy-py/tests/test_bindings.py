@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import pytest
+
 import hexy
 
 
@@ -271,3 +275,57 @@ def test_dspic_and_mapping_surfaces_are_available():
     mapped = hexy.HexFile.from_binary(b"\xaa", 0x4000)
     mapped.map_star12()
     assert mapped.read(0x0F8000, 1) == b"\xaa"
+
+
+KEYS = Path(__file__).parents[2] / "hexy-core" / "tests" / "fixtures" / "keys"
+# HexView 1.15.2 /DP33 with rsa_his_private.txt over 0x1000 (0x30 bytes) and 0x2000 (0x10).
+RSA_METADATA = bytes.fromhex(
+    "a699f342ff9fccb1d2874797cb78b069a535ecc983fcca83cd317640fa7ab725"
+    "f7d0d9423f9aae0d44434e22c8589ea8a073038ea46094da2a7a07570e7c7fcc"
+    "4d12974f94a1fcfd4c0e8535a2701476aabae9868948f91248b99f9ebf74b59f"
+    "1577f394e9652626e2e0a41db94b03ea0b694c8dd83e966243137633ecfe2c78"
+)
+
+
+def test_sign_and_verify_match_hexview():
+    source = _from_pats((0x1000, 0x30, 1), (0x2000, 0x10, 2))
+    private = (KEYS / "rsa_his_private.txt").read_text()
+    public = (KEYS / "rsa_his_public.txt").read_bytes()
+
+    assert source.sign("rsa-pkcs1v15-sha256", private, metadata=True) == RSA_METADATA
+    source.verify_signature("rsa-pkcs1v15-sha256", public, RSA_METADATA, metadata=True)
+    with pytest.raises(ValueError):
+        source.verify_signature("rsa-pkcs1v15-sha256", public, RSA_METADATA)
+
+    pipeline = hexy.Pipeline()
+    pipeline.verify("rsa-pkcs1v15-sha256", public, RSA_METADATA, metadata=True)
+    pipeline.sign("rsa-pkcs1v15-sha256", private, metadata=True, placement=0x3000)
+    with pytest.raises(ValueError):
+        pipeline.apply(source)
+
+    pipeline = hexy.Pipeline()
+    pipeline.sign("rsa-pkcs1v15-sha256", private, metadata=True, placement=0x3000)
+    result = pipeline.apply(source)
+    assert result.data_processing == RSA_METADATA
+    assert result.hexfile.read(0x3000, 128) == RSA_METADATA
+
+
+def test_signing_reports_small_pss_key_as_value_error():
+    source = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
+    key = (KEYS / "rsa_512_test.pem").read_bytes()
+
+    with pytest.raises(ValueError):
+        source.sign("rsa-pss-sha256", key, placement="append")
+
+    assert source.read(0x1000, 2) == b"\x01\x02"
+    assert source.total_bytes == 2
+
+
+def test_signing_rejects_empty_ed25519_key_material():
+    source = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
+    for method in ("ed25519ph", "ed25519-sha512"):
+        for key in (b"", b" \r\n,", b"0x"):
+            with pytest.raises(ValueError):
+                source.sign(method, key, placement="append")
+    assert source.read(0x1000, 2) == b"\x01\x02"
+    assert source.total_bytes == 2

@@ -3,7 +3,7 @@
 //! A [`Pipeline`] holds the parameters for each stage; [`Pipeline::run`] applies the
 //! configured stages in [`Pipeline::stages`] order, whatever order they were set in.
 //! Callers that act between stages (the compat CLI runs `/L` log commands and writes
-//! checksum and signature files) drive [`Pipeline::run_stage`] themselves.
+//! checksum and data processing files) drive [`Pipeline::run_stage`] themselves.
 //!
 //! The image is kept as HexView keeps its blocks: every configured stage that adds,
 //! removes or moves data leaves it normalized, so adjacent data forms one block. Split
@@ -14,9 +14,9 @@
 use thiserror::Error;
 
 use crate::{
-    AddressRange, AlignOptions, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT, FillOptions, HexFile,
-    MergeOptions, OpsError, Placement, RemapOptions, SignatureError, SignatureSignOptions,
-    SignatureVerifyOptions, SwapMode,
+    AddressRange, AlignOptions, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT, DataProcessing,
+    FillOptions, HexFile, MergeOptions, OpsError, Placement, ProcessingError, RemapOptions,
+    SignatureMethod, SwapMode, VerifyingKey,
 };
 
 /// One address-mapping operation; HexView applies at most one per run.
@@ -63,6 +63,20 @@ pub struct ChecksumStage {
     pub placement: Option<Placement>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DataProcessingStage {
+    pub operation: DataProcessing,
+    /// Where the operation's output is written into the image.
+    pub placement: Option<Placement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VerifyStage {
+    pub method: SignatureMethod,
+    pub key: VerifyingKey,
+    pub signature: Vec<u8>,
+}
+
 /// Stage identifiers in execution order. `Merge(i)` and `Checksum(i)` address their
 /// respective pipeline entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +95,7 @@ pub enum Stage {
     Swap,
     RemoveSmallBlocks,
     Checksum(usize),
-    Sign,
+    DataProcessing,
     Verify,
 }
 
@@ -107,7 +121,7 @@ impl Stage {
             Self::RemoveSmallBlocks,
         ])
         .chain((0..checksum_count).map(Self::Checksum))
-        .chain([Self::Sign, Self::Verify])
+        .chain([Self::DataProcessing, Self::Verify])
     }
 }
 
@@ -116,7 +130,7 @@ pub enum PipelineError {
     #[error(transparent)]
     Ops(#[from] OpsError),
     #[error(transparent)]
-    Signature(#[from] SignatureError),
+    Processing(#[from] ProcessingError),
 }
 
 /// Bytes produced by the run, for callers that write them elsewhere.
@@ -124,7 +138,8 @@ pub enum PipelineError {
 pub struct PipelineOutput {
     /// One result per checksum stage, in order.
     pub checksums: Vec<Vec<u8>>,
-    pub signature: Option<Vec<u8>>,
+    /// The data processing output, such as a signature.
+    pub data_processing: Option<Vec<u8>>,
 }
 
 /// Stage parameters; unset stages are skipped.
@@ -149,8 +164,8 @@ pub struct Pipeline {
     pub swap_word: bool,
     pub swap_dword: bool,
     pub checksums: Vec<ChecksumStage>,
-    pub sign: Option<SignatureSignOptions>,
-    pub verify: Option<SignatureVerifyOptions>,
+    pub data_processing: Option<DataProcessingStage>,
+    pub verify: Option<VerifyStage>,
 }
 
 impl Pipeline {
@@ -192,10 +207,10 @@ impl Pipeline {
                 .checksums
                 .get(index)
                 .is_some_and(|stage| stage.placement.is_some()),
-            Stage::Sign => self
-                .sign
+            Stage::DataProcessing => self
+                .data_processing
                 .as_ref()
-                .is_some_and(|sign| sign.placement.is_some()),
+                .is_some_and(|stage| stage.placement.is_some()),
         };
         if places_data {
             hexfile.normalize();
@@ -294,14 +309,15 @@ impl Pipeline {
                     output.checksums.push(bytes);
                 }
             }
-            Stage::Sign => {
-                if let Some(options) = &self.sign {
-                    output.signature = Some(hexfile.sign(options)?);
+            Stage::DataProcessing => {
+                if let Some(stage) = &self.data_processing {
+                    output.data_processing =
+                        hexfile.process_data(&stage.operation, stage.placement)?;
                 }
             }
             Stage::Verify => {
-                if let Some(options) = &self.verify {
-                    hexfile.verify_signature(options)?;
+                if let Some(stage) = &self.verify {
+                    hexfile.verify_signature(stage.method, &stage.key, &stage.signature)?;
                 }
             }
         }

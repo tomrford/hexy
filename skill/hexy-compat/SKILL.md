@@ -17,6 +17,7 @@ Keep CLI parsing rules in mind:
 - Use `--` before an absolute Unix path if it might be mistaken for a slash option.
 - Expect the first positional argument to be the input file when no explicit import option is used.
 - Expect numeric arguments to accept common compatibility forms such as `0x1234`, `1234h`, `0b1010`, and separators like `_` or `.`.
+- Expect `/DP` and `/SV` to resolve relative key, signature and output paths against the input file's folder, and `/DP` without `;outfile` to write HexView's default output file, such as `SignD_SHA256.RSA`.
 
 Read [cli-reference.md](references/cli-reference.md) for the actual interface. Scan the execution-order section first, then jump to the specific stage you need.
 

@@ -348,8 +348,8 @@ pub(super) fn write_checksum_text(path: &Path, bytes: &[u8]) -> Result<(), std::
     std::fs::write(path, hex_list(bytes, ", "))
 }
 
-/// Write signature bytes as the `0xAA ,0xBB` text HexView produces for `/DP` outfiles.
-pub(super) fn write_signature_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+/// Write bytes as the `0xAA ,0xBB` text HexView produces for `/DP` output files.
+pub(super) fn write_data_processing_text(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
     std::fs::write(path, hex_list(bytes, " ,"))
 }
 

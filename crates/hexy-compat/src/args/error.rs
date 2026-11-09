@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use super::types::ParseArgError;
-use hexy_core::{FileIoError, SignatureError, WriteError};
+use hexy_core::{FileIoError, WriteError};
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -13,8 +13,6 @@ pub enum CliError {
     Parse(#[from] crate::ParseError),
     #[error(transparent)]
     Write(#[from] WriteError),
-    #[error(transparent)]
-    Signature(#[from] SignatureError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

@@ -30,7 +30,13 @@ pub(super) fn load_ini(
             continue;
         };
         let key = key.trim().to_ascii_lowercase();
-        let value = value.trim().trim_matches('"').to_owned();
+        // Windows INI reading strips one pair of matching quotes.
+        let value = value.trim();
+        let value = ['"', '\'']
+            .into_iter()
+            .find_map(|quote| value.strip_prefix(quote)?.strip_suffix(quote))
+            .unwrap_or(value)
+            .to_owned();
         map.insert(key, value);
     }
 

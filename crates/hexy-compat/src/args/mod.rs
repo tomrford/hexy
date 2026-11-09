@@ -3,8 +3,9 @@
 //! Parser boundary: this module parses HexView-style argv into `Args`; execution
 //! builds a `hexy_core::Pipeline` from `Args` and runs its stages in order. The core
 //! pipeline owns the stage order (steps 5-19 below, except /L); compat loads inputs,
-//! runs /L after the /AR stage, writes checksum and signature files after their
-//! stages, and exports. `hexy-core` does not depend on slash syntax.
+//! runs /L after the /AR stage, reads /DP and /SV parameters when their stages run,
+//! writes checksum and data processing files after their stages, and exports.
+//! `hexy-core` does not depend on slash syntax.
 //!
 //! Processing order matches the cleanroom compatibility target (implemented subset):
 //! 1. Read input file
@@ -24,8 +25,8 @@
 //! 15. Swap bytes (/SWAPWORD, /SWAPLONG)
 //! 16. Remove small blocks (/RB)
 //! 17. Checksum (/CS, /CSM)
-//! 18. Data processing signature subset (/DP32/33/38/39/46/47/48/49)
-//! 19. Signature verification subset (/SV4..11)
+//! 18. Data processing (/DP32/33/38/39/46/47/48/49)
+//! 19. Signature verification (/SV4..11)
 //! 20. Export (/Xx)
 //!
 //! Note: /PB remains unsupported (proprietary DLL-backed).
@@ -37,7 +38,7 @@ mod io;
 mod log;
 mod parse;
 mod parse_util;
-mod signature;
+mod processing;
 mod types;
 
 use std::io::Write;

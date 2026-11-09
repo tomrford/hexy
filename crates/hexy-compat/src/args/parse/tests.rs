@@ -1,3 +1,4 @@
+use super::super::processing::ParamSource;
 use super::super::types::ChecksumTarget;
 use super::*;
 use crate::Placement;
@@ -55,16 +56,6 @@ fn test_parse_checksum_reverse_without_target_defaults_none() {
     assert_eq!(checksum.algorithm, 9);
     assert!(checksum.little_endian);
     assert!(matches!(checksum.target, ChecksumTarget::None));
-}
-
-#[test]
-fn test_parse_dp_signature_subset_option() {
-    let mut args = Args::default();
-    parse_option(&mut args, "DP32:@append:key.pem;sig.bin").unwrap();
-    let dp = args.data_processing.expect("data processing parsed");
-    assert_eq!(dp.method, 32);
-    assert!(matches!(dp.placement, Some(Placement::Append)));
-    assert_eq!(dp.key_info, "key.pem");
 }
 
 /// HexView 1.15.2 keeps the intersection of the valid /AR ranges, skips empty and
@@ -178,35 +169,24 @@ fn test_parse_checksum_file_target_with_windows_absolute_path() {
 }
 
 #[test]
-fn test_parse_data_processing_paths_with_windows_absolute_paths() {
+fn test_parse_dp_and_sv_windows_absolute_paths() {
     let mut args = Args::default();
-    parse_option(&mut args, r"DP32:C:\temp\key.pem;D:\temp\sig.bin").unwrap();
-    let dp = args.data_processing.expect("data processing parsed");
-    assert_eq!(dp.key_info, r"C:\temp\key.pem");
-    assert_eq!(dp.output_file, Some(PathBuf::from(r"D:\temp\sig.bin")));
-}
-
-#[test]
-fn test_parse_signature_verify_paths_with_windows_absolute_paths() {
-    let mut args = Args::default();
+    parse_option(&mut args, r"DP32:@append:C:\temp\key.pem;D:\temp\sig.bin").unwrap();
     parse_option(&mut args, r"SV4:C:\temp\pub.pem!D:\temp\sig.bin").unwrap();
-    let sv = args
-        .signature_verify
-        .expect("signature verification parsed");
-    assert_eq!(sv.key_info, r"C:\temp\pub.pem");
-    assert_eq!(sv.signature_info, r"D:\temp\sig.bin");
-}
-
-#[test]
-fn test_parse_sv_option() {
-    let mut args = Args::default();
-    parse_option(&mut args, "SV4:pub.pem!sig.bin").unwrap();
+    let dp = args.data_processing.expect("data processing parsed");
+    assert_eq!(dp.method, 32);
+    assert_eq!(dp.placement, Some(Placement::Append));
+    assert_eq!(
+        dp.source,
+        ParamSource::File(PathBuf::from(r"C:\temp\key.pem"))
+    );
+    assert_eq!(dp.param4.as_deref(), Some(r"D:\temp\sig.bin"));
     let sv = args
         .signature_verify
         .expect("signature verification parsed");
     assert_eq!(sv.method, 4);
-    assert_eq!(sv.key_info, "pub.pem");
-    assert_eq!(sv.signature_info, "sig.bin");
+    assert_eq!(sv.key, ParamSource::File(PathBuf::from(r"C:\temp\pub.pem")));
+    assert_eq!(sv.signature.as_deref(), Some(r"D:\temp\sig.bin"));
 }
 
 #[test]
