@@ -45,25 +45,28 @@ impl Validation {
             parse_lenient_number(value.strip_prefix(['+', '-']).unwrap_or(value)) != 0
         };
         let mut error = None;
-        let mut checksum = |key: &str| -> Result<Option<ChecksumAlgorithm>, CliError> {
+        let mut checksum = |key: &str| {
             let value = text(key).trim();
             if value.is_empty() || value.starts_with('-') {
-                return Ok(None);
+                return None;
             }
-            match ChecksumAlgorithm::try_from(parse_lenient_number(value).min(255) as u8) {
-                Ok(ChecksumAlgorithm::Constant(_)) => Ok(Some(ChecksumAlgorithm::Constant(
-                    checksum_constant().map_err(CliError::Other)?,
-                ))),
-                Ok(algorithm) => Ok(Some(algorithm)),
-                // HexView writes an empty checksum and fails the run.
-                Err(e) => {
-                    error.get_or_insert(format!("/vs {key}: {e}"));
-                    Ok(Some(ChecksumAlgorithm::Constant(Vec::new())))
-                }
-            }
+            let algorithm = ChecksumAlgorithm::try_from(parse_lenient_number(value).min(255) as u8)
+                .map_err(|e| e.to_string())
+                .and_then(|algorithm| match algorithm {
+                    ChecksumAlgorithm::Constant(_) => {
+                        checksum_constant().map(ChecksumAlgorithm::Constant)
+                    }
+                    algorithm => Ok(algorithm),
+                });
+            // For a method it does not know or a constant it cannot read, HexView
+            // writes an empty checksum and fails the run.
+            Some(algorithm.unwrap_or_else(|e| {
+                error.get_or_insert(format!("/vs {key}: {e}"));
+                ChecksumAlgorithm::Constant(Vec::new())
+            }))
         };
-        let block_checksum = checksum("blockchecksumtype")?;
-        let file_checksum = checksum("filechecksumtype")?;
+        let block_checksum = checksum("blockchecksumtype");
+        let file_checksum = checksum("filechecksumtype");
         let length = |key: &str| number(&format!("{key}length")) as usize;
         let tag = |key: &str| match tag_bytes(text(key), length(key)) {
             None if length(key) == 0 => Some(Vec::new()),
