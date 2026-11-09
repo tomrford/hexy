@@ -1,8 +1,8 @@
 use super::error::CliError;
-use super::types::{ChecksumTarget, DataProcessingParams, SignatureVerifyParams};
+use super::types::{DataProcessingParams, SignatureVerifyParams};
 use hexy_core::{
-    SignatureBytesSource, SignatureKeySource, SignatureMethod, SignaturePlacement,
-    SignatureSignOptions, SignatureVerifyOptions,
+    SignatureBytesSource, SignatureKeySource, SignatureMethod, SignatureSignOptions,
+    SignatureVerifyOptions,
 };
 use std::path::Path;
 
@@ -188,12 +188,7 @@ pub(super) fn apply_data_processing(
     let options = SignatureSignOptions {
         method,
         key_source: key_source.as_core(),
-        placement: params
-            .placement
-            .as_ref()
-            .map(map_checksum_target)
-            .transpose()
-            .map_err(|e| CliError::Other(format!("/DP{}: {e}", params.method)))?,
+        placement: params.placement,
     };
     let signature = hexfile
         .sign(&options)
@@ -225,18 +220,6 @@ pub(super) fn apply_signature_verification(
         .verify_signature(&options)
         .map_err(|e| CliError::Other(format!("/SV{}: {e}", params.method)))?;
     Ok(())
-}
-
-fn map_checksum_target(target: &ChecksumTarget) -> Result<SignaturePlacement, String> {
-    match target {
-        ChecksumTarget::None => Err("missing /DP placement target".to_owned()),
-        ChecksumTarget::Address(addr) => Ok(SignaturePlacement::Address(*addr)),
-        ChecksumTarget::Append => Ok(SignaturePlacement::Append),
-        ChecksumTarget::Begin => Ok(SignaturePlacement::Begin),
-        ChecksumTarget::Prepend => Ok(SignaturePlacement::Prepend),
-        ChecksumTarget::OverwriteEnd => Ok(SignaturePlacement::OverwriteEnd),
-        ChecksumTarget::File(_) => Err("file target is not valid for /DP placement".to_owned()),
-    }
 }
 
 #[cfg(test)]

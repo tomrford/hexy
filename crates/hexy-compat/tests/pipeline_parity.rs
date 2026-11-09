@@ -18,15 +18,15 @@ fn test_operations_match_cli_basic() {
 
     let args = vec![
         input_path.to_string_lossy().to_string(),
-        "/FR:0x0-0x7".to_string(),
-        "/FP:AA".to_string(),
-        "/CR:0x2-0x3".to_string(),
+        "/FR:0x0-0x7".to_owned(),
+        "/FP:AA".to_owned(),
+        "/CR:0x2-0x3".to_owned(),
         format!("/MO:{};0x6", merge_path.to_string_lossy()),
-        "/AR:0x0-0x7".to_string(),
-        "/AD:4".to_string(),
-        "/AL".to_string(),
-        "/AF:0x00".to_string(),
-        "-o".to_string(),
+        "/AR:0x0-0x7".to_owned(),
+        "/AD:4".to_owned(),
+        "/AL".to_owned(),
+        "/AF:0x00".to_owned(),
+        "-o".to_owned(),
         output_path.to_string_lossy().to_string(),
     ];
 

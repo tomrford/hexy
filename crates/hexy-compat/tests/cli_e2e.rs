@@ -16,12 +16,12 @@ fn test_cli_multistage_bin_merge_align_output() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x1002", merge.display()),
-        "/AR:0x1000-0x1004".to_string(),
-        "/AD:3".to_string(),
-        "/AL".to_string(),
-        "/AF:0xEE".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/AR:0x1000-0x1004".to_owned(),
+        "/AD:3".to_owned(),
+        "/AL".to_owned(),
+        "/AF:0xEE".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 

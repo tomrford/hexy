@@ -1,15 +1,11 @@
 use hexy_core::{
-    AddressRange, IntelHexMode, MergeMode, ParseError, SRecordType, SwapMode, parse_compat_ranges,
+    AddressRange, IntelHexMode, MergeMode, SRecordType, SwapMode, parse_compat_ranges,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 pub(crate) fn value_error(err: impl std::fmt::Display) -> PyErr {
-    PyValueError::new_err(err.to_string())
-}
-
-pub(crate) fn parse_error(err: ParseError) -> PyErr {
     PyValueError::new_err(err.to_string())
 }
 

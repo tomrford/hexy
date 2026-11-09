@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
+
 mod common;
 
 use common::{assert_success, run_hexy, temp_dir, write_file};
@@ -111,8 +113,8 @@ fn test_cli_dp_placement_append_writes_signature_to_data() {
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
         format!("/DP46:@append:{}", private_path.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_hex.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -166,8 +168,8 @@ fn assert_dp_placement_empty_input_noop(target: &str) {
             private_path.display(),
             sig_path.display()
         ),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_hex.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -204,7 +206,7 @@ fn test_cli_dp_missing_windows_style_key_path_is_file_error() {
 
     let args = vec![
         format!("/IN:{};0x1000", input_path.display()),
-        "/DP32:C:\\temp\\missing-private-key.pem".to_string(),
+        "/DP32:C:\\temp\\missing-private-key.pem".to_owned(),
     ];
     let output = run_hexy(&args);
     assert!(!output.status.success());

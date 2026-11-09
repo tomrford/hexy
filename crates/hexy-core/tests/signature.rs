@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -6,8 +8,8 @@ use ed25519_dalek::pkcs8::{
     EncodePrivateKey as EdEncodePrivateKey, EncodePublicKey as EdEncodePublicKey,
 };
 use hexy_core::{
-    HexFile, Segment, SignatureBytesSource, SignatureKeySource, SignatureMethod,
-    SignaturePlacement, SignatureSignOptions, SignatureVerifyOptions,
+    HexFile, Placement, Segment, SignatureBytesSource, SignatureKeySource, SignatureMethod,
+    SignatureSignOptions, SignatureVerifyOptions,
 };
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -51,7 +53,9 @@ fn temp_dir(name: &str) -> PathBuf {
 #[test]
 fn test_sign_and_verify_rsa_pkcs1() {
     let (private_key, public_key) = rsa_keypair();
-    let mut hexfile = HexFile::with_segments(vec![Segment::new(0x1000, b"hello-signature".into())]);
+    let mut hexfile = HexFile::with_segments(vec![
+        Segment::new(0x1000, b"hello-signature".into()).unwrap(),
+    ]);
     let sign = SignatureSignOptions {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
@@ -75,7 +79,8 @@ fn test_sign_and_verify_rsa_pkcs1() {
 #[test]
 fn test_sign_and_verify_ed25519() {
     let (private_key, public_key) = ed25519_keypair();
-    let mut hexfile = HexFile::with_segments(vec![Segment::new(0x1000, b"ed25519".into())]);
+    let mut hexfile =
+        HexFile::with_segments(vec![Segment::new(0x1000, b"ed25519".into()).unwrap()]);
     let sign = SignatureSignOptions {
         method: SignatureMethod::Ed25519Ph {
             with_metadata: false,
@@ -99,14 +104,15 @@ fn test_sign_and_verify_ed25519() {
 #[test]
 fn test_sign_append_places_signature_in_data() {
     let (private_key, _) = ed25519_keypair();
-    let mut hexfile =
-        HexFile::with_segments(vec![Segment::new(0x1000, vec![0x10, 0x20, 0x30, 0x40])]);
+    let mut hexfile = HexFile::with_segments(vec![
+        Segment::new(0x1000, vec![0x10, 0x20, 0x30, 0x40]).unwrap(),
+    ]);
     let sign = SignatureSignOptions {
         method: SignatureMethod::Ed25519Ph {
             with_metadata: false,
         },
         key_source: SignatureKeySource::Bytes(&private_key),
-        placement: Some(SignaturePlacement::Append),
+        placement: Some(Placement::Append),
     };
     let signature = hexfile.sign(&sign).unwrap();
 
@@ -127,7 +133,7 @@ fn test_sign_append_on_empty_input_is_noop() {
             with_metadata: false,
         },
         key_source: SignatureKeySource::Bytes(&private_key),
-        placement: Some(SignaturePlacement::Append),
+        placement: Some(Placement::Append),
     };
     let signature = hexfile.sign(&sign).unwrap();
 
@@ -144,8 +150,9 @@ fn test_sign_and_verify_with_explicit_file_sources() {
     std::fs::write(&private_path, &private_key).unwrap();
     std::fs::write(&public_path, &public_key).unwrap();
 
-    let mut hexfile =
-        HexFile::with_segments(vec![Segment::new(0x1000, b"explicit-sources".into())]);
+    let mut hexfile = HexFile::with_segments(vec![
+        Segment::new(0x1000, b"explicit-sources".into()).unwrap(),
+    ]);
     let sign = SignatureSignOptions {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,

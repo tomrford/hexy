@@ -31,6 +31,7 @@ mod error;
 mod execute;
 mod ini;
 mod io;
+mod log;
 mod parse;
 mod parse_util;
 mod signature;

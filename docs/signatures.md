@@ -35,7 +35,7 @@ fn sign_and_verify(hexfile: &mut HexFile) -> Result<(), SignatureError> {
 ```
 
 `HexFile::sign` returns the signature bytes. With `placement: None`, it leaves
-the image unchanged. A `SignaturePlacement` writes the signature into the image
+the image unchanged. A `Placement` writes the signature into the image
 as part of the same operation. `HexFile::verify_signature` does not modify the
 image.
 

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use crate::AddressRange;
+use crate::{AddressRange, ForcedRange, Placement};
 
 use super::types::{
-    ChecksumParams, ChecksumTarget, DataProcessingParams, DspicOp, ForcedRange, ImportParam,
-    MergeParam, ParseArgError, RemapParams, SignatureVerifyParams,
+    ChecksumParams, ChecksumTarget, DataProcessingParams, DspicOp, ImportParam, MergeParam,
+    ParseArgError, RemapParams, SignatureVerifyParams,
 };
 
 pub(super) fn split_option(opt: &str) -> Option<(&str, &str)> {
@@ -287,7 +287,7 @@ pub(super) fn parse_checksum(
     let target = if target_str.is_empty() {
         ChecksumTarget::None
     } else if let Some(stripped) = target_str.strip_prefix('@') {
-        parse_placement_target(stripped)?
+        ChecksumTarget::Place(parse_placement_target(stripped)?)
     } else {
         ChecksumTarget::File(PathBuf::from(target_str))
     };
@@ -302,15 +302,15 @@ pub(super) fn parse_checksum(
     })
 }
 
-fn parse_placement_target(target: &str) -> Result<ChecksumTarget, ParseArgError> {
+fn parse_placement_target(target: &str) -> Result<Placement, ParseArgError> {
     let target_upper = target.to_ascii_uppercase();
     match target_upper.as_str() {
-        "APPEND" => Ok(ChecksumTarget::Append),
-        "BEGIN" => Ok(ChecksumTarget::Begin),
-        "UPFRONT" => Ok(ChecksumTarget::Prepend),
-        "PREPEND" => Ok(ChecksumTarget::Address(0)),
-        "END" => Ok(ChecksumTarget::OverwriteEnd),
-        _ => Ok(ChecksumTarget::Address(parse_number(target)?)),
+        "APPEND" => Ok(Placement::Append),
+        "BEGIN" => Ok(Placement::Begin),
+        "UPFRONT" => Ok(Placement::Prepend),
+        "PREPEND" => Ok(Placement::Address(0)),
+        "END" => Ok(Placement::OverwriteEnd),
+        _ => Ok(Placement::Address(parse_number(target)?)),
     }
 }
 
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_parse_data_processing_params_with_placement_and_output() {
         let params = parse_data_processing_params(32, "@append:key.pem;sig.bin").unwrap();
-        assert!(matches!(params.placement, Some(ChecksumTarget::Append)));
+        assert!(matches!(params.placement, Some(Placement::Append)));
         assert_eq!(params.key_info, "key.pem");
         assert_eq!(params.output_file, Some(PathBuf::from("sig.bin")));
     }

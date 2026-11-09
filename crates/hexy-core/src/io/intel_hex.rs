@@ -1,5 +1,5 @@
-use super::{ParseError, push_crlf, push_hex_byte};
-use crate::{HexFile, Segment};
+use super::{ParseError, SegmentBuilder, WriteError, push_crlf, push_hex_byte};
+use crate::HexFile;
 
 const RECORD_DATA: u8 = 0x00;
 const RECORD_EOF: u8 = 0x01;
@@ -38,8 +38,7 @@ fn parse_intel_hex_with_address_scale(
         message: format!("invalid UTF-8: {e}"),
     })?;
 
-    let mut segments: Vec<Segment> = Vec::new();
-    let mut current_segment: Option<Segment> = None;
+    let mut builder = SegmentBuilder::default();
     let mut extended_address: u32 = 0;
     let mut eof_seen = false;
     let mut record_seen = false;
@@ -112,34 +111,10 @@ fn parse_intel_hex_with_address_scale(
         match record_type {
             RECORD_DATA => {
                 let full_address = extended_address
-                    .checked_add(address as u32)
-                    .ok_or_else(|| ParseError::AddressOverflow(format!("line {line_num}")))?
-                    .checked_mul(address_scale)
-                    .ok_or_else(|| ParseError::AddressOverflow(format!("line {line_num}")))?;
-
-                if byte_count > 0 {
-                    full_address
-                        .checked_add(byte_count as u32 - 1)
-                        .ok_or_else(|| ParseError::AddressOverflow(format!("line {line_num}")))?;
-                }
-
-                match &mut current_segment {
-                    Some(seg) if seg.end_address().checked_add(1) == Some(full_address) => {
-                        seg.data.extend_from_slice(data);
-                    }
-                    Some(seg) => {
-                        let next = Segment::try_new(full_address, data.to_vec()).map_err(|e| {
-                            ParseError::AddressOverflow(format!("line {line_num}: {e}"))
-                        })?;
-                        segments.push(std::mem::replace(seg, next));
-                    }
-                    None => {
-                        current_segment =
-                            Some(Segment::try_new(full_address, data.to_vec()).map_err(|e| {
-                                ParseError::AddressOverflow(format!("line {line_num}: {e}"))
-                            })?);
-                    }
-                }
+                    .checked_add(u32::from(address))
+                    .and_then(|addr| addr.checked_mul(address_scale))
+                    .ok_or(ParseError::AddressOverflow { line: line_num })?;
+                builder.push(full_address, data, line_num)?;
             }
             RECORD_EOF => {
                 eof_seen = true;
@@ -151,9 +126,7 @@ fn parse_intel_hex_with_address_scale(
                         message: "extended segment address must have 2 data bytes".to_owned(),
                     });
                 }
-                if let Some(seg) = current_segment.take() {
-                    segments.push(seg);
-                }
+                builder.close();
                 let base = u16::from_be_bytes([data[0], data[1]]);
                 extended_address = (base as u32) << 4;
             }
@@ -164,9 +137,7 @@ fn parse_intel_hex_with_address_scale(
                         message: "extended linear address must have 2 data bytes".to_owned(),
                     });
                 }
-                if let Some(seg) = current_segment.take() {
-                    segments.push(seg);
-                }
+                builder.close();
                 let base = u16::from_be_bytes([data[0], data[1]]);
                 extended_address = (base as u32) << 16;
             }
@@ -184,11 +155,7 @@ fn parse_intel_hex_with_address_scale(
         return Err(ParseError::UnexpectedEof);
     }
 
-    if let Some(seg) = current_segment {
-        segments.push(seg);
-    }
-
-    Ok(HexFile::with_segments(segments))
+    Ok(builder.finish())
 }
 
 fn looks_like_malformed_intel_hex_record(line: &str) -> bool {
@@ -212,7 +179,7 @@ pub fn parse_intel_hex_16bit(input: &[u8]) -> Result<HexFile, ParseError> {
 pub fn write_intel_hex(
     hexfile: &HexFile,
     options: &IntelHexWriteOptions,
-) -> Result<Vec<u8>, ParseError> {
+) -> Result<Vec<u8>, WriteError> {
     let segments = hexfile.normalized().into_segments();
     let mut output = Vec::new();
     let bytes_per_line = if options.bytes_per_line == 0 {
@@ -220,23 +187,24 @@ pub fn write_intel_hex(
     } else {
         options.bytes_per_line
     } as usize;
-    let auto_mode = matches!(options.mode, IntelHexMode::Auto);
+    // Extended address record type per line: fixed by the mode, or chosen per line in auto.
+    let fixed_mode = match options.mode {
+        IntelHexMode::Auto => None,
+        IntelHexMode::ExtendedLinear => Some(RECORD_EXTENDED_LINEAR),
+        IntelHexMode::ExtendedSegment => Some(RECORD_EXTENDED_SEGMENT),
+    };
+    let auto_mode = fixed_mode.is_none();
     let max_addr = segments.iter().map(|s| s.end_address()).max();
     let auto_force_linear = auto_mode && matches!(max_addr, Some(max) if max > 0xFFFFF);
-    let fixed_mode = if auto_mode { None } else { Some(options.mode) };
 
     let mut current_extended: Option<u16> = None;
-    let mut current_mode: Option<IntelHexMode> = fixed_mode;
+    let mut current_mode: Option<u8> = fixed_mode;
 
     let total_bytes: usize = segments.iter().map(|s| s.len()).sum();
-    let total_records: usize = if bytes_per_line == 0 {
-        0
-    } else {
-        segments
-            .iter()
-            .map(|s| s.len().div_ceil(bytes_per_line))
-            .sum()
-    };
+    let total_records: usize = segments
+        .iter()
+        .map(|s| s.len().div_ceil(bytes_per_line))
+        .sum();
     // Rough reserve: 2 hex chars per byte + per-record overhead.
     output.reserve(total_bytes.saturating_mul(2) + total_records.saturating_mul(12) + 64);
 
@@ -249,25 +217,26 @@ pub fn write_intel_hex(
             let line_mode = if let Some(mode) = fixed_mode {
                 mode
             } else if auto_force_linear || addr > 0xFFFFF {
-                IntelHexMode::ExtendedLinear
+                RECORD_EXTENDED_LINEAR
             } else {
-                IntelHexMode::ExtendedSegment
+                RECORD_EXTENDED_SEGMENT
             };
-            if line_mode == IntelHexMode::ExtendedSegment && addr > 0xFFFFF {
-                return Err(ParseError::InvalidOutput(format!(
-                    "address {addr:#X} cannot be encoded in Intel HEX extended segment mode"
-                )));
+            if line_mode == RECORD_EXTENDED_SEGMENT && addr > 0xFFFFF {
+                return Err(WriteError::AddressNotEncodable {
+                    address: addr,
+                    format: "Intel HEX extended segment address",
+                });
             }
-            let needed_extended = match line_mode {
-                IntelHexMode::ExtendedLinear => (addr >> 16) as u16,
-                IntelHexMode::ExtendedSegment => ((addr >> 4) & 0xF000) as u16,
-                IntelHexMode::Auto => unreachable!(),
+            let needed_extended = if line_mode == RECORD_EXTENDED_LINEAR {
+                (addr >> 16) as u16
+            } else {
+                ((addr >> 4) & 0xF000) as u16
             };
 
             let mut should_emit =
                 current_extended != Some(needed_extended) || current_mode != Some(line_mode);
             if auto_mode {
-                if line_mode == IntelHexMode::ExtendedSegment {
+                if line_mode == RECORD_EXTENDED_SEGMENT {
                     if addr <= 0xFFFF {
                         if current_mode.is_none() && current_extended.is_none() {
                             should_emit = false;
@@ -281,7 +250,7 @@ pub fn write_intel_hex(
                     }
                 }
                 if auto_force_linear
-                    && line_mode == IntelHexMode::ExtendedLinear
+                    && line_mode == RECORD_EXTENDED_LINEAR
                     && needed_extended == 0
                     && current_mode.is_none()
                     && current_extended.is_none()
@@ -293,12 +262,7 @@ pub fn write_intel_hex(
             if should_emit {
                 current_extended = Some(needed_extended);
                 current_mode = Some(line_mode);
-                let record_type = match line_mode {
-                    IntelHexMode::ExtendedLinear => RECORD_EXTENDED_LINEAR,
-                    IntelHexMode::ExtendedSegment => RECORD_EXTENDED_SEGMENT,
-                    IntelHexMode::Auto => unreachable!(),
-                };
-                write_record(&mut output, record_type, 0, &needed_extended.to_be_bytes());
+                write_record(&mut output, line_mode, 0, &needed_extended.to_be_bytes());
             }
 
             let offset_addr = (addr & 0xFFFF) as u16;
@@ -370,6 +334,7 @@ fn validate_checksum(bytes: &[u8], line_num: usize) -> Result<(), ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Segment;
 
     #[test]
     fn test_parse_simple() {
@@ -435,7 +400,7 @@ mod tests {
     fn test_parse_16bit_overflow() {
         let input = b":0200000480007A\n:01000000AA55\n:00000001FF\n";
         let result = parse_intel_hex_16bit(input);
-        assert!(matches!(result, Err(ParseError::AddressOverflow(_))));
+        assert!(matches!(result, Err(ParseError::AddressOverflow { .. })));
     }
 
     #[test]
@@ -451,7 +416,7 @@ mod tests {
         write_record(&mut input, RECORD_EOF, 0, &[]);
 
         let result = parse_intel_hex(&input);
-        assert!(matches!(result, Err(ParseError::AddressOverflow(_))));
+        assert!(matches!(result, Err(ParseError::AddressOverflow { .. })));
     }
 
     #[test]
@@ -483,7 +448,9 @@ mod tests {
 
     #[test]
     fn test_write_simple() {
-        let hf = HexFile::with_segments(vec![Segment::new(0x0100, vec![0x00, 0x01, 0x02, 0x03])]);
+        let hf = HexFile::with_segments(vec![
+            Segment::new(0x0100, vec![0x00, 0x01, 0x02, 0x03]).unwrap(),
+        ]);
         let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(text.contains(":0401000000010203F5"));
@@ -492,10 +459,9 @@ mod tests {
 
     #[test]
     fn test_write_roundtrip_at_u32_max_boundary() {
-        let hf = HexFile::with_segments(vec![Segment::new(
-            u32::MAX - 3,
-            vec![0xFC, 0xFD, 0xFE, 0xFF],
-        )]);
+        let hf = HexFile::with_segments(vec![
+            Segment::new(u32::MAX - 3, vec![0xFC, 0xFD, 0xFE, 0xFF]).unwrap(),
+        ]);
 
         let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let parsed = parse_intel_hex(&output).unwrap();
@@ -506,8 +472,8 @@ mod tests {
     #[test]
     fn test_write_auto_mixed_modes() {
         let hf = HexFile::with_segments(vec![
-            Segment::new(0x12000, vec![0xAA]),
-            Segment::new(0x120000, vec![0xBB]),
+            Segment::new(0x12000, vec![0xAA]).unwrap(),
+            Segment::new(0x120000, vec![0xBB]).unwrap(),
         ]);
         let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
@@ -517,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_write_forced_extended_segment_rejects_high_address() {
-        let hf = HexFile::with_segments(vec![Segment::new(0x100000, vec![0xAA])]);
+        let hf = HexFile::with_segments(vec![Segment::new(0x100000, vec![0xAA]).unwrap()]);
         let result = write_intel_hex(
             &hf,
             &IntelHexWriteOptions {
@@ -526,13 +492,16 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Err(ParseError::InvalidOutput(_))));
+        assert!(matches!(
+            result,
+            Err(WriteError::AddressNotEncodable { .. })
+        ));
     }
 
     #[test]
     fn test_write_extended_segment_first_line_respects_bytes_per_line() {
         let data: Vec<u8> = (0u8..64u8).collect();
-        let hf = HexFile::with_segments(vec![Segment::new(0x10000, data)]);
+        let hf = HexFile::with_segments(vec![Segment::new(0x10000, data).unwrap()]);
         let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -549,7 +518,7 @@ mod tests {
     #[test]
     fn test_write_extended_segment_boundary_alignment() {
         let data: Vec<u8> = (0u8..0x30u8).collect();
-        let hf = HexFile::with_segments(vec![Segment::new(0xFFF0, data)]);
+        let hf = HexFile::with_segments(vec![Segment::new(0xFFF0, data).unwrap()]);
         let output = write_intel_hex(&hf, &IntelHexWriteOptions::default()).unwrap();
         let text = String::from_utf8(output).unwrap();
         let lines: Vec<&str> = text.lines().collect();

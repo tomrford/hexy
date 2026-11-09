@@ -1,4 +1,5 @@
-use super::{OpsError, filter::materialized_range_len};
+use super::{OpsError, materialized_len};
+use crate::segment::end_address_for;
 use crate::{AddressRange, HexFile, Segment};
 
 /// Mode for byte swapping.
@@ -51,66 +52,48 @@ pub struct BankedMapOptions {
     pub nonbank_high_base: u32,
 }
 
-fn is_valid_alignment(n: u32) -> bool {
-    n != 0
-}
-
-fn align_down(addr: u32, alignment: u32) -> u32 {
-    addr - (addr % alignment)
-}
-
-fn align_up(len: u32, alignment: u32) -> u32 {
-    let rem = len % alignment;
-    if rem == 0 {
-        len
-    } else {
-        len.checked_add(alignment - rem).unwrap_or(len)
-    }
-}
+/// Single-segment `/SWAPLONG` spans of at least this many bytes take the large-span quirk.
+const SWAPLONG_LARGE_SPAN_LIMIT: usize = 0x100_0000;
 
 impl HexFile {
     /// Align all segment start addresses to multiples of alignment.
     /// Prepends fill bytes as needed. Optionally aligns lengths too.
     /// Fill bytes are LOW priority (existing data wins on overlap).
     pub fn align(&mut self, options: &AlignOptions) -> Result<(), OpsError> {
-        if !is_valid_alignment(options.alignment) {
-            return Err(OpsError::InvalidAlignment(options.alignment));
+        let alignment = options.alignment;
+        if alignment == 0 {
+            return Err(OpsError::InvalidAlignment(alignment));
         }
 
-        // Work on a normalized snapshot to merge any existing overlaps
         let normalized = self.normalized();
         let mut result = HexFile::new();
-
-        // First, add fill segments as LOW priority (prepend = loses on overlap)
         for segment in normalized.segments() {
-            let aligned_start = align_down(segment.start_address, options.alignment);
-
+            let aligned_start = segment.start_address - segment.start_address % alignment;
             if aligned_start < segment.start_address {
-                // Create fill segment for the alignment gap
                 let fill_len = (segment.start_address - aligned_start) as usize;
-                let fill_data = vec![options.fill_byte; fill_len];
-                result.prepend_segment(Segment::new(aligned_start, fill_data));
+                result.prepend_segment(Segment::from_valid(
+                    aligned_start,
+                    vec![options.fill_byte; fill_len],
+                ));
             }
 
             if options.align_length {
-                let end_addr = segment.end_address().saturating_add(1);
-                let aligned_end = align_up(end_addr, options.alignment);
-                if aligned_end > end_addr {
-                    // Create fill segment for length alignment
+                let end_addr = u64::from(segment.end_address()) + 1;
+                let aligned_end = end_addr.next_multiple_of(u64::from(alignment));
+                if aligned_end > end_addr && aligned_end <= u64::from(u32::MAX) + 1 {
                     let fill_len = (aligned_end - end_addr) as usize;
-                    let fill_data = vec![options.fill_byte; fill_len];
-                    result.prepend_segment(Segment::new(end_addr, fill_data));
+                    result.prepend_segment(Segment::from_valid(
+                        end_addr as u32,
+                        vec![options.fill_byte; fill_len],
+                    ));
                 }
             }
         }
-
-        // Then add original data as HIGH priority (append = wins on overlap)
         for segment in normalized.into_segments() {
             result.append_segment(segment);
         }
 
-        // Normalize to merge fill with data (original data wins on overlap)
-        self.set_segments(result.normalized().into_segments());
+        *self = result.normalized();
         Ok(())
     }
 
@@ -119,187 +102,108 @@ impl HexFile {
         if max_size == 0 {
             return;
         }
-
-        let mut new_segments: Vec<Segment> = Vec::new();
-        let max_size_usize = max_size as usize;
-
+        let mut segments = Vec::new();
         for segment in self.take_segments() {
-            if segment.len() <= max_size_usize {
-                new_segments.push(segment);
+            if segment.len() <= max_size as usize {
+                segments.push(segment);
                 continue;
             }
-
             let mut addr = segment.start_address;
-            let mut chunks = segment.data.chunks(max_size_usize).peekable();
-            while let Some(chunk) = chunks.next() {
-                new_segments.push(Segment::new(addr, chunk.to_vec()));
-                if chunks.peek().is_some() {
-                    let Some(next) = addr.checked_add(chunk.len() as u32) else {
-                        break;
-                    };
-                    addr = next;
-                }
+            for chunk in segment.data.chunks(max_size as usize) {
+                segments.push(Segment::from_valid(addr, chunk.to_vec()));
+                addr = addr.wrapping_add(chunk.len() as u32);
             }
         }
-
-        self.set_segments(new_segments);
+        self.set_segments(segments);
     }
 
     /// Swap bytes within all segments (operates on raw segments).
     /// Compatibility parity:
     /// - SWAPWORD: no-op if any segment starts on an odd address or total byte count is odd.
     /// - SWAPLONG: no-op if span start or span length is not a multiple of 4.
-    pub fn swap_bytes(&mut self, mode: SwapMode) -> Result<(), OpsError> {
+    pub fn swap_bytes(&mut self, mode: SwapMode) {
         match mode {
             SwapMode::Word => {
-                let total_len: usize = self.segments().iter().map(|s| s.len()).sum();
-                if !total_len.is_multiple_of(2) {
-                    return Ok(());
+                if !self.total_bytes().is_multiple_of(2)
+                    || self.segments().iter().any(|s| s.start_address % 2 != 0)
+                {
+                    return;
                 }
-                if self.segments().iter().any(|s| s.start_address % 2 != 0) {
-                    return Ok(());
-                }
-
                 for segment in self.segments_mut() {
                     for chunk in segment.data.chunks_exact_mut(2) {
-                        chunk.reverse();
+                        chunk.swap(0, 1);
                     }
                 }
             }
-            SwapMode::DWord => {
-                const SWAPLONG_LARGE_SPAN_LIMIT: usize = 0x1000000;
-                let Some(span_start) = self.segments().iter().map(|s| s.start_address).min() else {
-                    return Ok(());
-                };
-                let Some(span_end) = self.segments().iter().map(|s| s.end_address()).max() else {
-                    return Ok(());
-                };
-                let span_len = span_end
-                    .checked_sub(span_start)
-                    .and_then(|v| v.checked_add(1))
-                    .ok_or_else(|| {
-                        OpsError::AddressOverflow("swaplong span length overflows u32".into())
-                    })?;
-                if span_start % 4 != 0 || span_len % 4 != 0 {
-                    return Ok(());
-                }
+            SwapMode::DWord => self.swap_dwords(),
+        }
+    }
 
-                if self.segments().len() == 1 {
-                    let segment = &mut self.segments_mut()[0];
-                    if segment.start_address == span_start && segment.len() == span_len as usize {
-                        // Compatibility quirk: large single spans repeat the first swapped word.
-                        if segment.len() >= SWAPLONG_LARGE_SPAN_LIMIT {
-                            if segment.data.len() < 4 {
-                                return Ok(());
-                            }
-                            let mut word = [
-                                segment.data[0],
-                                segment.data[1],
-                                segment.data[2],
-                                segment.data[3],
-                            ];
-                            word.reverse();
-                            for chunk in segment.data.chunks_exact_mut(4) {
-                                chunk.copy_from_slice(&word);
-                            }
-                            return Ok(());
-                        }
-                        for chunk in segment.data.chunks_exact_mut(4) {
-                            chunk.reverse();
-                        }
-                        return Ok(());
-                    }
-                }
+    fn swap_dwords(&mut self) {
+        let (Some(span_start), Some(span_end)) = (self.min_address(), self.max_address()) else {
+            return;
+        };
+        let span_len = u64::from(span_end - span_start) + 1;
+        if span_start % 4 != 0 || span_len % 4 != 0 {
+            return;
+        }
 
-                let mut data_map: std::collections::HashMap<u32, u8> =
-                    std::collections::HashMap::new();
-                for segment in self.segments() {
-                    for (offset, &byte) in segment.data.iter().enumerate() {
-                        let Some(addr) = segment.start_address.checked_add(offset as u32) else {
-                            return Err(OpsError::AddressOverflow(format!(
-                                "swaplong address overflow (start={:#X}, offset={})",
-                                segment.start_address, offset
-                            )));
-                        };
-                        data_map.insert(addr, byte);
+        if let [segment] = self.segments_mut() {
+            if segment.len() >= SWAPLONG_LARGE_SPAN_LIMIT {
+                // Compatibility quirk: large single spans repeat the first swapped word.
+                let d = &segment.data;
+                let first = [d[3], d[2], d[1], d[0]];
+                for chunk in segment.data.chunks_exact_mut(4) {
+                    chunk.copy_from_slice(&first);
+                }
+            } else {
+                for chunk in segment.data.chunks_exact_mut(4) {
+                    chunk.reverse();
+                }
+            }
+            return;
+        }
+
+        // Swap every aligned word whose first byte holds data, reading the last-wins view.
+        // Missing bytes take the value of the latest fully present word (zero before one
+        // exists) and only bytes that hold data are written back.
+        let view = self.normalized().into_segments();
+        let mut swapped = view.clone();
+        let mut last_full = [0u8; 4];
+        for segment in &view {
+            let mut next_word = segment.start_address.checked_next_multiple_of(4);
+            while let Some(word_addr) = next_word.filter(|addr| *addr <= segment.end_address()) {
+                let positions: [Option<(usize, usize)>; 4] =
+                    std::array::from_fn(|k| locate(&view, word_addr.checked_add(k as u32)?));
+                let mut word = last_full;
+                for (byte, position) in word.iter_mut().zip(&positions) {
+                    if let Some((index, offset)) = *position {
+                        *byte = view[index].data[offset];
                     }
                 }
-
-                let mut updates: std::collections::HashMap<u32, u8> =
-                    std::collections::HashMap::new();
-                let mut last_full: Option<[u8; 4]> = None;
-
-                let mut addr = span_start;
-                while addr <= span_end {
-                    if !data_map.contains_key(&addr) {
-                        if let Some(next) = addr.checked_add(4) {
-                            addr = next;
-                            continue;
-                        }
-                        break;
-                    }
-
-                    let mut word = [0u8; 4];
-                    let mut all_present = true;
-                    for i in 0..4 {
-                        let Some(a) = addr.checked_add(i as u32) else {
-                            return Err(OpsError::AddressOverflow(
-                                "swaplong address overflow".into(),
-                            ));
-                        };
-                        if let Some(byte) = data_map.get(&a) {
-                            word[i] = *byte;
-                        } else {
-                            all_present = false;
-                            if let Some(last) = last_full {
-                                word[i] = last[i];
-                            } else {
-                                word[i] = 0x00;
-                            }
-                        }
-                    }
-
-                    if all_present {
-                        last_full = Some(word);
-                    }
-
-                    let mut swapped = word;
-                    swapped.reverse();
-                    for (i, &byte) in swapped.iter().enumerate() {
-                        let Some(a) = addr.checked_add(i as u32) else {
-                            return Err(OpsError::AddressOverflow(
-                                "swaplong address overflow".into(),
-                            ));
-                        };
-                        if data_map.contains_key(&a) {
-                            updates.insert(a, byte);
-                        }
-                    }
-
-                    if let Some(next) = addr.checked_add(4) {
-                        addr = next;
-                    } else {
-                        break;
+                if positions.iter().all(Option::is_some) {
+                    last_full = word;
+                }
+                for (k, position) in positions.iter().enumerate() {
+                    if let Some((index, offset)) = *position {
+                        swapped[index].data[offset] = word[3 - k];
                     }
                 }
-
-                for segment in self.segments_mut() {
-                    for (offset, byte) in segment.data.iter_mut().enumerate() {
-                        let Some(addr) = segment.start_address.checked_add(offset as u32) else {
-                            return Err(OpsError::AddressOverflow(format!(
-                                "swaplong address overflow (start={:#X}, offset={})",
-                                segment.start_address, offset
-                            )));
-                        };
-                        if let Some(updated) = updates.get(&addr) {
-                            *byte = *updated;
-                        }
-                    }
-                }
+                next_word = word_addr.checked_add(4);
             }
         }
 
-        Ok(())
+        for segment in self.segments_mut() {
+            let start = segment.start_address;
+            for (offset, byte) in segment.data.iter_mut().enumerate() {
+                let addr = start + offset as u32;
+                if locate(&view, addr & !3).is_some()
+                    && let Some((index, offset)) = locate(&view, addr)
+                {
+                    *byte = swapped[index].data[offset];
+                }
+            }
+        }
     }
 
     /// Expand dsPIC-like data: 2 bytes -> 4 bytes (appends two zero bytes).
@@ -309,37 +213,21 @@ impl HexFile {
         range: AddressRange,
         target: Option<u32>,
     ) -> Result<(), OpsError> {
-        let length = materialized_range_len(range, "dspic expand range")?;
-        if !length.is_multiple_of(2) {
-            return Err(OpsError::LengthNotMultiple {
-                length,
-                expected: 2,
-                operation: format!("/CDSPX range {:#X}-{:#X}", range.start(), range.end()),
-            });
-        }
-
-        let src =
-            self.read_bytes_contiguous(range.start(), length)
-                .ok_or(OpsError::RangeNotCovered {
-                    start: range.start(),
-                    length: range.length(),
-                })?;
-
-        let mut out = Vec::with_capacity(length * 2);
-        for chunk in src.chunks_exact(2) {
-            out.extend_from_slice(chunk);
-            out.extend_from_slice(&[0x00, 0x00]);
-        }
-
+        let src = self.read_dspic_range(range, 2, "dsPIC expand")?;
+        let out: Vec<u8> = src
+            .chunks_exact(2)
+            .flat_map(|pair| [pair[0], pair[1], 0x00, 0x00])
+            .collect();
         let target = match target {
             Some(addr) => addr,
             None => range
                 .start()
                 .checked_mul(2)
-                .ok_or_else(|| OpsError::AddressOverflow("dspic expand target overflow".into()))?,
+                .ok_or(OpsError::AddressOverflow {
+                    address: range.start(),
+                })?,
         };
-        self.write_bytes(target, &out)?;
-        Ok(())
+        self.write_bytes(target, &out)
     }
 
     /// Shrink dsPIC-like data: 4 bytes -> 2 bytes (keeps lower two bytes).
@@ -349,111 +237,76 @@ impl HexFile {
         range: AddressRange,
         target: Option<u32>,
     ) -> Result<(), OpsError> {
-        let length = materialized_range_len(range, "dspic shrink range")?;
-        if !length.is_multiple_of(4) {
-            return Err(OpsError::LengthNotMultiple {
-                length,
-                expected: 4,
-                operation: format!("/CDSPS range {:#X}-{:#X}", range.start(), range.end()),
-            });
-        }
+        let src = self.read_dspic_range(range, 4, "dsPIC shrink")?;
         if target.is_none() && !range.start().is_multiple_of(2) {
             return Err(OpsError::AddressNotDivisible {
                 address: range.start(),
                 divisor: 2,
             });
         }
-
-        let src =
-            self.read_bytes_contiguous(range.start(), length)
-                .ok_or(OpsError::RangeNotCovered {
-                    start: range.start(),
-                    length: range.length(),
-                })?;
-
-        let mut out = Vec::with_capacity(length / 2);
-        for chunk in src.chunks_exact(4) {
-            out.extend_from_slice(&chunk[0..2]);
-        }
-
-        let target = target.unwrap_or(range.start() / 2);
-        self.write_bytes(target, &out)?;
-        Ok(())
+        let out: Vec<u8> = src
+            .chunks_exact(4)
+            .flat_map(|quad| [quad[0], quad[1]])
+            .collect();
+        self.write_bytes(target.unwrap_or(range.start() / 2), &out)
     }
 
     /// Clear dsPIC ghost bytes: set highest byte in each 4-byte group to 0.
     pub fn dspic_clear_ghost(&mut self, range: AddressRange) -> Result<(), OpsError> {
-        let length = materialized_range_len(range, "dspic clear ghost range")?;
-        if !length.is_multiple_of(4) {
-            return Err(OpsError::LengthNotMultiple {
-                length,
-                expected: 4,
-                operation: format!("/CDSPG range {:#X}-{:#X}", range.start(), range.end()),
-            });
-        }
-
-        let mut data =
-            self.read_bytes_contiguous(range.start(), length)
-                .ok_or(OpsError::RangeNotCovered {
-                    start: range.start(),
-                    length: range.length(),
-                })?;
-
+        let mut data = self.read_dspic_range(range, 4, "dsPIC clear ghost")?;
         for chunk in data.chunks_exact_mut(4) {
             chunk[3] = 0x00;
         }
+        self.write_bytes(range.start(), &data)
+    }
 
-        self.write_bytes(range.start(), &data)?;
-        Ok(())
+    fn read_dspic_range(
+        &self,
+        range: AddressRange,
+        multiple: u64,
+        operation: &'static str,
+    ) -> Result<Vec<u8>, OpsError> {
+        let length = materialized_len(range)?;
+        if !range.length().is_multiple_of(multiple) {
+            return Err(OpsError::LengthNotMultiple {
+                length: range.length(),
+                expected: multiple,
+                operation,
+            });
+        }
+        self.read_bytes_contiguous(range.start(), length)
+            .ok_or(OpsError::RangeNotCovered {
+                start: range.start(),
+                length: range.length(),
+            })
+    }
+
+    /// Add offset to all segment addresses. Errors if any address would overflow or underflow.
+    /// If validation fails, no segments are modified (transactional).
+    pub fn offset_addresses(&mut self, offset: i64) -> Result<(), OpsError> {
+        self.relocate(|segment| {
+            i64::from(segment.start_address)
+                .checked_add(offset)
+                .and_then(|addr| u32::try_from(addr).ok())
+                .map(Some)
+                .ok_or(OpsError::AddressOverflow {
+                    address: segment.start_address,
+                })
+        })
     }
 
     /// Multiply all addresses by factor. Errors if any address would overflow.
     /// If validation fails, no segments are modified (transactional).
     pub fn scale_addresses(&mut self, factor: u32) -> Result<(), OpsError> {
-        // First pass: validate all addresses
-        for segment in self.segments() {
-            let new_start = segment.start_address.checked_mul(factor).ok_or_else(|| {
-                OpsError::AddressOverflow(format!(
-                    "{:#X} * {} overflows u32",
-                    segment.start_address, factor
-                ))
-            })?;
-
-            if segment.is_empty() {
-                continue;
-            }
-
-            let length = u32::try_from(segment.len()).map_err(|_| {
-                OpsError::AddressOverflow(format!(
-                    "segment length {} exceeds u32 range",
-                    segment.len()
-                ))
-            })?;
-            let range =
-                AddressRange::from_start_length(new_start, u64::from(length)).map_err(|_| {
-                    OpsError::AddressOverflow(format!(
-                        "{:#X} * {} with length {} exceeds u32 range",
-                        segment.start_address,
-                        factor,
-                        segment.len()
-                    ))
-                })?;
-            if range.extends_past_address_space() {
-                return Err(OpsError::AddressOverflow(format!(
-                    "{:#X} * {} with length {} exceeds u32 range",
-                    segment.start_address,
-                    factor,
-                    segment.len()
-                )));
-            }
-        }
-
-        // Second pass: apply mutation
-        for segment in self.segments_mut() {
-            segment.start_address *= factor;
-        }
-
-        Ok(())
+        self.relocate(|segment| {
+            segment
+                .start_address
+                .checked_mul(factor)
+                .map(Some)
+                .ok_or(OpsError::AddressOverflow {
+                    address: segment.start_address,
+                })
+        })
     }
 
     /// Divide all addresses by divisor. Errors if any address not evenly divisible.
@@ -462,26 +315,16 @@ impl HexFile {
         if divisor == 0 {
             return Err(OpsError::AddressNotDivisible {
                 address: 0,
-                divisor: 0,
+                divisor,
             });
         }
-
-        // First pass: validate all addresses
-        for segment in self.segments() {
-            if segment.start_address % divisor != 0 {
-                return Err(OpsError::AddressNotDivisible {
-                    address: segment.start_address,
-                    divisor,
-                });
-            }
-        }
-
-        // Second pass: apply mutation
-        for segment in self.segments_mut() {
-            segment.start_address /= divisor;
-        }
-
-        Ok(())
+        self.relocate(|segment| match segment.start_address.checked_rem(divisor) {
+            Some(0) => Ok(Some(segment.start_address / divisor)),
+            _ => Err(OpsError::AddressNotDivisible {
+                address: segment.start_address,
+                divisor,
+            }),
+        })
     }
 
     /// Remap banked address ranges into a linear space.
@@ -504,7 +347,6 @@ impl HexFile {
             remapped.extend(remap_segment(segment, options)?);
         }
         self.set_segments(remapped);
-
         Ok(())
     }
 
@@ -516,15 +358,7 @@ impl HexFile {
                 options.bank_min, options.bank_max
             )));
         }
-
-        let new_starts = self
-            .segments()
-            .iter()
-            .map(|segment| banked_map_start(segment, options))
-            .collect::<Result<Vec<_>, _>>()?;
-        apply_segment_starts(self.segments_mut(), new_starts);
-
-        Ok(())
+        self.relocate_pages(|segment| banked_map_start(segment, options))
     }
 
     pub fn map_star12(&mut self) -> Result<(), OpsError> {
@@ -548,22 +382,72 @@ impl HexFile {
     }
 
     pub fn map_star08(&mut self) -> Result<(), OpsError> {
-        let new_starts = self
+        self.relocate_pages(|segment| Ok(star08_map_start(segment)))
+    }
+
+    /// [`Self::relocate`] after splitting segments at 16 KiB page boundaries, so each
+    /// banked-map window moves independently even when data runs across windows.
+    fn relocate_pages(
+        &mut self,
+        new_start: impl Fn(&Segment) -> Result<Option<u32>, OpsError>,
+    ) -> Result<(), OpsError> {
+        const PAGE: u32 = 0x4000;
+        let mut paged = Vec::new();
+        for segment in self.segments() {
+            let mut addr = segment.start_address;
+            let mut rest = segment.data.as_slice();
+            while !rest.is_empty() {
+                let len = ((PAGE - addr % PAGE) as usize).min(rest.len());
+                let (page, tail) = rest.split_at(len);
+                paged.push(Segment::from_valid(addr, page.to_vec()));
+                addr = addr.wrapping_add(len as u32);
+                rest = tail;
+            }
+        }
+        let mut paged = HexFile::with_segments(paged);
+        paged.relocate(new_start)?;
+        *self = paged;
+        Ok(())
+    }
+
+    /// Move each segment to the start `new_start` returns for it (`None` leaves it in
+    /// place). Every move is validated before any is applied.
+    fn relocate(
+        &mut self,
+        new_start: impl Fn(&Segment) -> Result<Option<u32>, OpsError>,
+    ) -> Result<(), OpsError> {
+        let starts = self
             .segments()
             .iter()
-            .map(star08_map_start)
+            .map(|segment| {
+                let start = new_start(segment)?;
+                if let Some(start) = start
+                    && end_address_for(start, segment.len()).is_none()
+                {
+                    return Err(OpsError::AddressOverflow {
+                        address: segment.start_address,
+                    });
+                }
+                Ok(start)
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        apply_segment_starts(self.segments_mut(), new_starts);
-
+        for (segment, start) in self.segments_mut().iter_mut().zip(starts) {
+            if let Some(start) = start {
+                segment.start_address = start;
+            }
+        }
         Ok(())
     }
 }
 
-fn remap_segment(segment: &Segment, options: &RemapOptions) -> Result<Vec<Segment>, OpsError> {
-    if segment.is_empty() {
-        return Ok(Vec::new());
-    }
+/// Position (segment index, byte offset) of `addr` in sorted, non-overlapping segments.
+fn locate(segments: &[Segment], addr: u32) -> Option<(usize, usize)> {
+    let index = segments.partition_point(|s| s.end_address() < addr);
+    let offset = addr.checked_sub(segments.get(index)?.start_address)?;
+    Some((index, offset as usize))
+}
 
+fn remap_segment(segment: &Segment, options: &RemapOptions) -> Result<Vec<Segment>, OpsError> {
     let seg_start = segment.start_address;
     let seg_end = segment.end_address();
     let mut parts = Vec::new();
@@ -571,63 +455,40 @@ fn remap_segment(segment: &Segment, options: &RemapOptions) -> Result<Vec<Segmen
 
     loop {
         let (end, mapped_start) = if start < options.start {
-            (seg_end.min(options.start - 1), start)
+            (seg_end.min(options.start - 1), Some(start))
         } else if start > options.end {
-            (seg_end, start)
+            (seg_end, Some(start))
         } else {
             let offset = start - options.start;
             let bank_index = offset / options.inc;
             let bank_offset = offset % options.inc;
-
-            if bank_offset < options.size {
-                let remaining = options.size - bank_offset;
-                let end = start
-                    .saturating_add(remaining - 1)
-                    .min(seg_end)
-                    .min(options.end);
-                let mapped_start = options
-                    .linear
-                    .checked_add(bank_index.checked_mul(options.size).ok_or_else(|| {
-                        OpsError::AddressOverflow(format!(
-                            "linear base overflows (linear={:#X}, bank_index={}, size={})",
-                            options.linear, bank_index, options.size
-                        ))
-                    })?)
-                    .and_then(|value| value.checked_add(bank_offset))
-                    .ok_or_else(|| {
-                        OpsError::AddressOverflow(format!(
-                            "linear address overflows (linear={:#X}, bank_offset={:#X})",
-                            options.linear, bank_offset
-                        ))
-                    })?;
-                (end, mapped_start)
+            let (window, mapped_start) = if bank_offset < options.size {
+                let mapped = bank_index
+                    .checked_mul(options.size)
+                    .and_then(|base| base.checked_add(options.linear))
+                    .and_then(|base| base.checked_add(bank_offset));
+                (options.size, mapped)
             } else {
-                let remaining = options.inc - bank_offset;
-                let end = start
-                    .saturating_add(remaining - 1)
-                    .min(seg_end)
-                    .min(options.end);
-                (end, start)
-            }
+                (options.inc, Some(start))
+            };
+            let end = start
+                .saturating_add(window - bank_offset - 1)
+                .min(seg_end)
+                .min(options.end);
+            (end, mapped_start)
         };
 
-        let data_start = (start - seg_start) as usize;
-        let data_end = (end - seg_start) as usize + 1;
-        let part = Segment::try_new(mapped_start, segment.data[data_start..data_end].to_vec())
-            .map_err(|error| {
-                OpsError::AddressOverflow(format!(
-                    "remap output exceeds u32 address space: {error}"
-                ))
-            })?;
-        parts.push(part);
+        let data = &segment.data[(start - seg_start) as usize..=(end - seg_start) as usize];
+        let mapped_start = mapped_start
+            .filter(|mapped| end_address_for(*mapped, data.len()).is_some())
+            .ok_or(OpsError::AddressOverflow { address: start })?;
+        parts.push(Segment::from_valid(mapped_start, data.to_vec()));
 
         if end == seg_end {
-            break;
+            return Ok(parts);
         }
         start = end + 1;
     }
-
-    Ok(parts)
 }
 
 fn banked_map_start(
@@ -636,127 +497,56 @@ fn banked_map_start(
 ) -> Result<Option<u32>, OpsError> {
     let start = segment.start_address;
     let end = segment.end_address();
+    let overflow = OpsError::AddressOverflow { address: start };
 
     if start >= 0x4000 && end <= 0x7FFF {
-        let offset = start - 0x4000;
-        let new_start = options
+        return options
             .nonbank_low_base
-            .checked_add(offset)
-            .ok_or_else(|| {
-                OpsError::AddressOverflow(format!(
-                    "non-banked low map overflow (base={:#X}, start={:#X})",
-                    options.nonbank_low_base, start
-                ))
-            })?;
-        validate_segment_start_checked(segment, new_start, "non-banked low map")?;
-        return Ok(Some(new_start));
+            .checked_add(start - 0x4000)
+            .map(Some)
+            .ok_or(overflow);
     }
     if start >= 0xC000 && end <= 0xFFFF {
-        let offset = start - 0xC000;
-        let new_start = options
+        return options
             .nonbank_high_base
-            .checked_add(offset)
-            .ok_or_else(|| {
-                OpsError::AddressOverflow(format!(
-                    "non-banked high map overflow (base={:#X}, start={:#X})",
-                    options.nonbank_high_base, start
-                ))
-            })?;
-        validate_segment_start_checked(segment, new_start, "non-banked high map")?;
-        return Ok(Some(new_start));
+            .checked_add(start - 0xC000)
+            .map(Some)
+            .ok_or(overflow);
     }
 
     let bank = (start >> 16) as u8;
     if bank < options.bank_min || bank > options.bank_max {
         return Ok(None);
     }
-
-    let bank_base = ((bank as u32) << 16) + 0x8000;
-    let bank_end = bank_base + 0x3FFF;
-    if end > bank_end {
+    let bank_base = (u32::from(bank) << 16) + 0x8000;
+    let Some(offset) = start.checked_sub(bank_base) else {
+        return Ok(None);
+    };
+    if end > bank_base + 0x3FFF {
         return Ok(None);
     }
-
-    let bank_index = (bank - options.bank_min) as u32;
-    let linear_bank_base = options
+    let bank_index = u32::from(bank - options.bank_min);
+    options
         .linear_base
-        .checked_add(bank_index.checked_mul(0x4000).ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "bank base overflow (linear={:#X}, bank_index={})",
-                options.linear_base, bank_index
-            ))
-        })?)
-        .ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "bank base overflow (linear={:#X}, bank_index={})",
-                options.linear_base, bank_index
-            ))
-        })?;
-    let new_start = linear_bank_base
-        .checked_add(start - bank_base)
-        .ok_or_else(|| {
-            OpsError::AddressOverflow(format!(
-                "bank map overflow (linear={:#X}, start={:#X})",
-                options.linear_base, start
-            ))
-        })?;
-    validate_segment_start_checked(segment, new_start, "bank map")?;
-    Ok(Some(new_start))
+        .checked_add(bank_index * 0x4000 + offset)
+        .map(Some)
+        .ok_or(overflow)
 }
 
-fn star08_map_start(segment: &Segment) -> Result<Option<u32>, OpsError> {
+fn star08_map_start(segment: &Segment) -> Option<u32> {
     let start = segment.start_address;
     let end = segment.end_address();
 
     if start >= 0x4000 && end <= 0x7FFF {
-        let offset = start - 0x4000;
-        let new_start = 0x104000u32.checked_add(offset).ok_or_else(|| {
-            OpsError::AddressOverflow(format!("star08 low map overflow (start={:#X})", start))
-        })?;
-        validate_segment_start_checked(segment, new_start, "star08 low map")?;
-        return Ok(Some(new_start));
+        return Some(0x104000 + (start - 0x4000));
     }
 
     let bank = (start >> 16) as u8;
-    let bank_base = ((bank as u32) << 16) + 0x8000;
-    let bank_end = bank_base + 0x3FFF;
-    if start < bank_base || end > bank_end {
-        return Ok(None);
+    let bank_base = (u32::from(bank) << 16) + 0x8000;
+    if start < bank_base || end > bank_base + 0x3FFF {
+        return None;
     }
-
-    let linear_bank_base = 0x100000u32
-        .checked_add((bank as u32).checked_mul(0x4000).ok_or_else(|| {
-            OpsError::AddressOverflow(format!("star08 bank base overflow (bank={})", bank))
-        })?)
-        .ok_or_else(|| {
-            OpsError::AddressOverflow(format!("star08 bank base overflow (bank={})", bank))
-        })?;
-    let new_start = linear_bank_base
-        .checked_add(start - bank_base)
-        .ok_or_else(|| {
-            OpsError::AddressOverflow(format!("star08 bank map overflow (start={:#X})", start))
-        })?;
-    validate_segment_start_checked(segment, new_start, "star08 bank map")?;
-    Ok(Some(new_start))
-}
-
-fn validate_segment_start_checked(
-    segment: &Segment,
-    new_start: u32,
-    operation: &str,
-) -> Result<(), OpsError> {
-    segment.validate_start_address(new_start).map_err(|e| {
-        OpsError::AddressOverflow(format!("{operation} output exceeds u32 address space: {e}"))
-    })
-}
-
-fn apply_segment_starts(segments: &mut [Segment], new_starts: Vec<Option<u32>>) {
-    for (segment, new_start) in segments.iter_mut().zip(new_starts) {
-        if let Some(new_start) = new_start {
-            segment.start_address = new_start;
-            debug_assert!(segment.checked_end_address().is_some());
-        }
-    }
+    Some(0x100000 + u32::from(bank) * 0x4000 + (start - bank_base))
 }
 
 #[cfg(test)]
@@ -765,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_align_prepends_fill() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB]).unwrap()]);
         hf.align(&AlignOptions {
             alignment: 4,
             fill_byte: 0xFF,
@@ -779,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_align_with_length() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB]).unwrap()]);
         hf.align(&AlignOptions {
             alignment: 4,
             fill_byte: 0xFF,
@@ -794,8 +584,24 @@ mod tests {
     }
 
     #[test]
+    fn test_align_length_can_fill_last_address() {
+        let mut hf = HexFile::with_segments(vec![Segment::new(u32::MAX - 3, vec![0xAA]).unwrap()]);
+        let options = AlignOptions {
+            alignment: 4,
+            align_length: true,
+            ..Default::default()
+        };
+
+        hf.align(&options).unwrap();
+        assert_eq!(hf.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
+
+        hf.align(&options).unwrap();
+        assert_eq!(hf.segments()[0].data, [0xAA, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
     fn test_align_already_aligned() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 8])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 8]).unwrap()]);
         hf.align(&AlignOptions {
             alignment: 4,
             fill_byte: 0xFF,
@@ -809,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_align_invalid_alignment() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA]).unwrap()]);
         let result = hf.align(&AlignOptions {
             alignment: 0,
             fill_byte: 0xFF,
@@ -820,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_align_non_power_of_two() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap()]);
         hf.align(&AlignOptions {
             alignment: 3,
             fill_byte: 0xEE,
@@ -834,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_split_segments() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 10])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 10]).unwrap()]);
         hf.split(4);
 
         assert_eq!(hf.segments().len(), 3);
@@ -848,18 +654,20 @@ mod tests {
 
     #[test]
     fn test_swap_word() {
-        let mut hf =
-            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD])]);
-        hf.swap_bytes(SwapMode::Word).unwrap();
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]).unwrap(),
+        ]);
+        hf.swap_bytes(SwapMode::Word);
 
         assert_eq!(hf.segments()[0].data, vec![0xBB, 0xAA, 0xDD, 0xCC]);
     }
 
     #[test]
     fn test_swap_dword() {
-        let mut hf =
-            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD])]);
-        hf.swap_bytes(SwapMode::DWord).unwrap();
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]).unwrap(),
+        ]);
+        hf.swap_bytes(SwapMode::DWord);
 
         assert_eq!(hf.segments()[0].data, vec![0xDD, 0xCC, 0xBB, 0xAA]);
     }
@@ -868,8 +676,8 @@ mod tests {
     fn test_swap_dword_large_span_repeats_first_word() {
         let mut data = vec![0xAA; 0x1000000];
         data[0..4].copy_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x0, data)]);
-        hf.swap_bytes(SwapMode::DWord).unwrap();
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x0, data).unwrap()]);
+        hf.swap_bytes(SwapMode::DWord);
 
         let seg = &hf.segments()[0].data;
         assert_eq!(&seg[0..4], &[0x04, 0x03, 0x02, 0x01]);
@@ -880,8 +688,9 @@ mod tests {
     #[test]
     fn test_swap_odd_length_leaves_trailing() {
         // Compatibility target: odd total length => no-op
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC])]);
-        hf.swap_bytes(SwapMode::Word).unwrap();
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC]).unwrap()]);
+        hf.swap_bytes(SwapMode::Word);
 
         assert_eq!(hf.segments()[0].data, vec![0xAA, 0xBB, 0xCC]);
     }
@@ -889,8 +698,8 @@ mod tests {
     #[test]
     fn test_scale_addresses() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]),
-            Segment::new(0x2000, vec![0xBB]),
+            Segment::new(0x1000, vec![0xAA]).unwrap(),
+            Segment::new(0x2000, vec![0xBB]).unwrap(),
         ]);
         hf.scale_addresses(2).unwrap();
 
@@ -901,8 +710,8 @@ mod tests {
     #[test]
     fn test_unscale_addresses() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x2000, vec![0xAA]),
-            Segment::new(0x4000, vec![0xBB]),
+            Segment::new(0x2000, vec![0xAA]).unwrap(),
+            Segment::new(0x4000, vec![0xBB]).unwrap(),
         ]);
         hf.unscale_addresses(2).unwrap();
 
@@ -912,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_unscale_not_divisible() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA]).unwrap()]);
         let result = hf.unscale_addresses(2);
 
         assert!(matches!(
@@ -930,8 +739,8 @@ mod tests {
     fn test_align_causes_overlap() {
         // Two segments that will both align to 0x1000
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1001, vec![0xAA]),
-            Segment::new(0x1003, vec![0xBB]),
+            Segment::new(0x1001, vec![0xAA]).unwrap(),
+            Segment::new(0x1003, vec![0xBB]).unwrap(),
         ]);
         hf.align(&AlignOptions {
             alignment: 4,
@@ -951,7 +760,7 @@ mod tests {
 
     #[test]
     fn test_align_with_alignment_1() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA, 0xBB]).unwrap()]);
         hf.align(&AlignOptions {
             alignment: 1,
             fill_byte: 0xFF,
@@ -965,14 +774,14 @@ mod tests {
 
     #[test]
     fn test_split_zero_size_noop() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 10])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 10]).unwrap()]);
         hf.split(0);
         assert_eq!(hf.segments().len(), 1);
     }
 
     #[test]
     fn test_split_larger_than_segment() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 4])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 4]).unwrap()]);
         hf.split(100);
         assert_eq!(hf.segments().len(), 1);
     }
@@ -980,21 +789,20 @@ mod tests {
     #[test]
     fn test_swap_multiple_segments() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02]),
-            Segment::new(0x2000, vec![0x03, 0x04]),
+            Segment::new(0x1000, vec![0x01, 0x02]).unwrap(),
+            Segment::new(0x2000, vec![0x03, 0x04]).unwrap(),
         ]);
-        hf.swap_bytes(SwapMode::Word).unwrap();
+        hf.swap_bytes(SwapMode::Word);
         assert_eq!(hf.segments()[0].data, vec![0x02, 0x01]);
         assert_eq!(hf.segments()[1].data, vec![0x04, 0x03]);
     }
 
     #[test]
     fn test_swap_dword_larger_buffer() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(
-            0x1000,
-            vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
-        )]);
-        hf.swap_bytes(SwapMode::DWord).unwrap();
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]).unwrap(),
+        ]);
+        hf.swap_bytes(SwapMode::DWord);
         assert_eq!(
             hf.segments()[0].data,
             vec![0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05]
@@ -1003,37 +811,38 @@ mod tests {
 
     #[test]
     fn test_swap_word_odd_start_noop() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0x11, 0x22])]);
-        hf.swap_bytes(SwapMode::Word).unwrap();
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0x11, 0x22]).unwrap()]);
+        hf.swap_bytes(SwapMode::Word);
         assert_eq!(hf.segments()[0].data, vec![0x11, 0x22]);
     }
 
     #[test]
     fn test_swap_word_total_odd_noop() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB]),
-            Segment::new(0x2000, vec![0xCC]),
+            Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap(),
+            Segment::new(0x2000, vec![0xCC]).unwrap(),
         ]);
-        hf.swap_bytes(SwapMode::Word).unwrap();
+        hf.swap_bytes(SwapMode::Word);
         assert_eq!(hf.segments()[0].data, vec![0xAA, 0xBB]);
         assert_eq!(hf.segments()[1].data, vec![0xCC]);
     }
 
     #[test]
     fn test_swap_dword_span_misaligned_noop() {
-        let mut hf =
-            HexFile::with_segments(vec![Segment::new(0x1002, vec![0x01, 0x02, 0x03, 0x04])]);
-        hf.swap_bytes(SwapMode::DWord).unwrap();
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x1002, vec![0x01, 0x02, 0x03, 0x04]).unwrap(),
+        ]);
+        hf.swap_bytes(SwapMode::DWord);
         assert_eq!(hf.segments()[0].data, vec![0x01, 0x02, 0x03, 0x04]);
     }
 
     #[test]
     fn test_swap_dword_span_length_noop() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02, 0x03, 0x04]),
-            Segment::new(0x2000, vec![0x05, 0x06]),
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03, 0x04]).unwrap(),
+            Segment::new(0x2000, vec![0x05, 0x06]).unwrap(),
         ]);
-        hf.swap_bytes(SwapMode::DWord).unwrap();
+        hf.swap_bytes(SwapMode::DWord);
         assert_eq!(hf.segments()[0].data, vec![0x01, 0x02, 0x03, 0x04]);
         assert_eq!(hf.segments()[1].data, vec![0x05, 0x06]);
     }
@@ -1041,21 +850,53 @@ mod tests {
     #[test]
     fn test_swap_dword_compat_gap_fill() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x0000, vec![0x10, 0x11, 0x12, 0x13]),
-            Segment::new(0x0004, vec![0x20, 0x21]),
-            Segment::new(0x0008, vec![0x30, 0x31, 0x32, 0x33]),
+            Segment::new(0x0000, vec![0x10, 0x11, 0x12, 0x13]).unwrap(),
+            Segment::new(0x0004, vec![0x20, 0x21]).unwrap(),
+            Segment::new(0x0008, vec![0x30, 0x31, 0x32, 0x33]).unwrap(),
         ]);
-        hf.swap_bytes(SwapMode::DWord).unwrap();
+        hf.swap_bytes(SwapMode::DWord);
         assert_eq!(hf.segments()[0].data, vec![0x13, 0x12, 0x11, 0x10]);
         assert_eq!(hf.segments()[1].data, vec![0x13, 0x12]);
         assert_eq!(hf.segments()[2].data, vec![0x33, 0x32, 0x31, 0x30]);
     }
 
     #[test]
+    fn test_swap_dword_partial_words_match_hexview() {
+        // HexView 1.15.2: a word whose first byte is missing is left alone, and missing
+        // bytes before any complete word read as zero.
+        let mut first_missing = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01, 0x08, 0x0F, 0x16]).unwrap(),
+            Segment::new(0x1005, vec![0x02, 0x09, 0x10]).unwrap(),
+            Segment::new(0x1010, vec![0x03, 0x0A, 0x11, 0x18]).unwrap(),
+        ]);
+        first_missing.swap_bytes(SwapMode::DWord);
+        let data: Vec<&[u8]> = first_missing.segments().iter().map(Segment::data).collect();
+        assert_eq!(
+            data,
+            [
+                &[0x16, 0x0F, 0x08, 0x01][..],
+                &[0x02, 0x09, 0x10],
+                &[0x18, 0x11, 0x0A, 0x03]
+            ]
+        );
+
+        let mut no_full_word = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0x01, 0x08]).unwrap(),
+            Segment::new(0x1008, vec![0x02, 0x09, 0x10, 0x17, 0x1E, 0x25, 0x2C, 0x33]).unwrap(),
+        ]);
+        no_full_word.swap_bytes(SwapMode::DWord);
+        assert_eq!(no_full_word.segments()[0].data, [0x00, 0x00]);
+        assert_eq!(
+            no_full_word.segments()[1].data,
+            [0x17, 0x10, 0x09, 0x02, 0x33, 0x2C, 0x25, 0x1E]
+        );
+    }
+
+    #[test]
     fn test_scale_unscale_roundtrip() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]),
-            Segment::new(0x2000, vec![0xBB]),
+            Segment::new(0x1000, vec![0xAA]).unwrap(),
+            Segment::new(0x2000, vec![0xBB]).unwrap(),
         ]);
         let original = hf.clone();
         hf.scale_addresses(4).unwrap();
@@ -1073,8 +914,8 @@ mod tests {
     #[test]
     fn test_unscale_transactional() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x2000, vec![0xAA]), // divisible by 2
-            Segment::new(0x3001, vec![0xBB]), // NOT divisible by 2
+            Segment::new(0x2000, vec![0xAA]).unwrap(), // divisible by 2
+            Segment::new(0x3001, vec![0xBB]).unwrap(), // NOT divisible by 2
         ]);
         let original_first = hf.segments()[0].start_address;
         let result = hf.unscale_addresses(2);
@@ -1085,10 +926,11 @@ mod tests {
 
     #[test]
     fn test_scale_overflow_errors() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(u32::MAX / 2 + 1, vec![0xAA])]);
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(u32::MAX / 2 + 1, vec![0xAA]).unwrap()]);
         let original_addr = hf.segments()[0].start_address;
         let result = hf.scale_addresses(3);
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         // Unchanged (transactional)
         assert_eq!(hf.segments()[0].start_address, original_addr);
     }
@@ -1096,22 +938,29 @@ mod tests {
     #[test]
     fn test_scale_segment_end_overflow_errors() {
         let start = u32::MAX / 2;
-        let mut hf = HexFile::with_segments(vec![Segment::new(start, vec![0xAA, 0xBB, 0xCC])]);
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(start, vec![0xAA, 0xBB, 0xCC]).unwrap()]);
         let result = hf.scale_addresses(2);
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, start);
     }
 
     #[test]
     fn test_unscale_by_zero() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA])]);
-        let result = hf.unscale_addresses(0);
-        assert!(result.is_err());
+        for mut hf in [
+            HexFile::new(),
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA]).unwrap()]),
+        ] {
+            assert!(matches!(
+                hf.unscale_addresses(0),
+                Err(OpsError::AddressNotDivisible { divisor: 0, .. })
+            ));
+        }
     }
 
     #[test]
     fn test_align_then_split() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 15])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 15]).unwrap()]);
         hf.align(&AlignOptions {
             alignment: 4,
             fill_byte: 0xFF,
@@ -1131,9 +980,9 @@ mod tests {
     #[test]
     fn test_remap_basic_banked() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]),
-            Segment::new(0x018000, vec![0x01, 0x02]),
-            Segment::new(0x028000, vec![0x03]),
+            Segment::new(0x1000, vec![0xAA]).unwrap(),
+            Segment::new(0x018000, vec![0x01, 0x02]).unwrap(),
+            Segment::new(0x028000, vec![0x03]).unwrap(),
         ]);
         let options = RemapOptions {
             start: 0x018000,
@@ -1154,7 +1003,8 @@ mod tests {
 
     #[test]
     fn test_remap_splits_at_bank_boundary() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x018000, vec![0xAA; 0x4001])]);
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(0x018000, vec![0xAA; 0x4001]).unwrap()]);
         let options = RemapOptions {
             start: 0x018000,
             end: 0x02BFFF,
@@ -1167,13 +1017,16 @@ mod tests {
         assert_eq!(hf.segments().len(), 2);
         assert_eq!(hf.segments()[0].start_address, 0x008000);
         assert_eq!(hf.segments()[0].len(), 0x4000);
-        assert_eq!(hf.segments()[1], Segment::new(0x01C000, vec![0xAA]));
+        assert_eq!(
+            hf.segments()[1],
+            Segment::new(0x01C000, vec![0xAA]).unwrap()
+        );
     }
 
     #[test]
     fn test_remap_splits_segment_crossing_source_range() {
         let data = (0u8..20).collect::<Vec<_>>();
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x0FFE, data)]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x0FFE, data).unwrap()]);
         let options = RemapOptions {
             start: 0x1000,
             end: 0x100F,
@@ -1187,33 +1040,16 @@ mod tests {
         assert_eq!(
             hf.segments(),
             &[
-                Segment::new(0x0FFE, vec![0x00, 0x01]),
-                Segment::new(0x2000, (0x02u8..0x12).collect()),
-                Segment::new(0x1010, vec![0x12, 0x13]),
+                Segment::new(0x0FFE, vec![0x00, 0x01]).unwrap(),
+                Segment::new(0x2000, (0x02u8..0x12).collect()).unwrap(),
+                Segment::new(0x1010, vec![0x12, 0x13]).unwrap(),
             ]
         );
     }
 
     #[test]
-    fn test_remap_ignores_empty_segment_inserted_through_mutable_view() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA])]);
-        hf.segments_mut()[0] = Segment::new(0x1000, Vec::new());
-        let options = RemapOptions {
-            start: 0x1000,
-            end: 0x1FFF,
-            linear: 0x2000,
-            size: 0x1000,
-            inc: 0x1000,
-        };
-
-        hf.remap(&options).unwrap();
-
-        assert!(hf.segments().is_empty());
-    }
-
-    #[test]
     fn test_remap_invalid_params() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x018000, vec![0xAA])]);
+        let mut hf = HexFile::with_segments(vec![Segment::new(0x018000, vec![0xAA]).unwrap()]);
         let options = RemapOptions {
             start: 0x2000,
             end: 0x1000,
@@ -1228,7 +1064,8 @@ mod tests {
 
     #[test]
     fn test_remap_rejects_output_segment_end_overflow() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC])]);
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC]).unwrap()]);
         let options = RemapOptions {
             start: 0x1000,
             end: 0x1FFF,
@@ -1239,15 +1076,15 @@ mod tests {
 
         let result = hf.remap(&options);
 
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, 0x1000);
     }
 
     #[test]
     fn test_remap_overflow_is_transactional() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]),
-            Segment::new(0x2000, vec![0xBB, 0xCC, 0xDD]),
+            Segment::new(0x1000, vec![0xAA]).unwrap(),
+            Segment::new(0x2000, vec![0xBB, 0xCC, 0xDD]).unwrap(),
         ]);
         let options = RemapOptions {
             start: 0x1000,
@@ -1259,14 +1096,15 @@ mod tests {
 
         let result = hf.remap(&options);
 
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, 0x1000);
         assert_eq!(hf.segments()[1].start_address, 0x2000);
     }
 
     #[test]
     fn test_map_banked_rejects_low_output_segment_end_overflow() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x4000, vec![0xAA, 0xBB, 0xCC])]);
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(0x4000, vec![0xAA, 0xBB, 0xCC]).unwrap()]);
         let options = BankedMapOptions {
             bank_min: 0x30,
             bank_max: 0x30,
@@ -1277,13 +1115,14 @@ mod tests {
 
         let result = hf.map_banked(&options);
 
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, 0x4000);
     }
 
     #[test]
     fn test_map_banked_rejects_high_output_segment_end_overflow() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0xC000, vec![0xAA, 0xBB, 0xCC])]);
+        let mut hf =
+            HexFile::with_segments(vec![Segment::new(0xC000, vec![0xAA, 0xBB, 0xCC]).unwrap()]);
         let options = BankedMapOptions {
             bank_min: 0x30,
             bank_max: 0x30,
@@ -1294,13 +1133,15 @@ mod tests {
 
         let result = hf.map_banked(&options);
 
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, 0xC000);
     }
 
     #[test]
     fn test_map_banked_rejects_bank_output_segment_end_overflow() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x308000, vec![0xAA, 0xBB, 0xCC])]);
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x308000, vec![0xAA, 0xBB, 0xCC]).unwrap(),
+        ]);
         let options = BankedMapOptions {
             bank_min: 0x30,
             bank_max: 0x30,
@@ -1311,15 +1152,15 @@ mod tests {
 
         let result = hf.map_banked(&options);
 
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, 0x308000);
     }
 
     #[test]
     fn test_map_banked_overflow_is_transactional() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x4000, vec![0xAA]),
-            Segment::new(0xC000, vec![0xBB, 0xCC, 0xDD]),
+            Segment::new(0x4000, vec![0xAA]).unwrap(),
+            Segment::new(0xC000, vec![0xBB, 0xCC, 0xDD]).unwrap(),
         ]);
         let options = BankedMapOptions {
             bank_min: 0x30,
@@ -1331,7 +1172,7 @@ mod tests {
 
         let result = hf.map_banked(&options);
 
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
         assert_eq!(hf.segments()[0].start_address, 0x4000);
         assert_eq!(hf.segments()[1].start_address, 0xC000);
     }
@@ -1339,9 +1180,9 @@ mod tests {
     #[test]
     fn test_map_star12_basic() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x4000, vec![0xAA]),
-            Segment::new(0xC000, vec![0xBB]),
-            Segment::new(0x308000, vec![0x01]),
+            Segment::new(0x4000, vec![0xAA]).unwrap(),
+            Segment::new(0xC000, vec![0xBB]).unwrap(),
+            Segment::new(0x308000, vec![0x01]).unwrap(),
         ]);
 
         hf.map_star12().unwrap();
@@ -1355,9 +1196,9 @@ mod tests {
     #[test]
     fn test_map_star12x_basic() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x4000, vec![0xAA]),
-            Segment::new(0xC000, vec![0xBB]),
-            Segment::new(0xE08000, vec![0x01]),
+            Segment::new(0x4000, vec![0xAA]).unwrap(),
+            Segment::new(0xC000, vec![0xBB]).unwrap(),
+            Segment::new(0xE08000, vec![0x01]).unwrap(),
         ]);
 
         hf.map_star12x().unwrap();
@@ -1371,8 +1212,8 @@ mod tests {
     #[test]
     fn test_map_star08_examples() {
         let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x4000, vec![0xAA]),
-            Segment::new(0x028000, vec![0xBB]),
+            Segment::new(0x4000, vec![0xAA]).unwrap(),
+            Segment::new(0x028000, vec![0xBB]).unwrap(),
         ]);
 
         hf.map_star08().unwrap();
@@ -1383,9 +1224,26 @@ mod tests {
     }
 
     #[test]
+    fn test_map_star08_moves_each_page_of_a_crossing_segment() {
+        // HexView 1.15.2 maps 0x7FFE..0x8001 as two windows.
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x7FFE, vec![0x01, 0x08, 0x0F, 0x16]).unwrap(),
+        ]);
+        hf.map_star08().unwrap();
+        assert_eq!(
+            hf.normalized().into_segments(),
+            vec![
+                Segment::new(0x100000, vec![0x0F, 0x16]).unwrap(),
+                Segment::new(0x107FFE, vec![0x01, 0x08]).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
     fn test_dspic_expand_appends_zeros() {
-        let mut hf =
-            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD])]);
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]).unwrap(),
+        ]);
         hf.dspic_expand(AddressRange::from_start_length(0x1000, 4).unwrap(), None)
             .unwrap();
 
@@ -1395,10 +1253,9 @@ mod tests {
 
     #[test]
     fn test_dspic_shrink_keeps_low_bytes() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(
-            0x2000,
-            vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
-        )]);
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x2000, vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]).unwrap(),
+        ]);
         hf.dspic_shrink(AddressRange::from_start_length(0x2000, 8).unwrap(), None)
             .unwrap();
 
@@ -1408,10 +1265,9 @@ mod tests {
 
     #[test]
     fn test_dspic_clear_ghost() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(
-            0x3000,
-            vec![0x01, 0x02, 0x03, 0xFF, 0x10, 0x11, 0x12, 0xEE],
-        )]);
+        let mut hf = HexFile::with_segments(vec![
+            Segment::new(0x3000, vec![0x01, 0x02, 0x03, 0xFF, 0x10, 0x11, 0x12, 0xEE]).unwrap(),
+        ]);
         hf.dspic_clear_ghost(AddressRange::from_start_length(0x3000, 8).unwrap())
             .unwrap();
 

@@ -1,5 +1,5 @@
-use crate::io::{ParseError, push_crlf, push_hex_byte};
-use crate::{HexFile, Segment};
+use super::{ParseError, SegmentBuilder, WriteError, push_crlf, push_hex_byte};
+use crate::HexFile;
 
 pub const DEFAULT_SREC_BYTES_PER_LINE: u8 = 32;
 
@@ -8,6 +8,24 @@ pub enum SRecordType {
     S1,
     S2,
     S3,
+}
+
+impl SRecordType {
+    fn address_len(self) -> usize {
+        match self {
+            Self::S1 => 2,
+            Self::S2 => 3,
+            Self::S3 => 4,
+        }
+    }
+
+    fn max_address(self) -> u32 {
+        match self {
+            Self::S1 => 0xFFFF,
+            Self::S2 => 0xFF_FFFF,
+            Self::S3 => u32::MAX,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -27,14 +45,11 @@ impl Default for SRecordWriteOptions {
 
 /// Parse Motorola S-Record input. CLI: auto-detect S-Record input.
 pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
-    let mut hexfile = HexFile::new();
+    let mut builder = SegmentBuilder::default();
 
     for (idx, raw_line) in data.split(|&b| b == b'\n').enumerate() {
         let line_no = idx + 1;
-        let mut line = raw_line;
-        if let Some(b'\r') = line.last() {
-            line = &line[..line.len().saturating_sub(1)];
-        }
+        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
         if line.is_empty() {
             continue;
         }
@@ -45,16 +60,15 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
             });
         }
 
-        let record_type = line[1] as char;
+        let record_type = line[1];
         let record_bytes = super::parse_hex_bytes(&line[2..], line_no)?;
-        if record_bytes.is_empty() {
+        let Some((&count, _)) = record_bytes.split_first() else {
             return Err(ParseError::InvalidRecord {
                 line: line_no,
                 message: "missing record length".to_owned(),
             });
-        }
-
-        let count = record_bytes[0] as usize;
+        };
+        let count = count as usize;
         if record_bytes.len() != count + 1 {
             return Err(ParseError::InvalidRecord {
                 line: line_no,
@@ -66,9 +80,9 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
             });
         }
 
-        if !checksum_valid(&record_bytes) {
-            let expected = expected_checksum(&record_bytes[..record_bytes.len() - 1]);
-            let actual = *record_bytes.last().unwrap_or(&0);
+        let (&actual, payload) = record_bytes.split_last().ok_or(ParseError::UnexpectedEof)?;
+        let expected = checksum(payload);
+        if actual != expected {
             return Err(ParseError::ChecksumMismatch {
                 line: line_no,
                 expected,
@@ -76,251 +90,180 @@ pub fn parse_srec(data: &[u8]) -> Result<HexFile, ParseError> {
             });
         }
 
-        match record_type {
-            '0' | '5' | '7' | '8' | '9' => continue,
-            '1' | '2' | '3' => {
-                let addr_len = match record_type {
-                    '1' => 2,
-                    '2' => 3,
-                    '3' => 4,
-                    _ => 0,
-                };
-                let data_len =
-                    count
-                        .checked_sub(addr_len + 1)
-                        .ok_or(ParseError::InvalidRecord {
-                            line: line_no,
-                            message: "record length too short".to_owned(),
-                        })?;
-                let addr_end = 1 + addr_len;
-                let data_start = addr_end;
-                let data_end = data_start + data_len;
-
-                if data_end > record_bytes.len().saturating_sub(1) {
-                    return Err(ParseError::InvalidRecord {
-                        line: line_no,
-                        message: "data length mismatch".to_owned(),
-                    });
-                }
-
-                let addr = parse_address(&record_bytes[1..addr_end]);
-                if data_len > 0 {
-                    let data = record_bytes[data_start..data_end].to_vec();
-                    let end = addr.checked_add(data.len() as u32 - 1).ok_or_else(|| {
-                        ParseError::AddressOverflow(format!(
-                            "{:#X} + {} exceeds u32",
-                            addr,
-                            data.len()
-                        ))
-                    })?;
-                    if end < addr {
-                        return Err(ParseError::AddressOverflow(format!(
-                            "{:#X} + {} exceeds u32",
-                            addr,
-                            data.len()
-                        )));
-                    }
-                    hexfile.append_segment(Segment::try_new(addr, data).map_err(|e| {
-                        ParseError::AddressOverflow(format!(
-                            "{:#X} + {} exceeds u32: {e}",
-                            addr, data_len
-                        ))
-                    })?);
-                }
-            }
+        let addr_len = match record_type {
+            b'0' | b'5' | b'7' | b'8' | b'9' => continue,
+            b'1' => 2,
+            b'2' => 3,
+            b'3' => 4,
             other => {
                 return Err(ParseError::UnsupportedRecordType {
                     line: line_no,
-                    record_type: other as u8,
+                    record_type: other,
                 });
             }
+        };
+        if count < addr_len + 1 {
+            return Err(ParseError::InvalidRecord {
+                line: line_no,
+                message: "record length too short".to_owned(),
+            });
         }
+        let (addr_bytes, data) = payload[1..].split_at(addr_len);
+        let addr = addr_bytes
+            .iter()
+            .fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
+        builder.push(addr, data, line_no)?;
     }
 
-    Ok(hexfile)
+    Ok(builder.finish())
 }
 
 /// Write Motorola S-Record output. CLI: /XS.
-pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Vec<u8>, ParseError> {
+pub fn write_srec(hexfile: &HexFile, options: &SRecordWriteOptions) -> Result<Vec<u8>, WriteError> {
     let normalized = hexfile.normalized();
     let max_addr = normalized.max_address().unwrap_or(0);
 
-    let auto_type = if max_addr <= 0xFFFF {
-        SRecordType::S1
-    } else if max_addr <= 0xFF_FFFF {
-        SRecordType::S2
-    } else {
-        SRecordType::S3
-    };
-
     let record_type = match options.record_type {
-        Some(t) => {
-            let max_allowed = max_address_for(t);
-            if max_addr > max_allowed {
-                return Err(ParseError::AddressOverflow(format!(
-                    "max address {:#X} exceeds {:?} limit {:#X}",
-                    max_addr, t, max_allowed
-                )));
-            }
-            t
+        Some(t) if max_addr > t.max_address() => {
+            return Err(WriteError::AddressNotEncodable {
+                address: max_addr,
+                format: match t {
+                    SRecordType::S1 => "S1 record",
+                    SRecordType::S2 => "S2 record",
+                    SRecordType::S3 => "S3 record",
+                },
+            });
         }
-        None => auto_type,
+        Some(t) => t,
+        None if max_addr <= SRecordType::S1.max_address() => SRecordType::S1,
+        None if max_addr <= SRecordType::S2.max_address() => SRecordType::S2,
+        None => SRecordType::S3,
     };
-
-    let bytes_per_line = if options.bytes_per_line == 0 {
-        DEFAULT_SREC_BYTES_PER_LINE
-    } else {
-        options.bytes_per_line
+    let (data_digit, term_digit) = match record_type {
+        SRecordType::S1 => (b'1', b'9'),
+        SRecordType::S2 => (b'2', b'8'),
+        SRecordType::S3 => (b'3', b'7'),
+    };
+    let addr_len = record_type.address_len();
+    let bytes_per_line = match options.bytes_per_line {
+        0 => DEFAULT_SREC_BYTES_PER_LINE,
+        n => n,
     } as usize;
 
-    let segments = normalized.into_segments();
-
     let mut out = Vec::new();
-    let (addr_len, record_digit) = match record_type {
-        SRecordType::S1 => (2usize, '1'),
-        SRecordType::S2 => (3usize, '2'),
-        SRecordType::S3 => (4usize, '3'),
-    };
-
-    for segment in segments {
+    for segment in normalized.segments() {
         let mut addr = segment.start_address;
-        let mut chunks = segment.data.chunks(bytes_per_line).peekable();
-        while let Some(chunk) = chunks.next() {
-            let addr_bytes = addr.to_be_bytes();
-            let addr_slice = &addr_bytes[4 - addr_len..];
-            let count = (addr_len + chunk.len() + 1) as u8;
-            let mut record = Vec::with_capacity(1 + addr_len + chunk.len() + 1);
-            record.push(count);
-            record.extend_from_slice(addr_slice);
-            record.extend_from_slice(chunk);
-            let checksum = expected_checksum(&record);
-
-            push_record_line(&mut out, record_digit, &record, checksum);
-            if chunks.peek().is_some() {
-                addr = addr
-                    .checked_add(chunk.len() as u32)
-                    .ok_or_else(|| ParseError::AddressOverflow("address overflow".to_owned()))?;
-            }
+        for chunk in segment.data.chunks(bytes_per_line) {
+            push_record(&mut out, data_digit, addr, addr_len, chunk);
+            addr = addr.wrapping_add(chunk.len() as u32);
         }
     }
-
-    let term_digit = match record_type {
-        SRecordType::S1 => '9',
-        SRecordType::S2 => '8',
-        SRecordType::S3 => '7',
-    };
-    let addr_bytes = [0u8; 4];
-    let addr_slice = &addr_bytes[4 - addr_len..];
-    let count = (addr_len + 1) as u8;
-    let mut term = Vec::with_capacity(1 + addr_len);
-    term.push(count);
-    term.extend_from_slice(addr_slice);
-    let checksum = expected_checksum(&term);
-    push_record_line(&mut out, term_digit, &term, checksum);
-
+    push_record(&mut out, term_digit, 0, addr_len, &[]);
     Ok(out)
 }
 
-fn parse_address(bytes: &[u8]) -> u32 {
-    bytes.iter().fold(0u32, |acc, &b| (acc << 8) | b as u32)
+/// Ones' complement of the byte sum, the S-record checksum.
+fn checksum(bytes: &[u8]) -> u8 {
+    !bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b))
 }
 
-fn checksum_valid(bytes: &[u8]) -> bool {
-    let sum = bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
-    sum == 0xFF
-}
-
-fn expected_checksum(bytes: &[u8]) -> u8 {
-    let sum = bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
-    0xFFu8.wrapping_sub(sum)
-}
-
-fn max_address_for(record_type: SRecordType) -> u32 {
-    match record_type {
-        SRecordType::S1 => 0xFFFF,
-        SRecordType::S2 => 0xFF_FFFF,
-        SRecordType::S3 => 0xFFFF_FFFF,
-    }
-}
-
-fn push_record_line(out: &mut Vec<u8>, record_digit: char, data: &[u8], checksum: u8) {
+fn push_record(out: &mut Vec<u8>, digit: u8, addr: u32, addr_len: usize, data: &[u8]) {
+    let mut record = Vec::with_capacity(1 + addr_len + data.len());
+    record.push((addr_len + data.len() + 1) as u8);
+    record.extend_from_slice(&addr.to_be_bytes()[4 - addr_len..]);
+    record.extend_from_slice(data);
     out.push(b'S');
-    out.push(record_digit as u8);
-    for &byte in data {
+    out.push(digit);
+    for &byte in &record {
         push_hex_byte(out, byte);
     }
-    push_hex_byte(out, checksum);
+    push_hex_byte(out, checksum(&record));
     push_crlf(out);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Segment;
 
     #[test]
     fn test_srec_roundtrip_s1() {
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02, 0x03])]);
+        let hexfile =
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0x01, 0x02, 0x03]).unwrap()]);
         let options = SRecordWriteOptions {
-            bytes_per_line: 16,
+            bytes_per_line: 2,
             record_type: Some(SRecordType::S1),
         };
         let out = write_srec(&hexfile, &options).unwrap();
-        let parsed = parse_srec(&out).unwrap();
-        let norm = parsed.normalized();
-        assert_eq!(norm.segments().len(), 1);
-        assert_eq!(norm.segments()[0].start_address, 0x1000);
-        assert_eq!(norm.segments()[0].data, vec![0x01, 0x02, 0x03]);
+        assert_eq!(out, b"S10510000102E7\r\nS104100203E6\r\nS9030000FC\r\n");
+        assert_eq!(parse_srec(&out).unwrap(), hexfile);
+    }
+
+    #[test]
+    fn test_parse_coalesces_contiguous_records() {
+        let parsed = parse_srec(b"S10510000102E7\r\nS104100203E6\r\nS1041004AA3D\r\n").unwrap();
+        assert_eq!(
+            parsed.segments(),
+            &[
+                Segment::new(0x1000, vec![0x01, 0x02, 0x03]).unwrap(),
+                Segment::new(0x1004, vec![0xAA]).unwrap()
+            ]
+        );
     }
 
     #[test]
     fn test_srec_bad_checksum() {
-        let line = b"S11310000102030405060708090A0B0C0D0E0F00\n";
-        let result = parse_srec(line);
-        assert!(result.is_err());
+        let line = b"S10510000102E8\n";
+        assert!(matches!(
+            parse_srec(line),
+            Err(ParseError::ChecksumMismatch { line: 1, .. })
+        ));
     }
 
     #[test]
-    fn test_srec_auto_type_s2() {
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1_0000, vec![0x01])]);
+    fn test_srec_auto_type_and_forced_type_limit() {
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1_0000, vec![0x01]).unwrap()]);
         let out = write_srec(&hexfile, &SRecordWriteOptions::default()).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.starts_with("S2"));
+        assert!(out.starts_with(b"S2"));
+        let forced = SRecordWriteOptions {
+            record_type: Some(SRecordType::S1),
+            ..Default::default()
+        };
+        assert!(matches!(
+            write_srec(&hexfile, &forced),
+            Err(WriteError::AddressNotEncodable {
+                address: 0x1_0000,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn test_srec_roundtrip_at_u32_max_boundary() {
-        let hexfile = HexFile::with_segments(vec![Segment::new(
-            u32::MAX - 3,
-            vec![0xFC, 0xFD, 0xFE, 0xFF],
-        )]);
-
+        let hexfile = HexFile::with_segments(vec![
+            Segment::new(u32::MAX - 3, vec![0xFC, 0xFD, 0xFE, 0xFF]).unwrap(),
+        ]);
         let out = write_srec(&hexfile, &SRecordWriteOptions::default()).unwrap();
-        let parsed = parse_srec(&out).unwrap();
-
-        assert_eq!(parsed.normalized(), hexfile.normalized());
+        assert_eq!(parse_srec(&out).unwrap(), hexfile);
     }
 
     #[test]
     fn test_parse_record_crossing_u32_max_errors() {
-        let mut record = Vec::from([7, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA, 0xBB]);
-        let checksum = expected_checksum(&record);
         let mut data = Vec::new();
-        push_record_line(&mut data, '3', &record, checksum);
-        record.clear();
-        record.extend_from_slice(&[5, 0, 0, 0, 0]);
-        let checksum = expected_checksum(&record);
-        push_record_line(&mut data, '7', &record, checksum);
-
-        let result = parse_srec(&data);
-        assert!(matches!(result, Err(ParseError::AddressOverflow(_))));
+        push_record(&mut data, b'3', u32::MAX, 4, &[0xAA, 0xBB]);
+        push_record(&mut data, b'7', 0, 4, &[]);
+        assert!(matches!(
+            parse_srec(&data),
+            Err(ParseError::AddressOverflow { line: 1 })
+        ));
     }
 
     #[test]
     fn test_parse_lowercase_prefix() {
-        let data = b"s10500000102f7\ns9030000fc\n";
-        let parsed = parse_srec(data).unwrap();
-        let norm = parsed.normalized();
-        assert_eq!(norm.segments()[0].start_address, 0x0000);
-        assert_eq!(norm.segments()[0].data, vec![0x01, 0x02]);
+        let parsed = parse_srec(b"s10500000102f7\ns9030000fc\n").unwrap();
+        assert_eq!(
+            parsed.segments(),
+            &[Segment::new(0x0000, vec![0x01, 0x02]).unwrap()]
+        );
     }
 }

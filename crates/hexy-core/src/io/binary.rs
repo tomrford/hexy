@@ -1,4 +1,4 @@
-use crate::io::ParseError;
+use crate::io::{ParseError, WriteError};
 use crate::{HexFile, Segment};
 
 #[derive(Debug, Clone, Default)]
@@ -14,31 +14,10 @@ pub fn parse_binary(data: &[u8], base_address: u32) -> Result<HexFile, ParseErro
     if data.is_empty() {
         return Ok(HexFile::new());
     }
-
-    let len = u32::try_from(data.len()).map_err(|_| {
-        ParseError::AddressOverflow(format!(
-            "binary length {} exceeds u32 address space",
-            data.len()
-        ))
-    })?;
-    let end = base_address
-        .checked_add(len.saturating_sub(1))
-        .ok_or_else(|| {
-            ParseError::AddressOverflow(format!("{:#X} + {} exceeds u32", base_address, len))
-        })?;
-
-    if end < base_address {
-        return Err(ParseError::AddressOverflow(format!(
-            "{:#X} + {} exceeds u32",
-            base_address, len
-        )));
-    }
-
-    let segment = Segment::try_new(base_address, data.to_vec()).map_err(|e| {
-        ParseError::AddressOverflow(format!("{:#X} + {} exceeds u32: {e}", base_address, len))
-    })?;
-
-    Ok(HexFile::with_segments(vec![segment]))
+    Ok(HexFile::with_segments(vec![Segment::new(
+        base_address,
+        data.to_vec(),
+    )?]))
 }
 
 /// Write the HexFile to a binary blob.
@@ -46,29 +25,17 @@ pub fn parse_binary(data: &[u8], base_address: u32) -> Result<HexFile, ParseErro
 pub fn write_binary(
     hexfile: &HexFile,
     options: &BinaryWriteOptions,
-) -> Result<Vec<u8>, ParseError> {
-    let mut normalized = hexfile.normalized();
-    if normalized.segments().is_empty() {
-        return Ok(Vec::new());
-    }
-
+) -> Result<Vec<u8>, WriteError> {
     if let Some(fill) = options.fill_gaps {
-        normalized
-            .fill_gaps(fill)
-            .map_err(|e| ParseError::InvalidOutput(e.to_string()))?;
-        if let Some(segment) = normalized.segments().first() {
-            return Ok(segment.data.clone());
-        }
-        return Ok(Vec::new());
+        let contiguous = hexfile.as_contiguous(fill, u64::MAX)?;
+        return Ok(contiguous.map(|segment| segment.data).unwrap_or_default());
     }
-
-    let segments = normalized.into_segments();
-    let total_len: usize = segments.iter().map(|s| s.len()).sum();
-    let mut out = Vec::with_capacity(total_len);
-    for segment in segments {
-        out.extend_from_slice(&segment.data);
-    }
-    Ok(out)
+    Ok(hexfile
+        .normalized()
+        .into_segments()
+        .into_iter()
+        .flat_map(|segment| segment.data)
+        .collect())
 }
 
 #[cfg(test)]
@@ -94,8 +61,8 @@ mod tests {
     #[test]
     fn test_write_binary_address_order() {
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x2000, vec![0x01, 0x02]),
-            Segment::new(0x1000, vec![0xAA]),
+            Segment::new(0x2000, vec![0x01, 0x02]).unwrap(),
+            Segment::new(0x1000, vec![0xAA]).unwrap(),
         ]);
         let out = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
         assert_eq!(out, vec![0xAA, 0x01, 0x02]);
@@ -104,9 +71,9 @@ mod tests {
     #[test]
     fn test_write_binary_concatenates_normalized_segments_without_gaps() {
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02, 0x03]),
-            Segment::new(0x1001, vec![0xAA]),
-            Segment::new(0x2000, vec![0x04]),
+            Segment::new(0x1000, vec![0x01, 0x02, 0x03]).unwrap(),
+            Segment::new(0x1001, vec![0xAA]).unwrap(),
+            Segment::new(0x2000, vec![0x04]).unwrap(),
         ]);
         let out = write_binary(&hexfile, &BinaryWriteOptions::default()).unwrap();
         assert_eq!(out, vec![0x01, 0xAA, 0x03, 0x04]);
@@ -115,8 +82,8 @@ mod tests {
     #[test]
     fn test_write_binary_fill_gaps() {
         let hexfile = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]),
-            Segment::new(0x1002, vec![0xBB]),
+            Segment::new(0x1000, vec![0xAA]).unwrap(),
+            Segment::new(0x1002, vec![0xBB]).unwrap(),
         ]);
         let out = write_binary(
             &hexfile,

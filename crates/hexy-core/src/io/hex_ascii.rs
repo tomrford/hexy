@@ -1,4 +1,4 @@
-use crate::io::{ParseError, push_crlf, push_hex_byte};
+use super::{ParseError, push_crlf, push_hex_byte};
 use crate::{HexFile, Segment};
 
 #[derive(Debug, Clone)]
@@ -65,30 +65,10 @@ pub fn parse_hex_ascii(data: &[u8], base_address: u32) -> Result<HexFile, ParseE
     if bytes.is_empty() {
         return Ok(HexFile::new());
     }
-
-    let len = u32::try_from(bytes.len()).map_err(|_| {
-        ParseError::AddressOverflow(format!(
-            "HEX ASCII length {} exceeds u32 address space",
-            bytes.len()
-        ))
-    })?;
-    let end = base_address
-        .checked_add(len.saturating_sub(1))
-        .ok_or_else(|| {
-            ParseError::AddressOverflow(format!("{:#X} + {} exceeds u32", base_address, len))
-        })?;
-    if end < base_address {
-        return Err(ParseError::AddressOverflow(format!(
-            "{:#X} + {} exceeds u32",
-            base_address, len
-        )));
-    }
-
-    let segment = Segment::try_new(base_address, bytes).map_err(|e| {
-        ParseError::AddressOverflow(format!("{:#X} + {} exceeds u32: {e}", base_address, len))
-    })?;
-
-    Ok(HexFile::with_segments(vec![segment]))
+    Ok(HexFile::with_segments(vec![Segment::new(
+        base_address,
+        bytes,
+    )?]))
 }
 
 /// Write the HexFile to HEX ASCII bytes. CLI: /XA.
@@ -121,39 +101,9 @@ pub fn write_hex_ascii(hexfile: &HexFile, options: &HexAsciiWriteOptions) -> Vec
 }
 
 fn push_hex_token(digits: &[u8], out: &mut Vec<u8>, line: usize) -> Result<(), ParseError> {
-    if digits.len() == 1 {
-        let hi = (digits[0] as char)
-            .to_digit(16)
-            .ok_or(ParseError::InvalidHexDigit {
-                line,
-                char: digits[0] as char,
-            })?;
-        out.push(hi as u8);
-        return Ok(());
-    }
-
-    if !digits.len().is_multiple_of(2) {
-        return Err(ParseError::InvalidRecord {
-            line,
-            message: "odd number of hex digits".to_owned(),
-        });
-    }
-
-    let mut iter = digits.iter();
-    while let (Some(&hi), Some(&lo)) = (iter.next(), iter.next()) {
-        let hi = (hi as char)
-            .to_digit(16)
-            .ok_or(ParseError::InvalidHexDigit {
-                line,
-                char: hi as char,
-            })?;
-        let lo = (lo as char)
-            .to_digit(16)
-            .ok_or(ParseError::InvalidHexDigit {
-                line,
-                char: lo as char,
-            })?;
-        out.push(((hi << 4) | lo) as u8);
+    match digits {
+        [digit] => out.push(super::hex_digit(*digit, line)?),
+        _ => out.extend(super::parse_hex_bytes(digits, line)?),
     }
     Ok(())
 }
@@ -164,7 +114,8 @@ mod tests {
 
     #[test]
     fn test_hex_ascii_roundtrip() {
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE])]);
+        let hexfile =
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE]).unwrap()]);
         let options = HexAsciiWriteOptions {
             line_length: 2,
             separator: Some(", ".to_owned()),
@@ -178,7 +129,8 @@ mod tests {
 
     #[test]
     fn test_hex_ascii_omits_final_newline() {
-        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE])]);
+        let hexfile =
+            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE]).unwrap()]);
         let options = HexAsciiWriteOptions {
             line_length: 2,
             separator: None,

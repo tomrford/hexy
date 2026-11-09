@@ -66,7 +66,7 @@ def test_forced_intel_hex_segment_mode_rejects_high_address():
     try:
         hf.to_intel_hex(mode="segment")
     except ValueError as error:
-        assert "extended segment mode" in str(error)
+        assert "extended segment" in str(error)
     else:
         raise AssertionError("expected high address to be rejected for segment mode")
 

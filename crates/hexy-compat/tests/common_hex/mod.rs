@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
+
 use std::path::Path;
 
 use hexy_core::parse_intel_hex;

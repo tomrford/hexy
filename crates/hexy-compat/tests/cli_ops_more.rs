@@ -14,9 +14,9 @@ fn test_cli_cut_multiple_ranges_one_arg() {
 
     let args = vec![
         format!("/IN:{};0x5000", input.display()),
-        "/CR:0x5001,0x1:0x5005-0x5006".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CR:0x5001,0x1:0x5005-0x5006".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -44,8 +44,8 @@ fn test_cli_merge_transparent_range_offset() {
     let args = vec![
         format!("/IN:{};0x4000", base.display()),
         format!("/MT:{};0x4000:0x0,0x4", merge.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -69,8 +69,8 @@ fn test_cli_merge_opaque_range_offset() {
     let args = vec![
         format!("/IN:{};0x4000", base.display()),
         format!("/MO:{};0x4000:0x0,0x4", merge.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -95,8 +95,8 @@ fn test_cli_mt_mo_conflict() {
         format!("/IN:{};0x0", base.display()),
         format!("/MT:{};0x0", merge.display()),
         format!("/MO:{};0x0", merge.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -113,10 +113,10 @@ fn test_cli_remap_s08map_conflict() {
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
-        "/REMAP:0x0-0xFF,0x1000,0x100,0x100".to_string(),
-        "/S08MAP".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/REMAP:0x0-0xFF,0x1000,0x100,0x100".to_owned(),
+        "/S08MAP".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -127,30 +127,6 @@ fn test_cli_remap_s08map_conflict() {
         stderr.contains("S08MAP"),
         "error should mention S08MAP: {stderr}"
     );
-}
-
-#[test]
-fn test_cli_log_file_open_is_rejected_for_export() {
-    let dir = temp_dir("cli_log_open_rejected");
-    let input = dir.join("input.bin");
-    let log = dir.join("commands.log");
-    let out = dir.join("out.hex");
-    write_file(&input, &[0xDE, 0xAD, 0xBE, 0xEF]);
-    write_file(&log, format!("FileOpen {}", input.display()).as_bytes());
-
-    let args = vec![
-        format!("/L:{}", log.display()),
-        "/XI".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-
-    let output = run_hexy(&args);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("FileOpen"));
-    assert!(stderr.contains(&input.display().to_string()));
-    assert!(!out.exists());
 }
 
 #[test]
@@ -187,8 +163,8 @@ fn test_cli_log_file_new_clears_data() {
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
         format!("/L:{}", log.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -208,8 +184,8 @@ fn test_cli_log_file_invalid_command() {
     let args = vec![
         format!("/IN:{};0x0", input.display()),
         format!("/L:{}", log.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -228,9 +204,9 @@ fn test_cli_version_string_written_to_error_log() {
     let args = vec![
         format!("/IN:{};0x0", input.display()),
         format!("/E:{}", err.display()),
-        "/V".to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/V".to_owned(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -250,8 +226,8 @@ fn test_cli_import_i16_scales_addresses() {
 
     let args = vec![
         format!("/II2={}", input.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -272,8 +248,8 @@ fn test_cli_merge_opaque_without_input_starts_empty() {
 
     let args = vec![
         format!("/MO:{};0x1000", merge.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -290,17 +266,17 @@ fn test_cli_s08map_examples() {
     let input = dir.join("input.hex");
     let out = dir.join("out.hex");
     let hexfile = HexFile::with_segments(vec![
-        Segment::new(0x4000, vec![0xAA]),
-        Segment::new(0x028000, vec![0xBB]),
+        Segment::new(0x4000, vec![0xAA]).unwrap(),
+        Segment::new(0x028000, vec![0xBB]).unwrap(),
     ]);
     let data = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
     write_file(&input, &data);
 
     let args = vec![
         input.display().to_string(),
-        "/S08MAP".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/S08MAP".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -320,9 +296,9 @@ fn test_cli_dspic_expand_default_target() {
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
-        "/CDSPX:0x1000,0x4".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CDSPX:0x1000,0x4".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -343,9 +319,9 @@ fn test_cli_dspic_expand_explicit_target_colon() {
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
-        "/CDSPX:0x1000,0x4:0x4000".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CDSPX:0x1000,0x4:0x4000".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -369,9 +345,9 @@ fn test_cli_dspic_expand_explicit_target_semicolon() {
 
     let args = vec![
         format!("/IN:{};0x1000", input.display()),
-        "/CDSPX:0x1000,0x4;0x4000".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CDSPX:0x1000,0x4;0x4000".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -391,9 +367,9 @@ fn test_cli_dspic_shrink_default_target() {
 
     let args = vec![
         format!("/IN:{};0x2000", input.display()),
-        "/CDSPS:0x2000,0x8".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CDSPS:0x2000,0x8".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -411,9 +387,9 @@ fn test_cli_dspic_clear_ghost() {
 
     let args = vec![
         format!("/IN:{};0x3000", input.display()),
-        "/CDSPG:0x3000,0x8".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CDSPG:0x3000,0x8".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -434,8 +410,8 @@ fn test_cli_hex_ascii_single_digit_tokens() {
 
     let args = vec![
         format!("/IA:{}", input.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -453,8 +429,8 @@ fn test_cli_auto_detect_binary_on_non_ascii() {
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -474,8 +450,8 @@ fn test_cli_auto_detect_binary_on_ascii_without_markers() {
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -495,8 +471,8 @@ fn test_cli_auto_detect_ihex_after_blank_lines() {
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -542,8 +518,8 @@ fn test_cli_auto_detect_ignores_ihex_after_25_lines() {
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -563,8 +539,8 @@ fn test_cli_auto_detect_srec_after_blank_lines() {
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -583,8 +559,8 @@ fn test_cli_auto_detect_srec_lowercase() {
 
     let args = vec![
         input.display().to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -605,8 +581,8 @@ fn test_cli_hex_ascii_overlap_ignores_input() {
     let args = vec![
         input.display().to_string(),
         format!("/IA:{}", ascii.display()),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
     let output = run_hexy(&args);
@@ -621,9 +597,9 @@ fn test_cli_remap_basic() {
     let input = dir.join("input.hex");
     let out = dir.join("out.hex");
     let hexfile = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0xAA]),
-        Segment::new(0x018000, vec![0x01, 0x02]),
-        Segment::new(0x028000, vec![0x03]),
+        Segment::new(0x1000, vec![0xAA]).unwrap(),
+        Segment::new(0x018000, vec![0x01, 0x02]).unwrap(),
+        Segment::new(0x028000, vec![0x03]).unwrap(),
     ]);
     let data = write_intel_hex(
         &hexfile,
@@ -637,9 +613,9 @@ fn test_cli_remap_basic() {
 
     let args = vec![
         input.display().to_string(),
-        "/remap:0x018000-0x02BFFF,0x008000,0x4000,0x010000".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/remap:0x018000-0x02BFFF,0x008000,0x4000,0x010000".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -661,9 +637,9 @@ fn test_cli_remap_invalid_size() {
 
     let args = vec![
         format!("/IN:{};0x018000", input.display()),
-        "/remap:0x018000-0x01BFFF,0x0,0x0,0x010000".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/remap:0x018000-0x01BFFF,0x0,0x0,0x010000".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -677,10 +653,10 @@ fn test_cli_s12map_basic() {
     let input = dir.join("input.hex");
     let out = dir.join("out.hex");
     let hexfile = HexFile::with_segments(vec![
-        Segment::new(0x4000, vec![0xAA]),
-        Segment::new(0xC000, vec![0xBB]),
-        Segment::new(0x308000, vec![0x01]),
-        Segment::new(0x318000, vec![0x02]),
+        Segment::new(0x4000, vec![0xAA]).unwrap(),
+        Segment::new(0xC000, vec![0xBB]).unwrap(),
+        Segment::new(0x308000, vec![0x01]).unwrap(),
+        Segment::new(0x318000, vec![0x02]).unwrap(),
     ]);
     let data = write_intel_hex(
         &hexfile,
@@ -694,9 +670,9 @@ fn test_cli_s12map_basic() {
 
     let args = vec![
         input.display().to_string(),
-        "/s12map".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/s12map".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 
@@ -716,10 +692,10 @@ fn test_cli_s12xmap_basic() {
     let input = dir.join("input.hex");
     let out = dir.join("out.hex");
     let hexfile = HexFile::with_segments(vec![
-        Segment::new(0x4000, vec![0xAA]),
-        Segment::new(0xC000, vec![0xBB]),
-        Segment::new(0xE08000, vec![0x01]),
-        Segment::new(0xE18000, vec![0x02]),
+        Segment::new(0x4000, vec![0xAA]).unwrap(),
+        Segment::new(0xC000, vec![0xBB]).unwrap(),
+        Segment::new(0xE08000, vec![0x01]).unwrap(),
+        Segment::new(0xE18000, vec![0x02]).unwrap(),
     ]);
     let data = write_intel_hex(
         &hexfile,
@@ -733,9 +709,9 @@ fn test_cli_s12xmap_basic() {
 
     let args = vec![
         input.display().to_string(),
-        "/s12xmap".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/s12xmap".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out.display().to_string(),
     ];
 

@@ -1,4 +1,5 @@
-use crate::{Segment, ops::OpsError};
+use crate::segment::end_address_for;
+use crate::{AddressRange, Segment, ops::OpsError};
 
 /// A collection of memory segments.
 ///
@@ -13,25 +14,35 @@ pub struct HexFile {
     segments: Vec<Segment>,
 }
 
+/// Where an operation writes its result bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// At a fixed address.
+    Address(u32),
+    /// Directly after the last data byte.
+    Append,
+    /// Over the first data bytes.
+    Begin,
+    /// Directly before the first data byte.
+    Prepend,
+    /// Over the last data bytes.
+    OverwriteEnd,
+}
+
 impl HexFile {
     pub fn new() -> Self {
-        Self { segments: vec![] }
+        Self::default()
     }
 
     pub fn with_segments(segments: Vec<Segment>) -> Self {
-        Self {
-            segments: segments
-                .into_iter()
-                .filter_map(checked_non_empty_segment)
-                .collect(),
-        }
+        Self { segments }
     }
 
     pub fn segments(&self) -> &[Segment] {
         &self.segments
     }
 
-    pub fn segments_mut(&mut self) -> &mut [Segment] {
+    pub(crate) fn segments_mut(&mut self) -> &mut [Segment] {
         &mut self.segments
     }
 
@@ -39,118 +50,66 @@ impl HexFile {
         self.segments
     }
 
-    /// Take all segments out, leaving the HexFile empty.
-    pub fn take_segments(&mut self) -> Vec<Segment> {
+    pub(crate) fn take_segments(&mut self) -> Vec<Segment> {
         std::mem::take(&mut self.segments)
     }
 
-    pub fn set_segments(&mut self, segments: Vec<Segment>) {
-        self.segments = segments
-            .into_iter()
-            .filter_map(checked_non_empty_segment)
-            .collect();
+    pub(crate) fn set_segments(&mut self, segments: Vec<Segment>) {
+        self.segments = segments;
     }
 
     /// Add segment with HIGH priority (wins on overlap after normalize).
     pub fn append_segment(&mut self, segment: Segment) {
-        let Some(segment) = checked_non_empty_segment(segment) else {
-            return;
-        };
         self.segments.push(segment);
     }
 
     /// Add segment with LOW priority (loses on overlap after normalize).
     pub fn prepend_segment(&mut self, segment: Segment) {
-        let Some(segment) = checked_non_empty_segment(segment) else {
-            return;
-        };
         self.segments.insert(0, segment);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.segments.iter().all(|s| s.is_empty())
+        self.segments.is_empty()
     }
 
     pub fn min_address(&self) -> Option<u32> {
-        self.segments
-            .iter()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.start_address)
-            .min()
+        self.segments.iter().map(Segment::start_address).min()
     }
 
     pub fn max_address(&self) -> Option<u32> {
-        self.segments
-            .iter()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.end_address())
-            .max()
-    }
-
-    /// Span start across all segments (raw order).
-    pub fn span_start(&self) -> Option<u32> {
-        self.min_address()
-    }
-
-    /// Span end across all segments (raw order).
-    pub fn span_end(&self) -> Option<u32> {
-        self.max_address()
+        self.segments.iter().map(Segment::end_address).max()
     }
 
     pub fn total_bytes(&self) -> usize {
-        self.segments.iter().map(|s| s.len()).sum()
+        self.segments.iter().map(Segment::len).sum()
     }
 
     /// Returns sorted/merged copy with overlaps resolved via "last wins" semantics.
     /// Later-inserted segments overwrite earlier ones at overlapping addresses.
     pub fn normalized(&self) -> HexFile {
-        let mut segments: Vec<Segment> = self
-            .segments
-            .iter()
-            .filter(|segment| !segment.is_empty())
-            .cloned()
-            .collect();
+        let mut sorted: Vec<&Segment> = self.segments.iter().collect();
+        sorted.sort_by_key(|s| s.start_address);
+        let has_overlap = sorted
+            .windows(2)
+            .any(|pair| pair[1].start_address <= pair[0].end_address());
 
-        if segments.is_empty() {
-            return HexFile::new();
-        }
-
-        let mut sorted_refs: Vec<&Segment> = segments.iter().collect();
-        sorted_refs.sort_by_key(|s| s.start_address);
-        let mut has_overlap = false;
-        let mut last_end = sorted_refs[0].end_address();
-        for seg in sorted_refs.iter().skip(1) {
-            if seg.start_address <= last_end {
-                has_overlap = true;
-                break;
+        let segments = if has_overlap {
+            let mut merged: Vec<Segment> = Vec::new();
+            for seg in &self.segments {
+                merged = overlay_segment(merged, seg.clone());
             }
-            last_end = seg.end_address();
-        }
-
-        if !has_overlap {
-            segments.sort_by_key(|s| s.start_address);
-            return HexFile {
-                segments: merge_adjacent_segments(segments),
-            };
-        }
-
-        let mut merged: Vec<Segment> = Vec::new();
-        for seg in segments {
-            merged = overlay_segment(merged, seg);
-        }
-        merged.sort_by_key(|s| s.start_address);
+            merged
+        } else {
+            sorted.into_iter().cloned().collect()
+        };
         HexFile {
-            segments: merge_adjacent_segments(merged),
+            segments: merge_adjacent_segments(segments),
         }
     }
 
     /// Count gaps between segments (after sorting).
     pub fn gap_count(&self) -> usize {
-        let segments = self.normalized().into_segments();
-        if segments.len() <= 1 {
-            return 0;
-        }
-        segments.len() - 1
+        self.normalized().segments.len().saturating_sub(1)
     }
 
     // --- Address-based access ---
@@ -158,18 +117,10 @@ impl HexFile {
     /// Read a single byte at address. Returns None if address is not covered by any segment.
     /// If multiple segments overlap, the most recently added segment wins.
     pub fn read_byte(&self, addr: u32) -> Option<u8> {
-        for seg in self.segments.iter().rev() {
-            if seg.is_empty() {
-                continue;
-            }
-            if addr >= seg.start_address && addr <= seg.end_address() {
-                let offset = (addr - seg.start_address) as usize;
-                if offset < seg.data.len() {
-                    return Some(seg.data[offset]);
-                }
-            }
-        }
-        None
+        self.segments.iter().rev().find_map(|seg| {
+            let offset = addr.checked_sub(seg.start_address)?;
+            seg.data.get(offset as usize).copied()
+        })
     }
 
     /// Read bytes from address range. Returns None for gaps.
@@ -177,8 +128,7 @@ impl HexFile {
         (0..len)
             .map(|i| {
                 let offset = u32::try_from(i).ok()?;
-                let a = addr.checked_add(offset)?;
-                self.read_byte(a)
+                self.read_byte(addr.checked_add(offset)?)
             })
             .collect()
     }
@@ -188,54 +138,79 @@ impl HexFile {
         if len == 0 {
             return Some(Vec::new());
         }
-        let len_u32 = u32::try_from(len).ok()?;
-        let end = addr.checked_add(len_u32.checked_sub(1)?)?;
+        let end = end_address_for(addr, len)?;
         let normalized = self.normalized();
-        for segment in normalized.segments() {
-            if end < segment.start_address {
-                break;
-            }
-            if addr >= segment.start_address && end <= segment.end_address() {
-                let offset = (addr - segment.start_address) as usize;
-                return Some(segment.data[offset..offset + len].to_vec());
-            }
-        }
-        None
+        let segment = normalized
+            .segments
+            .iter()
+            .find(|s| s.start_address <= addr && end <= s.end_address())?;
+        let offset = (addr - segment.start_address) as usize;
+        Some(segment.data[offset..offset + len].to_vec())
     }
 
     /// Write bytes at address. Creates new segment, will overlap with existing data.
     /// Use normalized() after to merge and resolve overlaps.
     pub fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), OpsError> {
-        if data.is_empty() {
-            return Ok(());
+        if !data.is_empty() {
+            self.segments.push(Segment::new(addr, data.to_vec())?);
         }
-        let segment = Segment::try_new(addr, data.to_vec()).map_err(|e| {
-            OpsError::AddressOverflow(format!(
-                "write at {addr:#X} with length {} exceeds u32 address space: {e}",
-                data.len()
-            ))
-        })?;
-        self.segments.push(segment);
         Ok(())
     }
 
-    /// Return a single contiguous segment spanning min..=max with gaps filled.
-    /// Uses a normalized (last-wins) snapshot. Returns None if empty or too large.
-    pub fn as_contiguous(&self, fill_byte: u8) -> Option<Segment> {
+    /// The address range `len` bytes occupy when written at `placement`, or `None` when
+    /// the placement is relative to data and the file is empty.
+    pub fn placement_range(
+        &self,
+        placement: Placement,
+        len: usize,
+    ) -> Result<Option<AddressRange>, OpsError> {
+        let overflow = |address| OpsError::AddressOverflow { address };
+        let len32 = u32::try_from(len).map_err(|_| overflow(0))?;
+        let start = match placement {
+            Placement::Address(addr) => Some(addr),
+            Placement::Begin => self.min_address(),
+            Placement::Append => self
+                .max_address()
+                .map(|end| end.checked_add(1).ok_or(overflow(end)))
+                .transpose()?,
+            Placement::Prepend => self
+                .min_address()
+                .map(|start| start.checked_sub(len32).ok_or(overflow(start)))
+                .transpose()?,
+            Placement::OverwriteEnd => self
+                .max_address()
+                .map(|end| {
+                    end.checked_sub(len32.saturating_sub(1))
+                        .ok_or(overflow(end))
+                })
+                .transpose()?,
+        };
+        let Some(start) = start else {
+            return Ok(None);
+        };
+        let end = end_address_for(start, len).ok_or(overflow(start))?;
+        Ok(Some(AddressRange::new_valid(start, end)))
+    }
+
+    /// Return a single contiguous segment spanning min..=max with gaps filled, using a
+    /// normalized (last-wins) snapshot. Returns `None` when empty and an error when the
+    /// span exceeds `limit` bytes (capped at the largest segment length, `u32::MAX`).
+    pub fn as_contiguous(&self, fill_byte: u8, limit: u64) -> Result<Option<Segment>, OpsError> {
         let normalized = self.normalized();
-        let min_addr = normalized.min_address()?;
-        let max_addr = normalized.max_address()?;
-        let span = (max_addr as u64) - (min_addr as u64) + 1;
-        if span > u32::MAX as u64 || span > usize::MAX as u64 {
-            return None;
+        let (Some(min), Some(max)) = (normalized.min_address(), normalized.max_address()) else {
+            return Ok(None);
+        };
+        let span = u64::from(max - min) + 1;
+        let limit = limit.min(u64::from(u32::MAX));
+        if span > limit {
+            return Err(OpsError::DenseSpanTooLarge { span, limit });
         }
-        let total_len = span as usize;
-        let mut data = vec![fill_byte; total_len];
-        for segment in normalized.segments() {
-            let offset = (segment.start_address - min_addr) as usize;
+        let mut data = vec![fill_byte; span as usize];
+        for segment in normalized.segments {
+            let offset = (segment.start_address - min) as usize;
             data[offset..offset + segment.len()].copy_from_slice(&segment.data);
         }
-        Segment::try_new(min_addr, data).ok()
+        Ok(Some(Segment::from_valid(min, data)))
     }
 }
 
@@ -246,7 +221,6 @@ fn merge_adjacent_segments(segments: Vec<Segment>) -> Vec<Segment> {
             && last.is_contiguous_with(&seg)
         {
             last.data.extend(seg.data);
-            debug_assert!(last.checked_end_address().is_some());
             continue;
         }
         merged.push(seg);
@@ -254,21 +228,11 @@ fn merge_adjacent_segments(segments: Vec<Segment>) -> Vec<Segment> {
     merged
 }
 
-fn checked_non_empty_segment(segment: Segment) -> Option<Segment> {
-    assert!(
-        segment.checked_end_address().is_some(),
-        "segment exceeds u32 address space; use Segment::try_new to handle overflow"
-    );
-    (!segment.is_empty()).then_some(segment)
-}
-
+/// Overlay `seg` onto sorted, non-overlapping `segments`, keeping the result sorted.
 fn overlay_segment(segments: Vec<Segment>, seg: Segment) -> Vec<Segment> {
-    if segments.is_empty() {
-        return vec![seg];
-    }
     let seg_start = seg.start_address;
     let seg_end = seg.end_address();
-    let mut next: Vec<Segment> = Vec::with_capacity(segments.len() + 1);
+    let mut next: Vec<Segment> = Vec::with_capacity(segments.len() + 2);
     let mut new_seg = Some(seg);
 
     for cur in segments {
@@ -277,222 +241,158 @@ fn overlay_segment(segments: Vec<Segment>, seg: Segment) -> Vec<Segment> {
             continue;
         }
         if cur.start_address > seg_end {
-            if let Some(seg) = new_seg.take() {
-                next.push(seg);
-            }
+            next.extend(new_seg.take());
             next.push(cur);
             continue;
         }
-
         if cur.start_address < seg_start {
             let left_len = (seg_start - cur.start_address) as usize;
-            if left_len > 0 {
-                next.push(Segment::new(
-                    cur.start_address,
-                    cur.data[..left_len].to_vec(),
-                ));
-            }
+            next.push(Segment::from_valid(
+                cur.start_address,
+                cur.data[..left_len].to_vec(),
+            ));
         }
-
         if cur.end_address() > seg_end {
-            if let Some(seg) = new_seg.take() {
-                next.push(seg);
-            }
-            if let Some(right_start) = seg_end.checked_add(1) {
-                let right_offset = (right_start - cur.start_address) as usize;
-                if right_offset < cur.data.len() {
-                    next.push(Segment::new(right_start, cur.data[right_offset..].to_vec()));
-                }
-            }
+            next.extend(new_seg.take());
+            let right_offset = (seg_end - cur.start_address) as usize + 1;
+            next.push(Segment::from_valid(
+                seg_end + 1,
+                cur.data[right_offset..].to_vec(),
+            ));
         }
     }
-
-    if let Some(seg) = new_seg.take() {
-        next.push(seg);
-    }
-
-    merge_adjacent_segments(next)
+    next.extend(new_seg);
+    next
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn hf(segments: &[(u32, &[u8])]) -> HexFile {
+        HexFile::with_segments(
+            segments
+                .iter()
+                .map(|(start, data)| Segment::new(*start, data.to_vec()).unwrap())
+                .collect(),
+        )
+    }
+
     #[test]
     fn test_normalized_merges_contiguous() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x100, vec![0x01, 0x02]),
-            Segment::new(0x102, vec![0x03, 0x04]),
-        ]);
-        let norm = hf.normalized();
+        let norm = hf(&[(0x100, &[0x01, 0x02]), (0x102, &[0x03, 0x04])]).normalized();
         assert_eq!(norm.segments.len(), 1);
         assert_eq!(norm.segments[0].start_address, 0x100);
         assert_eq!(norm.segments[0].data, vec![0x01, 0x02, 0x03, 0x04]);
     }
 
     #[test]
-    fn test_normalized_preserves_gaps() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x100, vec![0x01, 0x02]),
-            Segment::new(0x200, vec![0x03, 0x04]),
-        ]);
-        let norm = hf.normalized();
-        assert_eq!(norm.segments.len(), 2);
+    fn test_normalized_preserves_gaps_and_sorts() {
+        let norm = hf(&[(0x300, &[0x03]), (0x100, &[0x01]), (0x200, &[0x02])]).normalized();
+        let starts: Vec<u32> = norm.segments.iter().map(|s| s.start_address).collect();
+        assert_eq!(starts, vec![0x100, 0x200, 0x300]);
     }
 
     #[test]
     fn test_normalized_last_wins() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x100, vec![0x01, 0x02, 0x03]),
-            Segment::new(0x101, vec![0xFF]),
-        ]);
-        let norm = hf.normalized();
+        let norm = hf(&[(0x100, &[0x01, 0x02, 0x03]), (0x101, &[0xFF])]).normalized();
         assert_eq!(norm.segments.len(), 1);
         assert_eq!(norm.segments[0].data, vec![0x01, 0xFF, 0x03]);
     }
 
     #[test]
     fn test_normalized_multiple_overlaps_last_wins() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x100, vec![0x01, 0x01, 0x01, 0x01]),
-            Segment::new(0x102, vec![0x02, 0x02]),
-            Segment::new(0x101, vec![0x03, 0x03, 0x03]),
-        ]);
-        let norm = hf.normalized();
+        let norm = hf(&[
+            (0x100, &[0x01, 0x01, 0x01, 0x01]),
+            (0x102, &[0x02, 0x02]),
+            (0x101, &[0x03, 0x03, 0x03]),
+        ])
+        .normalized();
         assert_eq!(norm.segments.len(), 1);
         assert_eq!(norm.segments[0].data, vec![0x01, 0x03, 0x03, 0x03]);
+    }
+
+    #[test]
+    fn test_normalized_overlap_at_address_space_end() {
+        let norm = hf(&[(u32::MAX - 1, &[0x01, 0x02]), (u32::MAX, &[0xFF])]).normalized();
+        assert_eq!(
+            norm.segments,
+            vec![Segment::new(u32::MAX - 1, vec![0x01, 0xFF]).unwrap()]
+        );
     }
 
     #[test]
     fn test_write_bytes_rejects_overflow() {
         let mut hf = HexFile::new();
         let result = hf.write_bytes(u32::MAX, &[0xAA, 0xBB]);
-        assert!(matches!(result, Err(OpsError::AddressOverflow(_))));
+        assert!(matches!(result, Err(OpsError::Segment(_))));
         assert!(hf.segments.is_empty());
     }
 
     #[test]
-    fn test_read_byte() {
-        let hf = HexFile::with_segments(vec![Segment::new(0x100, vec![0xAA, 0xBB, 0xCC])]);
+    fn test_read_byte_last_wins() {
+        let hf = hf(&[(0x100, &[0xAA, 0xBB, 0xCC]), (0x101, &[0xFF])]);
         assert_eq!(hf.read_byte(0x100), Some(0xAA));
-        assert_eq!(hf.read_byte(0x101), Some(0xBB));
-        assert_eq!(hf.read_byte(0x102), Some(0xCC));
+        assert_eq!(hf.read_byte(0x101), Some(0xFF));
         assert_eq!(hf.read_byte(0x103), None);
         assert_eq!(hf.read_byte(0x0FF), None);
-    }
-
-    #[test]
-    fn test_read_bytes_with_gaps() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x100, vec![0xAA]),
-            Segment::new(0x102, vec![0xCC]),
-        ]);
-        let result = hf.read_bytes(0x100, 3);
-        assert_eq!(result, vec![Some(0xAA), None, Some(0xCC)]);
+        assert_eq!(hf.read_bytes(0x102, 3), vec![Some(0xCC), None, None]);
     }
 
     #[test]
     fn test_read_bytes_contiguous() {
-        let hf = HexFile::with_segments(vec![Segment::new(0x100, vec![0xAA, 0xBB, 0xCC])]);
+        let hf = hf(&[(0x100, &[0xAA, 0xBB, 0xCC]), (u32::MAX, &[0xEE])]);
         assert_eq!(
             hf.read_bytes_contiguous(0x100, 3),
             Some(vec![0xAA, 0xBB, 0xCC])
         );
         assert_eq!(hf.read_bytes_contiguous(0x100, 4), None);
-    }
-
-    #[test]
-    fn test_read_bytes_contiguous_single_byte_at_u32_max() {
-        let hf = HexFile::with_segments(vec![Segment::new(u32::MAX, vec![0xAA])]);
-
-        assert_eq!(hf.read_bytes_contiguous(u32::MAX, 1), Some(vec![0xAA]));
+        assert_eq!(hf.read_bytes_contiguous(u32::MAX, 1), Some(vec![0xEE]));
         assert_eq!(hf.read_bytes_contiguous(u32::MAX - 1, 2), None);
     }
 
     #[test]
-    fn test_write_bytes() {
-        let mut hf = HexFile::new();
-        hf.write_bytes(0x100, &[0x01, 0x02]).unwrap();
-        hf.write_bytes(0x101, &[0xFF]).unwrap(); // overlaps
-        let norm = hf.normalized();
-        assert_eq!(norm.segments[0].data, vec![0x01, 0xFF]);
-    }
-
-    #[test]
-    fn test_sorted_order() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x300, vec![0x03]),
-            Segment::new(0x100, vec![0x01]),
-            Segment::new(0x200, vec![0x02]),
-        ]);
-        let norm = hf.normalized();
-        assert_eq!(norm.segments[0].start_address, 0x100);
-        assert_eq!(norm.segments[1].start_address, 0x200);
-        assert_eq!(norm.segments[2].start_address, 0x300);
-    }
-
-    #[test]
-    fn test_as_contiguous_fills_gaps() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x100, vec![0xAA]),
-            Segment::new(0x102, vec![0xCC]),
-        ]);
-        let seg = hf.as_contiguous(0xFF).unwrap();
+    fn test_as_contiguous_fills_gaps_and_respects_limit() {
+        let hf = hf(&[(0x100, &[0xAA]), (0x102, &[0xCC])]);
+        let seg = hf.as_contiguous(0xFF, 3).unwrap().unwrap();
         assert_eq!(seg.start_address, 0x100);
         assert_eq!(seg.data, vec![0xAA, 0xFF, 0xCC]);
+        assert!(matches!(
+            hf.as_contiguous(0xFF, 2),
+            Err(OpsError::DenseSpanTooLarge { span: 3, limit: 2 })
+        ));
+        assert_eq!(HexFile::new().as_contiguous(0xFF, 3).unwrap(), None);
     }
 
     #[test]
-    fn test_span_start_end() {
-        let hf = HexFile::with_segments(vec![
-            Segment::new(0x300, vec![0x03]),
-            Segment::new(0x100, vec![0x01, 0x02]),
-        ]);
-        assert_eq!(hf.span_start(), Some(0x100));
-        assert_eq!(hf.span_end(), Some(0x300));
-    }
-
-    #[test]
-    fn test_read_byte_ignores_empty_segments() {
-        let mut hf = HexFile::new();
-        hf.append_segment(Segment::new(0x1000, vec![]));
-        assert_eq!(hf.read_byte(0x1000), None);
-
-        hf.append_segment(Segment::new(0x1000, vec![0xAA]));
-        assert_eq!(hf.read_byte(0x1000), Some(0xAA));
-    }
-
-    #[test]
-    #[should_panic(expected = "segment exceeds u32 address space")]
-    fn test_with_segments_rejects_invalid_segment() {
-        let _ = HexFile::with_segments(vec![Segment {
-            start_address: u32::MAX,
-            data: vec![0xAA, 0xBB],
-        }]);
-    }
-
-    #[test]
-    #[should_panic(expected = "segment exceeds u32 address space")]
-    fn test_append_segment_rejects_invalid_segment() {
-        let mut hf = HexFile::new();
-        hf.append_segment(Segment {
-            start_address: u32::MAX,
-            data: vec![0xAA, 0xBB],
-        });
+    fn test_placement_range() {
+        let hf = hf(&[(0x1000, &[0x01; 4])]);
+        let range = |p| {
+            hf.placement_range(p, 2)
+                .unwrap()
+                .map(|r| (r.start(), r.end()))
+        };
+        assert_eq!(range(Placement::Address(0x10)), Some((0x10, 0x11)));
+        assert_eq!(range(Placement::Append), Some((0x1004, 0x1005)));
+        assert_eq!(range(Placement::Begin), Some((0x1000, 0x1001)));
+        assert_eq!(range(Placement::Prepend), Some((0x0FFE, 0x0FFF)));
+        assert_eq!(range(Placement::OverwriteEnd), Some((0x1002, 0x1003)));
+        assert_eq!(
+            HexFile::new()
+                .placement_range(Placement::Append, 2)
+                .unwrap(),
+            None
+        );
+        assert!(hf.placement_range(Placement::Address(u32::MAX), 2).is_err());
+        assert!(hf.placement_range(Placement::Prepend, 0x1001).is_err());
     }
 
     #[test]
     fn test_gap_count_with_overlap_and_gap() {
-        let hf_overlap = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB]),
-            Segment::new(0x1001, vec![0xCC]),
-        ]);
-        assert_eq!(hf_overlap.gap_count(), 0);
-
-        let hf_gap = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]),
-            Segment::new(0x1002, vec![0xBB]),
-        ]);
-        assert_eq!(hf_gap.gap_count(), 1);
+        assert_eq!(
+            hf(&[(0x1000, &[0xAA, 0xBB]), (0x1001, &[0xCC])]).gap_count(),
+            0
+        );
+        assert_eq!(hf(&[(0x1000, &[0xAA]), (0x1002, &[0xBB])]).gap_count(), 1);
     }
 }

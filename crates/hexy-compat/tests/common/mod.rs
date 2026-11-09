@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::panic)] // test helpers outside #[test] fns
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};

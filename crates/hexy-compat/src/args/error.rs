@@ -1,8 +1,7 @@
 use thiserror::Error;
 
 use super::types::ParseArgError;
-use hexy_core::ops::LogError;
-use hexy_core::{FileIoError, SignatureError};
+use hexy_core::{FileIoError, SignatureError, WriteError};
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -11,9 +10,9 @@ pub enum CliError {
     #[error(transparent)]
     Ops(#[from] crate::OpsError),
     #[error(transparent)]
-    Log(#[from] LogError),
-    #[error(transparent)]
     Parse(#[from] crate::ParseError),
+    #[error(transparent)]
+    Write(#[from] WriteError),
     #[error(transparent)]
     Signature(#[from] SignatureError),
     #[error(transparent)]

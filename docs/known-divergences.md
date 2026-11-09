@@ -14,12 +14,11 @@ Hexy has three public surfaces:
 
 `hexy-core` exposes the broadest API:
 
-- `HexFile`, `Segment`, `AddressRange`, range parsing, normalization, sparse reads, contiguous exports, and direct segment mutation
+- `HexFile`, `Segment`, `AddressRange`, range parsing, normalization, sparse reads, contiguous exports, segment append/prepend, and byte writes
 - binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, C-code writing, and auto-detected file helpers
 - filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, address scaling, banked mapping, and remap operations
-- checksum calculation and writeback through `ChecksumOptions`, `ChecksumTarget`, `ChecksumJob`, and `checksum_many_sequential`
+- checksum calculation and writeback through `ChecksumOptions` and a `Placement`
 - signature signing and verification primitives
-- limited HexView log-file parsing and execution helpers for `FileOpen`, `FileClose`, and `FileNew`
 
 ### `hexy-compat`
 
@@ -32,7 +31,7 @@ Hexy has three public surfaces:
 - signing and verification through the supported `/DP` and `/SV` subset
 - output through Intel HEX (`/XI`), S-Record (`/XS`), binary (`/XN`), HEX ASCII (`/XA`), C code (`/XC`), Ford Intel HEX (`/XF`), Porsche (`/XP`), and separate binaries (`/XSB`)
 
-`hexy-compat` does not expose every `hexy-core` operation as an independent CLI feature. Library-only surface includes direct segment mutation, arbitrary sparse reads, `to_bytes`-style contiguous inspection, standalone address scaling/unscaling APIs, direct banked-map configuration, direct C-code writer options, direct signature/key source types, and log parsing/execution as a reusable API.
+`hexy-compat` does not expose every `hexy-core` operation as an independent CLI feature. Library-only surface includes segment append/prepend, arbitrary sparse reads, `to_bytes`-style contiguous inspection, standalone address scaling/unscaling APIs, direct banked-map configuration, direct C-code writer options, and direct signature/key source types.
 
 ### `hexy-py`
 
@@ -43,7 +42,7 @@ Hexy has three public surfaces:
 - segment inspection, sparse reads, contiguous byte export, direct byte writes, normalization, append/prepend segment operations, filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, remap, and S08/S12/S12X mapping
 - `Pipeline`, which applies operations in hexy CLI compatibility order
 
-`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksum calculation/writeback, sequential checksum jobs, signing, verification, C-code export, Ford/Porsche/separate-binary exporters, log-file execution helpers, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
+`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksum calculation/writeback, signing, verification, C-code export, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
 
 ## HexView Compatibility Limits
 
@@ -70,6 +69,8 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 ### Other Limits
 
 - in `hexy-compat`, `/L` executes `FileClose` and `FileNew`; `FileOpen <path>` is rejected with the attempted path
+- `start,length` ranges that reach past `0xFFFFFFFF` are clipped to the address space; HexView ignores or reinterprets them differently per flag
+- `/SWAPLONG` over a contiguous span of 16 MiB or more: HexView keeps the first swapped word and repeats the second swapped word across the span; hexy repeats the first swapped word, and only when the image is a single raw segment
 - exact `/E` and `/V` text/file semantics
 - proprietary or DLL-backed features such as `/PB`, `/expdat`, and OEM container formats
 

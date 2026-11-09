@@ -12,8 +12,8 @@ use hexy_core::{
 fn test_cut_fill_normalize() {
     // Start with two segments with a gap
     let mut hf = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0xAA; 0x20]),
-        Segment::new(0x1040, vec![0xBB; 0x20]),
+        Segment::new(0x1000, vec![0xAA; 0x20]).unwrap(),
+        Segment::new(0x1040, vec![0xBB; 0x20]).unwrap(),
     ]);
 
     // Cut a subrange from the first segment
@@ -42,8 +42,8 @@ fn test_cut_fill_normalize() {
 
 #[test]
 fn test_merge_align_normalize_overwrite() {
-    let mut hf1 = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 8])]);
-    let hf2 = HexFile::with_segments(vec![Segment::new(0x1003, vec![0xBB; 4])]);
+    let mut hf1 = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 8]).unwrap()]);
+    let hf2 = HexFile::with_segments(vec![Segment::new(0x1003, vec![0xBB; 4]).unwrap()]);
 
     // Merge with overwrite mode
     hf1.merge(&hf2, &MergeOptions::default()).unwrap();
@@ -69,8 +69,8 @@ fn test_merge_align_normalize_overwrite() {
 
 #[test]
 fn test_merge_align_normalize_preserve() {
-    let mut hf1 = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 8])]);
-    let hf2 = HexFile::with_segments(vec![Segment::new(0x1003, vec![0xBB; 4])]);
+    let mut hf1 = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA; 8]).unwrap()]);
+    let hf2 = HexFile::with_segments(vec![Segment::new(0x1003, vec![0xBB; 4]).unwrap()]);
 
     // Merge with preserve mode
     hf1.merge(
@@ -94,9 +94,9 @@ fn test_merge_align_normalize_preserve() {
 #[test]
 fn test_scale_unscale_roundtrip() {
     let original = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0xAA, 0xBB]),
-        Segment::new(0x2000, vec![0xCC, 0xDD]),
-        Segment::new(0x3000, vec![0xEE, 0xFF]),
+        Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap(),
+        Segment::new(0x2000, vec![0xCC, 0xDD]).unwrap(),
+        Segment::new(0x3000, vec![0xEE, 0xFF]).unwrap(),
     ]);
 
     let mut hf = original.clone();
@@ -131,7 +131,7 @@ fn test_scale_unscale_roundtrip() {
 
 #[test]
 fn test_align_then_split() {
-    let mut hf = HexFile::with_segments(vec![Segment::new(0x1003, vec![0xAA; 29])]);
+    let mut hf = HexFile::with_segments(vec![Segment::new(0x1003, vec![0xAA; 29]).unwrap()]);
 
     // Align to 8-byte boundary with length alignment
     hf.align(&AlignOptions {
@@ -161,19 +161,19 @@ fn test_align_then_split() {
 fn test_fill_gaps_then_merge_overwrite() {
     // File A: sparse segments with gaps
     let mut hf_a = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0xAA; 4]),
-        Segment::new(0x1010, vec![0xBB; 4]),
+        Segment::new(0x1000, vec![0xAA; 4]).unwrap(),
+        Segment::new(0x1010, vec![0xBB; 4]).unwrap(),
     ]);
 
     // Fill gaps
-    hf_a.fill_gaps(0x00).unwrap();
+    hf_a.fill_gaps(0x00, u64::MAX).unwrap();
 
     // Now it's contiguous 0x1000-0x1013, gaps filled with 0x00
     assert_eq!(hf_a.segments().len(), 1);
     assert_eq!(hf_a.segments()[0].len(), 0x14);
 
     // File B: overlaps with filled region
-    let hf_b = HexFile::with_segments(vec![Segment::new(0x1008, vec![0xCC; 4])]);
+    let hf_b = HexFile::with_segments(vec![Segment::new(0x1008, vec![0xCC; 4]).unwrap()]);
 
     // Merge with overwrite
     hf_a.merge(&hf_b, &MergeOptions::default()).unwrap();
@@ -198,12 +198,12 @@ fn test_fill_gaps_then_merge_overwrite() {
 #[test]
 fn test_fill_gaps_then_merge_preserve() {
     let mut hf_a = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0xAA; 4]),
-        Segment::new(0x1010, vec![0xBB; 4]),
+        Segment::new(0x1000, vec![0xAA; 4]).unwrap(),
+        Segment::new(0x1010, vec![0xBB; 4]).unwrap(),
     ]);
-    hf_a.fill_gaps(0x00).unwrap();
+    hf_a.fill_gaps(0x00, u64::MAX).unwrap();
 
-    let hf_b = HexFile::with_segments(vec![Segment::new(0x1008, vec![0xCC; 4])]);
+    let hf_b = HexFile::with_segments(vec![Segment::new(0x1008, vec![0xCC; 4]).unwrap()]);
 
     hf_a.merge(
         &hf_b,
@@ -226,9 +226,9 @@ fn test_fill_gaps_then_merge_preserve() {
 #[test]
 fn test_swap_and_read() {
     let original_data = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
-    let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, original_data.clone())]);
+    let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, original_data.clone()).unwrap()]);
 
-    hf.swap_bytes(SwapMode::Word).unwrap();
+    hf.swap_bytes(SwapMode::Word);
 
     let swapped = hf.read_bytes_contiguous(0x1000, 8).unwrap();
     assert_eq!(
@@ -237,7 +237,7 @@ fn test_swap_and_read() {
     );
 
     // Swap again to get back to original
-    hf.swap_bytes(SwapMode::Word).unwrap();
+    hf.swap_bytes(SwapMode::Word);
     let restored = hf.read_bytes_contiguous(0x1000, 8).unwrap();
     assert_eq!(restored, original_data);
 }
@@ -247,7 +247,7 @@ fn test_swap_and_read() {
 #[test]
 fn test_filter_cut_fill_align_split() {
     // Large segment
-    let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 0x100])]);
+    let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 0x100]).unwrap()]);
 
     // Filter to keep only part
     hf.filter_range(AddressRange::from_start_end(0x1020, 0x10FF).unwrap());
@@ -274,7 +274,7 @@ fn test_filter_cut_fill_align_split() {
     .unwrap();
 
     // Fill gaps to merge everything
-    hf.fill_gaps(0x00).unwrap();
+    hf.fill_gaps(0x00, u64::MAX).unwrap();
 
     // Now we have a single contiguous segment - verify data integrity
     let norm = hf.normalized();
@@ -304,7 +304,7 @@ fn test_operations_on_empty_file() {
     // None of these should panic (scale/offset on empty are no-ops)
     hf.filter_range(AddressRange::from_start_end(0x1000, 0x1FFF).unwrap());
     hf.cut(AddressRange::from_start_end(0x1000, 0x1FFF).unwrap());
-    hf.fill_gaps(0xFF).unwrap();
+    hf.fill_gaps(0xFF, u64::MAX).unwrap();
     hf.scale_addresses(2).unwrap();
     hf.offset_addresses(0x1000).unwrap();
     hf.split(16);
@@ -318,8 +318,8 @@ fn test_operations_on_empty_file() {
 #[test]
 fn test_normalized_last_wins_on_overlap() {
     let hf = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0xAA; 8]),
-        Segment::new(0x1004, vec![0xBB; 4]), // overlaps
+        Segment::new(0x1000, vec![0xAA; 8]).unwrap(),
+        Segment::new(0x1004, vec![0xBB; 4]).unwrap(), // overlaps
     ]);
 
     let norm = hf.normalized();
@@ -336,9 +336,9 @@ fn test_normalized_last_wins_on_overlap() {
 #[test]
 fn test_three_overlapping_segments_last_wins() {
     let hf = HexFile::with_segments(vec![
-        Segment::new(0x1000, vec![0x11, 0x11, 0x11, 0x11]),
-        Segment::new(0x1001, vec![0x22, 0x22]),
-        Segment::new(0x1002, vec![0x33]),
+        Segment::new(0x1000, vec![0x11, 0x11, 0x11, 0x11]).unwrap(),
+        Segment::new(0x1001, vec![0x22, 0x22]).unwrap(),
+        Segment::new(0x1002, vec![0x33]).unwrap(),
     ]);
 
     let norm = hf.normalized();

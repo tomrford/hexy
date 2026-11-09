@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::AddressRange;
+use crate::{AddressRange, ForcedRange, Placement};
 
 use super::parse::parse_option;
 
@@ -129,26 +129,16 @@ pub struct ChecksumParams {
 }
 
 #[derive(Debug, Clone)]
-pub struct ForcedRange {
-    pub range: AddressRange,
-    pub pattern: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
 pub enum ChecksumTarget {
     None,
-    Address(u32),
-    Append,
-    Begin,
-    Prepend,
-    OverwriteEnd,
+    Place(Placement),
     File(PathBuf),
 }
 
 #[derive(Debug, Clone)]
 pub struct DataProcessingParams {
     pub method: u8,
-    pub placement: Option<ChecksumTarget>,
+    pub placement: Option<Placement>,
     pub key_info: String,
     pub output_file: Option<PathBuf>,
 }
@@ -292,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_parse_double_dash_forces_positional() {
-        let args = vec!["--".to_string(), "/tmp/input.hex".to_string()];
+        let args = vec!["--".to_owned(), "/tmp/input.hex".to_owned()];
         let parsed = Args::parse_from(args).unwrap();
         assert_eq!(parsed.input_file, Some(PathBuf::from("/tmp/input.hex")));
     }

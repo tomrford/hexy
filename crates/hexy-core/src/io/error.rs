@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::{OpsError, SegmentError};
+
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("invalid record at line {line}: {message}")]
@@ -15,8 +17,8 @@ pub enum ParseError {
     #[error("unexpected end of file")]
     UnexpectedEof,
 
-    #[error("address overflow: {0}")]
-    AddressOverflow(String),
+    #[error("record at line {line} exceeds u32 address space")]
+    AddressOverflow { line: usize },
 
     #[error("invalid hex digit at line {line}: {char}")]
     InvalidHexDigit { line: usize, char: char },
@@ -24,6 +26,18 @@ pub enum ParseError {
     #[error("unsupported record type at line {line}: {record_type:02X}")]
     UnsupportedRecordType { line: usize, record_type: u8 },
 
+    #[error(transparent)]
+    Segment(#[from] SegmentError),
+}
+
+#[derive(Debug, Error)]
+pub enum WriteError {
+    #[error("address {address:#X} cannot be encoded as {format}")]
+    AddressNotEncodable { address: u32, format: &'static str },
+
     #[error("invalid output: {0}")]
     InvalidOutput(String),
+
+    #[error(transparent)]
+    Ops(#[from] OpsError),
 }

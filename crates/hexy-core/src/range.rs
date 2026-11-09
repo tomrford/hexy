@@ -17,29 +17,24 @@ pub enum AddressRangeError {
     ZeroLength { start: u32 },
 }
 
-/// A memory address range, specified either as start+length or start-end (inclusive).
+/// An inclusive memory address range inside the u32 address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AddressRange {
     start: u32,
-    end: u32,           // inclusive, clipped to the u32 address space
-    requested_end: u64, // inclusive, preserves overflowing length-form requests
+    end: u32,
 }
 
 impl AddressRange {
-    /// Create range from start address and length.
+    /// Create range from start address and length. A length reaching past the end of
+    /// the address space is clipped to `u32::MAX`.
     pub fn from_start_length(start: u32, length: u64) -> Result<Self, AddressRangeError> {
         if length == 0 {
             return Err(AddressRangeError::ZeroLength { start });
         }
-        let requested_end = (start as u64)
-            .checked_add(length - 1)
-            .ok_or_else(|| AddressRangeError::InvalidFormat("address overflow".to_owned()))?;
-        let end = requested_end.min(u32::MAX as u64) as u32;
-        Ok(Self {
-            start,
-            end,
-            requested_end,
-        })
+        let end = u64::from(start)
+            .saturating_add(length - 1)
+            .min(u64::from(u32::MAX)) as u32;
+        Ok(Self { start, end })
     }
 
     /// Create range from start and end addresses (inclusive).
@@ -47,11 +42,13 @@ impl AddressRange {
         if start > end {
             return Err(AddressRangeError::StartExceedsEnd { start, end });
         }
-        Ok(Self {
-            start,
-            end,
-            requested_end: end as u64,
-        })
+        Ok(Self { start, end })
+    }
+
+    /// Construct from endpoints already known to satisfy `start <= end`.
+    pub(crate) fn new_valid(start: u32, end: u32) -> Self {
+        debug_assert!(start <= end);
+        Self { start, end }
     }
 
     pub fn start(&self) -> u32 {
@@ -62,20 +59,8 @@ impl AddressRange {
         self.end
     }
 
-    pub fn requested_end(&self) -> u64 {
-        self.requested_end
-    }
-
     pub fn length(&self) -> u64 {
-        self.requested_end - self.start as u64 + 1
-    }
-
-    pub fn addressable_length(&self) -> u64 {
-        self.end as u64 - self.start as u64 + 1
-    }
-
-    pub fn extends_past_address_space(&self) -> bool {
-        self.requested_end > u32::MAX as u64
+        u64::from(self.end) - u64::from(self.start) + 1
     }
 
     pub fn contains(&self, addr: u32) -> bool {
@@ -88,13 +73,9 @@ impl AddressRange {
 
     /// Return the intersection of two ranges, if they overlap.
     pub fn intersection(&self, other: &AddressRange) -> Option<AddressRange> {
-        if !self.overlaps(other) {
-            return None;
-        }
-        Some(AddressRange {
+        self.overlaps(other).then(|| AddressRange {
             start: self.start.max(other.start),
             end: self.end.min(other.end),
-            requested_end: self.end.min(other.end) as u64,
         })
     }
 }
@@ -160,36 +141,51 @@ impl FromStr for AddressRange {
 }
 
 /// Merge overlapping or adjacent ranges into a sorted, non-overlapping set.
-///
-/// Adjacent ranges are coalesced by their addressable endpoints. If any input
-/// range came from an overflowing length-form request, the merged range keeps
-/// the largest requested end so allocation-producing callers can still reject it.
 pub fn merge_ranges(ranges: &[AddressRange]) -> Vec<AddressRange> {
     let mut sorted = ranges.to_vec();
-    sorted.sort_by_key(|r| r.start());
+    sorted.sort_by_key(|r| r.start);
 
     let mut merged: Vec<AddressRange> = Vec::new();
     for range in sorted {
-        if let Some(last) = merged.last_mut() {
-            let adjacent = last
-                .end()
-                .checked_add(1)
-                .map(|v| range.start() <= v)
-                .unwrap_or(false);
-            if range.start() <= last.end() || adjacent {
-                let new_end = last.end().max(range.end());
-                let requested_end = last.requested_end().max(range.requested_end());
-                *last = AddressRange {
-                    start: last.start(),
-                    end: new_end,
-                    requested_end,
-                };
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && range.start <= last.end.saturating_add(1)
+        {
+            last.end = last.end.max(range.end);
+            continue;
         }
         merged.push(range);
     }
     merged
+}
+
+/// The parts of `range` not covered by `excludes` (sorted and non-overlapping, as
+/// returned by [`merge_ranges`]).
+pub(crate) fn subtract_ranges(range: AddressRange, excludes: &[AddressRange]) -> Vec<AddressRange> {
+    let mut out = Vec::new();
+    let mut cursor = range.start;
+    for ex in excludes {
+        if ex.end < cursor {
+            continue;
+        }
+        if ex.start > range.end {
+            break;
+        }
+        if cursor < ex.start {
+            out.push(AddressRange {
+                start: cursor,
+                end: ex.start - 1,
+            });
+        }
+        match ex.end.checked_add(1) {
+            Some(next) if next <= range.end => cursor = next,
+            _ => return out,
+        }
+    }
+    out.push(AddressRange {
+        start: cursor,
+        end: range.end,
+    });
+    out
 }
 
 /// Parse multiple ranges separated by ':'.
@@ -353,15 +349,6 @@ mod tests {
         assert_eq!(r.start(), 0);
         assert_eq!(r.end(), u32::MAX);
         assert_eq!(r.length(), 0x1_0000_0000);
-        assert_eq!(r.addressable_length(), 0x1_0000_0000);
-        assert!(!r.extends_past_address_space());
-    }
-
-    #[test]
-    fn test_near_max_range_allowed() {
-        // 1 to MAX is allowed (length = MAX)
-        let r = AddressRange::from_start_end(1, u32::MAX).unwrap();
-        assert_eq!(r.length(), u64::from(u32::MAX));
     }
 
     #[test]
@@ -431,23 +418,11 @@ mod tests {
     }
 
     #[test]
-    fn test_start_length_can_extend_past_address_space() {
-        let r = AddressRange::from_start_length(u32::MAX, 2).unwrap();
-        assert_eq!(r.start(), u32::MAX);
-        assert_eq!(r.end(), u32::MAX);
-        assert_eq!(r.length(), 2);
-        assert_eq!(r.addressable_length(), 1);
-        assert!(r.extends_past_address_space());
-    }
-
-    #[test]
-    fn test_parse_length_overflow_keeps_addressable_endpoint() {
+    fn test_start_length_past_address_space_is_clipped() {
         let r: AddressRange = "0xFFFFFFFC,0x8".parse().unwrap();
         assert_eq!(r.start(), 0xFFFF_FFFC);
         assert_eq!(r.end(), u32::MAX);
-        assert_eq!(r.length(), 8);
-        assert_eq!(r.addressable_length(), 4);
-        assert!(r.extends_past_address_space());
+        assert_eq!(r.length(), 4);
     }
 
     #[test]
@@ -456,7 +431,6 @@ mod tests {
         assert_eq!(r.start(), 0);
         assert_eq!(r.end(), u32::MAX);
         assert_eq!(r.length(), 0x1_0000_0000);
-        assert!(!r.extends_past_address_space());
     }
 
     #[test]

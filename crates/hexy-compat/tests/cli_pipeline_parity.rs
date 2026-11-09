@@ -3,7 +3,7 @@ mod common;
 use common::{assert_success, run_hexy, temp_dir, write_file};
 use hexy_core::{
     AddressRange, AlignOptions, BinaryWriteOptions, ChecksumAlgorithm, ChecksumOptions,
-    ChecksumTarget, FillOptions, HexFile, IntelHexWriteOptions, MergeMode, MergeOptions, Segment,
+    FillOptions, HexFile, IntelHexWriteOptions, MergeMode, MergeOptions, Placement, Segment,
     SwapMode, parse_binary, write_binary, write_intel_hex,
 };
 
@@ -19,18 +19,18 @@ fn test_cli_pipeline_parity_basic_chain() {
 
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
-        "/FR:0x1000-0x100F".to_string(),
-        "/FP:F0".to_string(),
-        "/CR:0x1004-0x1005".to_string(),
+        "/FR:0x1000-0x100F".to_owned(),
+        "/FP:F0".to_owned(),
+        "/CR:0x1004-0x1005".to_owned(),
         format!("/MT:{};0x1008", merge.display()),
-        "/AR:0x1000-0x1010".to_string(),
-        "/AF:00".to_string(),
-        "/AD4".to_string(),
-        "/AL".to_string(),
-        "/SWAPWORD".to_string(),
-        "/SB:4".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/AR:0x1000-0x1010".to_owned(),
+        "/AF:00".to_owned(),
+        "/AD4".to_owned(),
+        "/AL".to_owned(),
+        "/SWAPWORD".to_owned(),
+        "/SB:4".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_cli.display().to_string(),
     ];
 
@@ -73,7 +73,7 @@ fn test_cli_pipeline_parity_basic_chain() {
         })
         .unwrap();
     hexfile.split(4);
-    hexfile.swap_bytes(SwapMode::Word).unwrap();
+    hexfile.swap_bytes(SwapMode::Word);
 
     let lib_bytes = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
     assert_eq!(cli_bytes, lib_bytes);
@@ -92,8 +92,8 @@ fn test_cli_pipeline_parity_binary_order() {
     let args = vec![
         format!("/IN:{};0x2000", base.display()),
         format!("/MT:{};0x1000", merge.display()),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out_cli.display().to_string(),
     ];
 
@@ -128,9 +128,9 @@ fn test_cli_checksum_parity_begin() {
 
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
-        "/CS0:@BEGIN".to_string(),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/CS0:@BEGIN".to_owned(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_cli.display().to_string(),
     ];
 
@@ -140,14 +140,14 @@ fn test_cli_checksum_parity_begin() {
 
     let mut hexfile = parse_binary(&[0x01, 0x02, 0x03, 0x04], 0x1000).unwrap();
     let start = hexfile.min_address().unwrap();
-    let algorithm = ChecksumAlgorithm::from_index(0).unwrap();
+    let algorithm = ChecksumAlgorithm::try_from(0).unwrap();
     let _ = hexfile
         .checksum(
             &ChecksumOptions {
                 algorithm,
                 ..Default::default()
             },
-            &ChecksumTarget::Address(start),
+            Some(Placement::Address(start)),
         )
         .unwrap();
     let lib_bytes = write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap();
@@ -167,8 +167,8 @@ fn test_cli_checksum_parity_little_endian_file() {
     let args = vec![
         format!("/IN:{};0x2000", base.display()),
         format!("/CSR0:{}", out_sum.display()),
-        "/XI".to_string(),
-        "-o".to_string(),
+        "/XI".to_owned(),
+        "-o".to_owned(),
         out_cli.display().to_string(),
     ];
 
@@ -177,7 +177,7 @@ fn test_cli_checksum_parity_little_endian_file() {
     let cli_sum = std::fs::read_to_string(&out_sum).unwrap();
 
     let mut hexfile = parse_binary(&[0x10, 0x20, 0x30, 0x40], 0x2000).unwrap();
-    let algorithm = ChecksumAlgorithm::from_index(0).unwrap();
+    let algorithm = ChecksumAlgorithm::try_from(0).unwrap();
     let bytes = hexfile
         .checksum(
             &ChecksumOptions {
@@ -185,7 +185,7 @@ fn test_cli_checksum_parity_little_endian_file() {
                 little_endian_output: true,
                 ..Default::default()
             },
-            &ChecksumTarget::File(out_sum.clone()),
+            None,
         )
         .unwrap();
     let lib_sum = bytes
@@ -210,8 +210,8 @@ fn test_cli_pipeline_parity_xsb_split() {
     let args = vec![
         format!("/IN:{};0x1000", base.display()),
         format!("/MO:{};0x2000", merge.display()),
-        "/XSB".to_string(),
-        "-o".to_string(),
+        "/XSB".to_owned(),
+        "-o".to_owned(),
         out_cli.display().to_string(),
     ];
 
@@ -246,8 +246,8 @@ fn test_cli_pipeline_parity_obc_fa_uses_align_fill() {
     let out_cli = dir.join("out.bin");
 
     let hexfile = HexFile::with_segments(vec![
-        Segment::new(0x1003, vec![0xAA, 0xBB]),
-        Segment::new(0x1021, vec![0xCC, 0xDD]),
+        Segment::new(0x1003, vec![0xAA, 0xBB]).unwrap(),
+        Segment::new(0x1021, vec![0xCC, 0xDD]).unwrap(),
     ]);
     write_file(
         &base,
@@ -256,12 +256,12 @@ fn test_cli_pipeline_parity_obc_fa_uses_align_fill() {
 
     let args = vec![
         base.display().to_string(),
-        "/AD20".to_string(),
-        "/AFFF".to_string(),
-        "/FA".to_string(),
-        "/AL".to_string(),
-        "/XN".to_string(),
-        "-o".to_string(),
+        "/AD20".to_owned(),
+        "/AFFF".to_owned(),
+        "/FA".to_owned(),
+        "/AL".to_owned(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
         out_cli.display().to_string(),
     ];
 
