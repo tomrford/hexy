@@ -28,45 +28,15 @@ pub(super) enum RangeText {
     Invalid,
 }
 
-/// `start,length` or `start-end` as HexView reads it. Each number is `0x` hex or
-/// decimal after optional blanks, the start also after one `+`, and text after the
-/// second number is ignored; the start must be followed directly by `,` or `-`.
+/// A range as HexView reads it (see `AddressRange`'s `FromStr`).
 pub(super) fn parse_range(s: &str) -> RangeText {
-    let s = strip_quotes(s);
-    let Some((start, rest)) = range_number(s.strip_prefix('+').unwrap_or(s)) else {
-        return RangeText::Invalid;
-    };
-    let Some((separator, rest)) = rest.split_at_checked(1) else {
-        return RangeText::Invalid;
-    };
-    let second = range_number(rest).map_or(0, |(value, _)| value);
-    let range = match separator {
-        "," => AddressRange::from_start_length(start, u64::from(second)),
-        "-" => AddressRange::from_start_end(start, second),
-        _ => return RangeText::Invalid,
-    };
-    match range {
+    match strip_quotes(s).parse() {
         Ok(range) => RangeText::Valid(range),
         Err(AddressRangeError::ZeroLength { .. } | AddressRangeError::PastAddressSpace { .. }) => {
             RangeText::Skipped
         }
         Err(_) => RangeText::Invalid,
     }
-}
-
-/// A HexView range number and the text after it; `None` without digits or above 32
-/// bits.
-fn range_number(s: &str) -> Option<(u32, &str)> {
-    let s = s.trim_start();
-    let (radix, digits) = match s.strip_prefix("0x") {
-        Some(hex) if hex.starts_with(|c: char| c.is_ascii_hexdigit()) => (16, hex),
-        _ => (10, s),
-    };
-    let end = digits
-        .find(|c: char| !c.is_digit(radix))
-        .unwrap_or(digits.len());
-    let value = u32::from_str_radix(&digits[..end], radix).ok()?;
-    Some((value, &digits[end..]))
 }
 
 /// `:`-separated ranges as HexView reads them: skipped ranges are left out, and an
@@ -498,33 +468,11 @@ mod tests {
         assert!(params[0].invalid_range);
     }
 
-    /// HexView 1.15.2 range text: lenient numbers, ignored trailing text, no `h` or `0b`
-    /// forms, and a start that must be followed directly by `,` or `-`.
+    /// HexView 1.15.2 skips an empty range and stops a range list at an invalid one.
     #[test]
-    fn test_parse_range_matches_hexview() {
-        let valid =
-            |start, end| RangeText::Valid(AddressRange::from_start_end(start, end).unwrap());
-        assert_eq!(parse_range("0x1000,4x"), valid(0x1000, 0x1003));
-        assert_eq!(parse_range("0x1000-0x1003-0x1005"), valid(0x1000, 0x1003));
-        assert_eq!(parse_range("+ 8,4"), valid(8, 11));
-        assert_eq!(parse_range("010,4"), valid(10, 13));
-        assert_eq!(parse_range("0x1000,"), RangeText::Skipped);
-        assert_eq!(parse_range("8,+4"), RangeText::Skipped);
-        for invalid in [
-            "0x1000-",
-            "0x1000",
-            ",4",
-            "1000h,4",
-            "0X8,4",
-            "0x1000 , 4",
-            "0x10_00,4",
-            " +8,4",
-            "q",
-        ] {
-            assert_eq!(parse_range(invalid), RangeText::Invalid, "{invalid}");
-        }
+    fn test_parse_ranges_matches_hexview() {
         assert_eq!(
-            parse_ranges("0x1000-0x1003q:0x1010,4:x:0x1020,4"),
+            parse_ranges("0x1000-0x1003q:0x1010,4:0x1018,:x:0x1020,4"),
             [0x1000, 0x1010].map(|start| AddressRange::from_start_length(start, 4).unwrap())
         );
     }

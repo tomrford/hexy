@@ -1,3 +1,31 @@
-from ._native import AddressRange, HexFile, Pipeline, PipelineResult, Segment
+from ._native import (
+    AddressRange,
+    DataProcessing,
+    HexFile,
+    HexyError,
+    OperationError,
+    ParseError,
+    Pipeline,
+    PipelineResult,
+    ProcessingError,
+    RangeError,
+    Segment,
+    ValidationStructure,
+    VerificationError,
+)
 
-__all__ = ["AddressRange", "HexFile", "Pipeline", "PipelineResult", "Segment"]
+__all__ = [
+    "AddressRange",
+    "DataProcessing",
+    "HexFile",
+    "HexyError",
+    "OperationError",
+    "ParseError",
+    "Pipeline",
+    "PipelineResult",
+    "ProcessingError",
+    "RangeError",
+    "Segment",
+    "ValidationStructure",
+    "VerificationError",
+]

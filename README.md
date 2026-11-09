@@ -90,7 +90,11 @@ use hexy_core::{AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage,
 
 // /AD:0x10 /AL /CS9
 let pipeline = Pipeline {
-    align: Some(AlignOptions { alignment: 0x10, fill_byte: 0xFF, align_length: true }),
+    align: Some(AlignOptions {
+        address_alignment: 0x10,
+        length_alignment: 0x10,
+        fill_byte: 0xFF,
+    }),
     checksums: vec![ChecksumStage {
         options: ChecksumOptions { algorithm: ChecksumAlgorithm::Crc32, ..Default::default() },
         placement: None,
@@ -111,37 +115,34 @@ The repo is structured so additional frontends can consume `hexy-core` without f
 
 ## Python bindings
 
-The Python package exposes `HexFile`, `Segment`, `AddressRange`, deterministic parsers/writers for binary, Intel HEX, S-Record, and HEX ASCII data, file helpers for auto-detected input and explicit-format output, the main memory operations used by the compat CLI, checksums through `Pipeline`, and data processing: signing and verification, MACs, XOR, AES and RSA encryption. Some export formats are core-only today — see [known divergences](docs/known-divergences.md).
+The Python package mirrors `hexy-core`: `HexFile` with the parsers, writers and every
+operation, `DataProcessing` values for the `/DP` operations, `ValidationStructure`, and
+`Pipeline`. A CLI run is reproduced by configuring the `Pipeline` stages of its flags;
+`tests/test_cli_equivalence.py` in `crates/hexy-py` checks that both give the same bytes.
 
 ```python
 import hexy
+from hexy import DataProcessing
 
-hf = hexy.HexFile.from_file("input.hex")
-hf.fill(["0x1000-0x10ff"], pattern=b"\xff")
-hf.cut(["0x1080-0x108f"])
-hf.write_srec("output.s19")
-```
-
-Use `Pipeline` for reusable recipes. It wraps `hexy_core::Pipeline`, so it applies stages in the same order as the CLI, not in the order methods are called. `apply` leaves the source unchanged and returns the processed `hexfile` with the `checksums` in stage order and the `data_processing` output, such as a signature or MAC. For custom operation ordering, call methods directly on `HexFile`.
-
-```python
-import hexy
-
-source = hexy.HexFile.from_file("app.hex")
+source = hexy.HexFile.from_file("app.hex").normalized()  # HexView joins data on load
 calibration = hexy.HexFile.from_file("calibration.hex")
 
+# /MO:calibration.hex /FR:0x1000,0x100 /FP:FF /AR:0x0-0x1FFF /AD:0x10 /AL /CS9:@append
+# /DP33:@append:key.txt
 pipeline = hexy.Pipeline()
 pipeline.merge(calibration, mode="overwrite")
-pipeline.fill(["0x1000-0x10ff"], pattern=b"\xff")
-pipeline.filter(["0x0000-0x1fff"])
-pipeline.align(16, fill=0xff, length=True)
-pipeline.checksum(9, placement="append")  # CRC-32, like /CS9:@append
-# RSA PKCS #1 v1.5 over address, length and data, like /DP33:@append:key.txt
-pipeline.sign("rsa-pkcs1v15-sha256", open("key.txt").read(), metadata=True, placement="append")
+pipeline.fill(["0x1000,0x100"], pattern=b"\xff")
+pipeline.filter(["0x0-0x1FFF"])
+pipeline.align(0x10, length=0x10)
+pipeline.checksum(9, placement="append")
+key = open("key.txt").read()
+pipeline.process_data(
+    DataProcessing.sign("rsa-pkcs1v15-sha256", key, metadata=True), placement="append"
+)
 
 result = pipeline.apply(source)
 result.hexfile.write_intel_hex("patched.hex")
 print(result.checksums[0].hex(), result.data_processing.hex())
 ```
 
-Sparse files stay sparse for inspection and operations. Dense exports such as `to_bytes()` and `to_binary(fill_gaps=...)` allocate across the covered address span. In `hexy-compat`, `/FA` and `/XP` reject dense spans above 256 MiB.
+See [hexy-py](crates/hexy-py/README.md) for the conventions of the Python API.

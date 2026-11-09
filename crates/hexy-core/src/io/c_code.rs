@@ -1,5 +1,7 @@
 use std::fmt::Write;
 
+use chrono::{DateTime, FixedOffset};
+
 use crate::HexFile;
 
 /// Element width of the C arrays.
@@ -59,10 +61,9 @@ pub struct CCodeWriteOptions {
     pub decrypt_value: Option<u32>,
     /// The `.c` file name in its header comment; the `.h` name replaces its extension.
     pub file_name: String,
-    /// `File created:` text, such as `Sat Nov  7 21:34:44 2026`.
-    pub created: String,
-    /// `<PREFIX>_GEN_RAND`, the number that ties the two files together.
-    pub generation: u32,
+    /// When the files were created, written in its local time. `<PREFIX>_GEN_RAND`, the
+    /// number that ties the two files together, is drawn from it as HexView draws it.
+    pub created: DateTime<FixedOffset>,
 }
 
 /// The `.c` and `.h` files of a C-array export.
@@ -94,12 +95,12 @@ pub fn write_c_code(hexfile: &HexFile, options: &CCodeWriteOptions) -> CCodeOutp
     let mut c = banner(
         &options.file_name,
         "C-Array of Flash-Driver",
-        &options.created,
+        options.created,
     );
     let _ = write!(
         c,
         "#include <fbl_inc.h>\r\n#include <{include}>\r\n\r\n#if ({upper}_GEN_RAND!={})\r\n# error \"Generated header and C-File inconsistent!!\"\r\n#endif\r\n\r\n",
-        options.generation
+        generation(options.created)
     );
     for (index, values) in values.iter().enumerate() {
         let _ = write!(
@@ -132,12 +133,12 @@ pub fn write_c_code(hexfile: &HexFile, options: &CCodeWriteOptions) -> CCodeOutp
     let mut h = banner(
         &h_file_name,
         "Exported definition of C-Array Flash-Driver",
-        &options.created,
+        options.created,
     );
     let _ = write!(
         h,
         "#ifndef __{upper}__\r\n#define __{upper}__\r\n#define {upper}_GEN_RAND {}\r\n\r\n#define {upper}_NUMBLOCKS {}\r\n\r\n",
-        options.generation,
+        generation(options.created),
         blocks.len()
     );
     match options.decrypt_value {
@@ -208,11 +209,22 @@ fn words(data: &[u8], options: &CCodeWriteOptions) -> Vec<u32> {
         .collect()
 }
 
-fn banner(file_name: &str, project: &str, created: &str) -> String {
+/// The comment HexView starts its C files with.
+pub(super) fn banner(file_name: &str, project: &str, created: DateTime<FixedOffset>) -> String {
     let rule = "*".repeat(64);
+    let created = created.format("%a %b %e %H:%M:%S %Y");
     format!(
         "/{rule}\r\n*\r\n*  Filename:      {file_name}\r\n*  Project:       {project}\r\n*  File created:  {created}\r\n\r\n*\r\n{rule}/\r\n\r\n"
     )
+}
+
+/// The first C runtime `rand()` after seeding it with the creation time.
+fn generation(created: DateTime<FixedOffset>) -> u32 {
+    ((created.timestamp() as u32)
+        .wrapping_mul(214_013)
+        .wrapping_add(2_531_011)
+        >> 16)
+        & 0x7FFF
 }
 
 #[cfg(test)]
@@ -227,8 +239,7 @@ mod tests {
             word_type: CCodeWordType::Intel,
             decrypt_value,
             file_name: "out.c".to_owned(),
-            created: "Sat Nov  7 21:36:07 2026".to_owned(),
-            generation: 921,
+            created: DateTime::parse_from_rfc3339("2026-11-07T21:36:07+01:00").unwrap(),
         }
     }
 

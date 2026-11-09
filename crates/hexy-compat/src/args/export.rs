@@ -84,7 +84,6 @@ fn write_c_code_output(
         path.to_path_buf()
     };
     let (c_path, h_path) = (path.with_extension("c"), path.with_extension("h"));
-    let now = chrono::Local::now();
     let options = crate::CCodeWriteOptions {
         prefix: ini.get("prefix").cloned().unwrap_or_default(),
         word_size,
@@ -95,13 +94,7 @@ fn write_c_code_output(
         },
         decrypt_value: (number("decryption", 1) != 0).then(|| number("decryptvalue", 0)),
         file_name: c_path.to_string_lossy().into_owned(),
-        created: now.format("%a %b %e %H:%M:%S %Y").to_string(),
-        // The first C runtime rand() after seeding it with the time, as HexView draws it.
-        generation: ((now.timestamp() as u32)
-            .wrapping_mul(214_013)
-            .wrapping_add(2_531_011)
-            >> 16)
-            & 0x7FFF,
+        created: chrono::Local::now().fixed_offset(),
     };
     let output = crate::write_c_code(hexfile, &options);
     std::fs::write(c_path, output.c)?;
