@@ -130,11 +130,13 @@ impl Validation {
 /// `GROUP_ID` and `MODE` (default 0),
 /// `HASH_METHOD` (default 20, SHA-256), and `SIGNATURE_METHOD` with `SIGNATURE_PARAM`
 /// for a `/DP` signature over the structure. Relative key paths resolve against `dir`.
+/// A signature that cannot be prepared leaves the structure unsigned, as HexView inserts
+/// it, and is returned as the stage's error.
 pub(super) fn hsm_validation_stage(
     args: &Args,
     placement: Option<Placement>,
     dir: &Path,
-) -> Result<HsmValidationStage, String> {
+) -> Result<(HsmValidationStage, Option<String>), String> {
     let ini = load_export_ini(args, "HSMBOOT").map_err(|e| e.to_string())?;
     let text = |key: &str| ini.get(key).map_or("", String::as_str).trim();
     let hash = match text("hash_method") {
@@ -146,11 +148,16 @@ pub(super) fn hsm_validation_stage(
             algorithm => algorithm,
         },
     };
-    let signature = match hsm_signature_params(args)? {
-        Some(params) => data_processing_stage(&params, dir)?.map(|stage| stage.operation),
-        None => None,
+    let signature = hsm_signature_params(args).and_then(|params| {
+        params
+            .map(|params| data_processing_stage(&params, dir))
+            .transpose()
+    });
+    let (signature, error) = match signature {
+        Ok(stage) => (stage.flatten().map(|stage| stage.operation), None),
+        Err(error) => (None, Some(error)),
     };
-    Ok(HsmValidationStage {
+    let stage = HsmValidationStage {
         options: HsmValidationOptions {
             group_id: parse_lenient_number(text("group_id")),
             mode: parse_lenient_number(text("mode")) as u16,
@@ -158,7 +165,8 @@ pub(super) fn hsm_validation_stage(
         },
         placement,
         signature,
-    })
+    };
+    Ok((stage, error))
 }
 
 /// The `/DP` parameters of the `[HSMBOOT]` signature, which also name its output file.

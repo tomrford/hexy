@@ -81,8 +81,9 @@ pub struct ValidationStage {
 }
 
 /// The vHSM validation structure (`/vshsm`), built after the other stages. An optional
-/// signature over it goes just before it, in the same block. As in HexView, neither is inserted where
-/// they would overlap data.
+/// signature over it goes just before it, in the same block. As in HexView, neither is
+/// inserted where they would overlap data, and a signature that fails leaves the
+/// structure unsigned: the stage inserts it and then returns the error.
 #[derive(Debug, Clone)]
 pub struct HsmValidationStage {
     pub options: HsmValidationOptions,
@@ -379,37 +380,45 @@ impl Pipeline {
                     };
                     let start = range.map_or(0, |range| range.start());
                     let mut block = Segment::new(start, structure).map_err(OpsError::from)?;
-                    let signature = match &stage.signature {
-                        // A cipher or XOR changes the structure itself.
+                    // The structure is signed at the placement address. A cipher or XOR
+                    // changes the structure itself.
+                    let (signature, error) = match &stage.signature {
                         Some(operation) => {
                             let mut processed = HexFile::with_segments(vec![block.clone()]);
-                            let signature = processed.process_data(operation, None)?;
-                            if let Some(data) = processed.into_segments().pop() {
-                                block = data;
+                            match processed.process_data(operation, None) {
+                                Ok(signature) => {
+                                    if let Some(data) = processed.into_segments().pop() {
+                                        block = data;
+                                    }
+                                    (signature, None)
+                                }
+                                Err(error) => (None, Some(error)),
                             }
-                            signature
                         }
-                        None => None,
+                        None => (None, None),
                     };
                     output.hsm_validation = Some(block.data().to_vec());
                     output.hsm_signature.clone_from(&signature);
-                    let Some(range) = range else {
-                        return Ok(());
-                    };
-                    let block = match &signature {
-                        // The signature and the structure form one block.
-                        Some(signature) => {
-                            let start = range.start().checked_sub(signature.len() as u32).ok_or(
-                                OpsError::AddressOverflow {
-                                    address: range.start(),
-                                },
-                            )?;
-                            let data = [signature.as_slice(), block.data()].concat();
-                            Segment::new(start, data).map_err(OpsError::from)?
-                        }
-                        None => block,
-                    };
-                    insert_free(hexfile, vec![block]);
+                    if let Some(range) = range {
+                        let block = match &signature {
+                            // The signature and the structure form one block: the
+                            // signature ends at the placement address, or without room
+                            // below it starts there and the structure follows.
+                            Some(signature) => {
+                                let start = u32::try_from(signature.len())
+                                    .ok()
+                                    .and_then(|len| range.start().checked_sub(len))
+                                    .unwrap_or(range.start());
+                                let data = [signature.as_slice(), block.data()].concat();
+                                Segment::new(start, data).map_err(OpsError::from)?
+                            }
+                            None => block,
+                        };
+                        insert_free(hexfile, vec![block]);
+                    }
+                    if let Some(error) = error {
+                        return Err(error.into());
+                    }
                 }
             }
             Stage::Validation => {

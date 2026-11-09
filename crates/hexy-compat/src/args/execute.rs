@@ -75,10 +75,11 @@ impl Args {
                 };
                 prepared
                     .and_then(|()| self.prepare_stage(stage, &mut pipeline, &dir))
-                    .and_then(|()| {
+                    .and_then(|deferred| {
                         pipeline
                             .run_stage(stage, &mut hexfile, &mut output)
-                            .map_err(|e| e.to_string())
+                            .map_err(|e| e.to_string())?;
+                        deferred.map_or(Ok(()), Err)
                     })
             };
             let result = result.and_then(|()| match (stage, &validation, &output.validation) {
@@ -135,18 +136,20 @@ impl Args {
 
     /// `/DP` and `/SV` parameters are read when their stage runs, so that a method
     /// HexView does not know fails only its stage and `/SV` can read `/DP`'s output.
+    /// `Ok(Some(error))` runs the stage and then fails it.
     fn prepare_stage(
         &self,
         stage: Stage,
         pipeline: &mut Pipeline,
         dir: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         match stage {
             Stage::HsmValidation => {
-                pipeline.hsm_validation = self
-                    .hsm_validation
-                    .map(|placement| hsm_validation_stage(self, placement, dir))
-                    .transpose()?;
+                if let Some(placement) = self.hsm_validation {
+                    let (stage, error) = hsm_validation_stage(self, placement, dir)?;
+                    pipeline.hsm_validation = Some(stage);
+                    return Ok(error);
+                }
             }
             Stage::DataProcessing => {
                 pipeline.data_processing = self
@@ -165,7 +168,7 @@ impl Args {
             }
             _ => {}
         }
-        Ok(())
+        Ok(None)
     }
 
     /// The core pipeline for these flags; each field is set only from its own flags.

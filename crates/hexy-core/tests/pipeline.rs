@@ -3,7 +3,9 @@
 use hexy_core::{
     AddressRange, AesGcm, AesKey, AesMode, AesPadding, AlignOptions, ChecksumAlgorithm,
     ChecksumOptions, ChecksumStage, DataProcessing, DataProcessingStage, Fill, FillData, GcmTag,
-    HexFile, Merge, MergeMode, MergeOptions, Pipeline, Placement, Segment, SwapMode,
+    HexFile, HsmValidationOptions, HsmValidationStage, MacAlgorithm, MacKey, MacMethod, Merge,
+    MergeMode, MergeOptions, Pipeline, Placement, Segment, SignatureMethod, SignatureScheme,
+    SwapMode,
 };
 
 /// Bytes `(seed + 7 * i) & 0xFF`, the harness fixture pattern.
@@ -70,6 +72,85 @@ fn test_pipeline_matches_hexview_multistage_checksum() {
     let output = pipeline.run(&mut image).unwrap();
 
     assert_eq!(output.checksums, vec![vec![0x4E, 0x5E, 0x64, 0x5E]]);
+}
+
+/// HexView 1.15.2's `/vshsm` structure over bytes 0 to 15 at address 0.
+const HSM_STRUCTURE: &str = "00000000000100000000000000100000be45cb2605bf36bebde684841a28f0fd43c69850a3dce5fedba69928ee3a8991";
+
+fn hsm_pipeline(placement: Placement, signature: DataProcessing) -> (Pipeline, HexFile) {
+    let pipeline = Pipeline {
+        hsm_validation: Some(HsmValidationStage {
+            options: HsmValidationOptions {
+                group_id: 0,
+                mode: 0,
+                hash: ChecksumAlgorithm::Sha256,
+            },
+            placement: Some(placement),
+            signature: Some(signature),
+        }),
+        ..Default::default()
+    };
+    let image = HexFile::with_segments(vec![Segment::new(0, (0..16).collect()).unwrap()]);
+    (pipeline, image)
+}
+
+fn hex(text: &str) -> Vec<u8> {
+    hexy_core::decode_hex_text(text.as_bytes()).unwrap()
+}
+
+/// HexView 1.15.2 `/vshsm:@append` with `SIGNATURE_METHOD=31` on a 16-byte image at 0:
+/// the MAC covers the structure at the placement address, but with no room below that
+/// address the MAC goes there and the structure follows it.
+#[test]
+fn test_hsm_signature_without_room_below_precedes_structure() {
+    let mac = DataProcessing::Mac {
+        method: MacMethod {
+            algorithm: MacAlgorithm::HmacSha256,
+            with_metadata: true,
+        },
+        key: MacKey::from_key_file(b"00112233445566778899AABBCCDDEEFF").unwrap(),
+    };
+    let (pipeline, mut image) = hsm_pipeline(Placement::Append, mac);
+
+    pipeline.run(&mut image).unwrap();
+
+    let signature = hex("a3b91176e3ad194b25232031fa216294bf175af211b068d14164afff5d35bd02");
+    assert_eq!(image.read_bytes_contiguous(0x10, 32), Some(signature));
+    assert_eq!(
+        image.read_bytes_contiguous(0x30, 48),
+        Some(hex(HSM_STRUCTURE))
+    );
+}
+
+/// HexView 1.15.2 `/vshsm:@0x8000` with an RSA-PSS key too short to sign: the
+/// structure is inserted unsigned and the stage fails.
+#[test]
+fn test_failed_hsm_signature_inserts_unsigned_structure() {
+    let path = format!(
+        "{}/tests/fixtures/keys/rsa_512_test.pem",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let method = SignatureMethod {
+        scheme: SignatureScheme::RsaPssSha256,
+        with_metadata: false,
+    };
+    let sign = DataProcessing::Sign {
+        method,
+        key: method
+            .scheme
+            .signing_key(&std::fs::read(path).unwrap())
+            .unwrap(),
+        salt: None,
+    };
+    let (pipeline, mut image) = hsm_pipeline(Placement::Address(0x8000), sign);
+
+    assert!(pipeline.run(&mut image).is_err());
+
+    assert_eq!(
+        image.read_bytes_contiguous(0x8000, 48),
+        Some(hex(HSM_STRUCTURE))
+    );
+    assert_eq!(image.total_bytes(), 16 + 48);
 }
 
 #[test]
