@@ -216,9 +216,11 @@ class ValidationStructure:
         tag_end_value: int | None = None,
         created: datetime | None = None,
     ) -> tuple[bytes, bytes]:
-        """The `.c` and `.h` files HexView writes for the structure. The tag values
-        are written in the `.c` file, the tag bytes read big-endian by default;
-        `created` is an aware datetime, the current local time by default."""
+        """The `.c` and `.h` files of the structure in HexView's layout, written as
+        valid C where HexView's `.c` file does not compile. Tags of 1, 2 or 4 bytes
+        are one number and other tags a byte array of their length; each is the tag
+        bytes read big-endian, or `tag_begin_value` and `tag_end_value`. `created`
+        is an aware datetime, the current local time by default."""
 
 class HexFile:
     """A memory image: segments in insertion order, later segments winning where they
@@ -277,7 +279,9 @@ class HexFile:
     ) -> bytes: ...
     def to_srec(
         self, *, bytes_per_line: int = 32, record_type: SRecordType = "auto"
-    ) -> bytes: ...
+    ) -> bytes:
+        """Motorola S-Record (`/XS`); a `bytes_per_line` of 0 writes only the
+        termination record."""
     def to_hex_ascii(self, *, line_length: int = 16, separator: str = "") -> bytes:
         """HEX ASCII (`/XA`); a `line_length` of 0 writes one line."""
     def to_c_code(
@@ -343,7 +347,9 @@ class HexFile:
         *,
         bytes_per_line: int = 32,
         record_type: SRecordType = "auto",
-    ) -> None: ...
+    ) -> None:
+        """Write Motorola S-Record to `path`; a `bytes_per_line` of 0 writes only the
+        termination record."""
     def write_hex_ascii(
         self, path: Pathish, *, line_length: int = 16, separator: str = ""
     ) -> None: ...
@@ -571,5 +577,7 @@ class Pipeline:
         signature: DataProcessing | None = None,
     ) -> None:
         """Build the `/vshsm` structure after `/vs`, with an optional `signature`
-        over it; with `placement`, insert the signature and structure there as one
-        block unless it would overlap data."""
+        over it at the placement address; with `placement`, insert the signature and
+        structure as one block unless it would overlap data, the signature ending at
+        that address or, without room below it, starting there. A signature that
+        fails leaves the structure inserted unsigned, and `apply` raises."""
