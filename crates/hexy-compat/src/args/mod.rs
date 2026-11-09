@@ -2,7 +2,7 @@
 //!
 //! Parser boundary: this module parses HexView-style argv into `Args`; execution
 //! builds a `hexy_core::Pipeline` from `Args` and runs its stages in order. The core
-//! pipeline owns the stage order (steps 2-16 below, except /L); compat loads inputs,
+//! pipeline owns the stage order (steps 2-17 below, except /L); compat loads inputs,
 //! runs /L after the /AR stage, reads /DP and /SV parameters when their stages run,
 //! writes checksum and data processing files after their stages, and exports.
 //! `hexy-core` does not depend on slash syntax.
@@ -24,7 +24,8 @@
 //! 14. Checksum (/CS, /CSM)
 //! 15. Data processing (/DP)
 //! 16. Signature verification (/SV)
-//! 17. Export (/Xx)
+//! 17. Validation structure (/vs)
+//! 18. Export (/Xx)
 //!
 //! Warnings and errors go to the /E file and, without /S, to stderr.
 
@@ -39,6 +40,7 @@ mod parse_util;
 mod processing;
 mod report;
 mod types;
+mod validation;
 
 use std::process::ExitCode;
 

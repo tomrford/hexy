@@ -18,6 +18,7 @@ use super::processing::{
 };
 use super::report::Report;
 use super::types::{Args, ChecksumParams, ChecksumTarget, ImportKind};
+use super::validation::{Validation, hsm_signature_params, hsm_validation_stage};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Args {
@@ -55,6 +56,7 @@ impl Args {
         // HexView joins adjacent data into one block when it loads a file.
         hexfile.normalize();
         let mut pipeline = self.pipeline(report);
+        let mut validation: Option<Validation> = None;
         let mut output = PipelineOutput::default();
         let dir = self.processing_dir();
         let mut stage_error = None;
@@ -64,13 +66,31 @@ impl Args {
                 self.merge_stage(index, &mut pipeline, &mut hexfile, &mut output, provider)?;
                 Ok(())
             } else {
-                self.prepare_stage(stage, &mut pipeline, &dir, provider)
+                let prepared = if stage == Stage::Validation && self.validation {
+                    Validation::from_ini(self, provider, report)
+                        .map(|prepared| {
+                            pipeline.validation =
+                                prepared.as_ref().map(|validation| validation.stage.clone());
+                            validation = prepared;
+                        })
+                        .map_err(|error| error.to_string())
+                } else {
+                    Ok(())
+                };
+                prepared
+                    .and_then(|()| self.prepare_stage(stage, &mut pipeline, &dir, provider))
                     .and_then(|()| {
                         pipeline
                             .run_stage(stage, &mut hexfile, &mut output)
                             .map_err(|e| e.to_string())
                     })
             };
+            let result = result.and_then(|()| match (stage, &validation, &output.validation) {
+                (Stage::Validation, Some(validation), Some(structure)) => {
+                    validation.finish(structure).map_err(|e| e.to_string())
+                }
+                _ => Ok(()),
+            });
             match result {
                 Ok(()) => {
                     if let Err(error) =
@@ -88,13 +108,17 @@ impl Args {
                     let error = CliError::Other(format!("{}: {e}", self.stage_flag(stage)));
                     if !matches!(
                         stage,
-                        Stage::Checksum(_) | Stage::DataProcessing | Stage::Verify
+                        Stage::Checksum(_)
+                            | Stage::DataProcessing
+                            | Stage::Verify
+                            | Stage::HsmValidation
+                            | Stage::Validation
                     ) {
                         return Err(error);
                     }
-                    // HexView reports a failed checksum, data processing or verification
-                    // but runs the remaining stages and exports; the placeholder keeps
-                    // later checksum results at their stage index.
+                    // HexView reports a failed stage but runs the remaining stages
+                    // and exports; the placeholder keeps later checksum results at
+                    // their stage index.
                     stage_error.get_or_insert(error);
                     if let Stage::Checksum(_) = stage {
                         output.checksums.push(Vec::new());
@@ -125,6 +149,12 @@ impl Args {
         provider: &P,
     ) -> Result<(), String> {
         match stage {
+            Stage::HsmValidation => {
+                pipeline.hsm_validation = self
+                    .hsm_validation
+                    .map(|placement| hsm_validation_stage(self, placement, dir, provider))
+                    .transpose()?;
+            }
             Stage::DataProcessing => {
                 pipeline.data_processing = self
                     .data_processing
@@ -210,6 +240,8 @@ impl Args {
             checksums,
             data_processing: None,
             verify: None,
+            hsm_validation: None,
+            validation: None,
         }
     }
 
@@ -299,6 +331,16 @@ impl Args {
                         .map_err(|e| CliError::Other(format!("{flag}: {e}")))?;
                 }
             }
+            Stage::HsmValidation => {
+                if let Some(signature) = &output.hsm_signature
+                    && let Some(params) = hsm_signature_params(self, provider)
+                        .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?
+                    && let Some((path, crlf)) = data_processing_output(&params, dir)
+                {
+                    write_data_processing_text(&path, signature, crlf)
+                        .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?;
+                }
+            }
             Stage::DataProcessing => {
                 if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing)
                     && let Some((path, crlf)) = data_processing_output(dp, dir)
@@ -343,6 +385,8 @@ impl Args {
                 let method = self.signature_verify.as_ref().map_or(0, |sv| sv.method);
                 return format!("/SV{method}");
             }
+            Stage::HsmValidation => "/vshsm",
+            Stage::Validation => "/vs",
         };
         flag.to_owned()
     }

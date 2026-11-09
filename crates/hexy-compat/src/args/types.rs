@@ -85,6 +85,11 @@ pub struct Args {
     pub dspic_shrink: Vec<DspicOp>,
     pub dspic_clear_ghost: Vec<AddressRange>,
 
+    // Validation structures: /vs and /vshsm:@placement; a placement HexView does not
+    // know inserts nothing
+    pub validation: bool,
+    pub hsm_validation: Option<Option<Placement>>,
+
     // Output format; the last /Xx flag wins
     pub output_format: Option<OutputFormat>,
 

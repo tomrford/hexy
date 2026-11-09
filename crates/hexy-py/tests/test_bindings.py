@@ -446,3 +446,21 @@ def test_exports_match_hexview():
     kernel = hf.to_flash_kernel("k.fkl", ram_start="0x38EB")
     assert kernel.startswith(b'\r\n[FLASH_KERNEL_CONFIG]\r\n\r\nFLASH_KERNEL_NAME="k.fkl"\r\n')
     assert b"FLASH_KERNEL_SIZE=0x13\r\nFLASH_KERNEL_RAM_ADDR=0x1000\r\nFLASH_KERNEL_RAM_START=0x38EB\r\n" in kernel
+
+
+def test_validation_structures_match_hexview():
+    """HexView 1.15.2 `/vs` with the manual's `[VALIDATION]` example and `/vshsm` with
+    `HASH_METHOD=9`."""
+    hf = hexy.HexFile.from_segments(
+        [
+            hexy.Segment(0x1000, bytes((1 + 7 * i) & 0xFF for i in range(0x13))),
+            hexy.Segment(0x2000, bytes((2 + 7 * i) & 0xFF for i in range(0x20))),
+        ]
+    )
+    structure = hf.validation_structure(
+        tag_begin=b"\x12\x34", tag_end=b"\x43\x21", block_checksum=0, file_checksum=9, validate_sum=True
+    )
+    assert structure == bytes.fromhex("1234 02 0010 1300 04C0 0020 2000 0DD0 BA9FF711 4321 1105")
+    assert hf.hsm_validation_structure(group_id=0x1234, mode=1, hash=9) == bytes.fromhex(
+        "00001234 0002 00001000 00000013 0001 103080A3 00002000 00000020 0001 AA35EDB3"
+    )

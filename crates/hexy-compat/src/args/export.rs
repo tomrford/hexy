@@ -313,7 +313,7 @@ fn ini_path(args: &Args) -> Option<PathBuf> {
 }
 
 /// `section` of the export INI file; empty without one.
-fn load_export_ini(
+pub(super) fn load_export_ini(
     args: &Args,
     provider: &impl ReadProvider,
     section: &str,

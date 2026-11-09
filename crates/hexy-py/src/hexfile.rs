@@ -1,9 +1,10 @@
 use hexy_core::{
     AlignOptions, BinaryWriteOptions, CCodeWordSize, CCodeWordType, CCodeWriteOptions,
-    DataProcessing, FillOptions, FlashKernelHeader, HexAsciiWriteOptions, HexFile,
-    IntelHexWriteOptions, MergeOptions, RemapOptions, SRecordWriteOptions, parse_binary,
-    parse_hex_ascii, parse_intel_hex, parse_intel_hex_16bit, parse_srec, write_binary,
-    write_c_code, write_flash_kernel, write_gac_swil, write_hex_ascii, write_intel_hex, write_srec,
+    ChecksumAlgorithm, DataProcessing, FillOptions, FlashKernelHeader, HexAsciiWriteOptions,
+    HexFile, HsmValidationOptions, IntelHexWriteOptions, MergeOptions, RemapOptions,
+    SRecordWriteOptions, ValidationOptions, parse_binary, parse_hex_ascii, parse_intel_hex,
+    parse_intel_hex_16bit, parse_srec, write_binary, write_c_code, write_flash_kernel,
+    write_gac_swil, write_hex_ascii, write_intel_hex, write_srec,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -303,6 +304,65 @@ impl PyHexFile {
         };
         let data = write_flash_kernel(&self.inner, &header).map_err(value_error)?;
         Ok(py_bytes(py, &data))
+    }
+
+    #[pyo3(signature = (*, tag_begin, tag_end, block_checksum=None, file_checksum=None, validate_sum=false, big_endian=false, force_32bit=false, alfi=false, one_byte_count=false, spare=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn validation_structure(
+        &self,
+        py: Python<'_>,
+        tag_begin: Vec<u8>,
+        tag_end: Vec<u8>,
+        block_checksum: Option<u8>,
+        file_checksum: Option<u8>,
+        validate_sum: bool,
+        big_endian: bool,
+        force_32bit: bool,
+        alfi: bool,
+        one_byte_count: bool,
+        spare: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyBytes>> {
+        let algorithm = |method: Option<u8>| {
+            method
+                .map(ChecksumAlgorithm::try_from)
+                .transpose()
+                .map_err(value_error)
+        };
+        let structure = self
+            .inner
+            .validation_structure(&ValidationOptions {
+                tag_begin,
+                tag_end,
+                block_checksum: algorithm(block_checksum)?,
+                file_checksum: algorithm(file_checksum)?,
+                validate_sum,
+                big_endian,
+                force_32bit,
+                alfi,
+                one_byte_count,
+                spare: spare.map(parse_ranges_arg).transpose()?.unwrap_or_default(),
+            })
+            .map_err(value_error)?;
+        Ok(py_bytes(py, &structure.bytes))
+    }
+
+    #[pyo3(signature = (*, group_id=0, mode=0, hash=20))]
+    fn hsm_validation_structure(
+        &self,
+        py: Python<'_>,
+        group_id: u32,
+        mode: u16,
+        hash: u8,
+    ) -> PyResult<Py<PyBytes>> {
+        let structure = self
+            .inner
+            .hsm_validation_structure(&HsmValidationOptions {
+                group_id,
+                mode,
+                hash: ChecksumAlgorithm::try_from(hash).map_err(value_error)?,
+            })
+            .map_err(value_error)?;
+        Ok(py_bytes(py, &structure))
     }
 
     fn to_gac_swil(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {

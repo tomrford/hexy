@@ -200,7 +200,6 @@ fn test_parse_unsupported_and_unknown_options() {
         "XGC_APP_SIGN",
         "PB:x.xml",
         "expdat:x.dll",
-        "vs",
     ] {
         assert!(parse_option(&mut args, option).is_err(), "{option}");
     }

@@ -1,6 +1,6 @@
 ---
 name: hexy-compat
-description: "Guide for hexy, a cleanroom slash-compatible CLI for non-proprietary firmware workflows. Use when working with hexy slash-style pipelines for Intel HEX, S-Record, HEX ASCII, or binary files — range edits, merges, checksums, supported data processing (signing, MACs, XOR, AES, RSA encryption, compression) and verification, remaps, and export, including C arrays and CCP/XCP flash kernels."
+description: "Guide for hexy, a cleanroom slash-compatible CLI for non-proprietary firmware workflows. Use when working with hexy slash-style pipelines for Intel HEX, S-Record, HEX ASCII, or binary files — range edits, merges, checksums, supported data processing (signing, MACs, XOR, AES, RSA encryption, compression) and verification, remaps, and validation structures (`/vs`, `/vshsm`), and export, including C arrays and CCP/XCP flash kernels."
 ---
 
 # hexy-compat
