@@ -81,9 +81,10 @@ pub struct ValidationStage {
 }
 
 /// The vHSM validation structure (`/vshsm`), built after the other stages. An optional
-/// signature over it goes just before it, in the same block. As in HexView, neither is
-/// inserted where they would overlap data, and a signature that fails leaves the
-/// structure unsigned: the stage inserts it and then returns the error.
+/// signature over it goes in the same block, just before it, or at the placement
+/// address with the structure after it when there is no room below. As in HexView,
+/// neither is inserted where they would overlap data, and a signature that fails leaves
+/// the structure unsigned: the stage inserts it and then returns the error.
 #[derive(Debug, Clone)]
 pub struct HsmValidationStage {
     pub options: HsmValidationOptions,
