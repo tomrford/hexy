@@ -17,9 +17,9 @@ pub use io::{
     write_intel_hex, write_srec, write_validation_c,
 };
 pub use ops::{
-    AlignOptions, BankedMapOptions, ChecksumAlgorithm, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT,
-    FillOptions, ForcedRange, HsmValidationOptions, MapCollision, MergeMode, MergeOptions,
-    OpsError, RemapOptions, SwapMode, ValidationBlock, ValidationOptions, ValidationStructure,
+    AlignOptions, ChecksumAlgorithm, ChecksumOptions, DEFAULT_DENSE_SPAN_LIMIT, FillOptions,
+    ForcedRange, HsmValidationOptions, MergeMode, MergeOptions, OpsError, RemapOptions, SwapMode,
+    ValidationBlock, ValidationOptions, ValidationStructure,
 };
 pub use pipeline::{
     AddressMap, ChecksumStage, DataProcessingStage, DspicOp, Fill, FillData, HsmValidationStage,

@@ -8,7 +8,7 @@ mod validation;
 pub use checksum::{ChecksumAlgorithm, ChecksumOptions, ForcedRange};
 pub use error::OpsError;
 pub use filter::{DEFAULT_DENSE_SPAN_LIMIT, FillOptions, MergeMode, MergeOptions};
-pub use map::{BankedMapOptions, MapCollision, RemapOptions};
+pub use map::RemapOptions;
 pub use transform::{AlignOptions, SwapMode};
 pub use validation::{
     HsmValidationOptions, ValidationBlock, ValidationOptions, ValidationStructure,

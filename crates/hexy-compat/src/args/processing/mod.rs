@@ -16,7 +16,6 @@ use crate::{
 
 use super::error::CliError;
 use super::ini::load_ini;
-use super::io::ReadProvider;
 use super::report::Report;
 
 pub(super) use params::{
@@ -263,10 +262,9 @@ pub(super) fn validate_signature_verify(params: &SignatureVerifyParams) -> Resul
 pub(super) fn data_processing_stage(
     params: &DataProcessingParams,
     dir: &Path,
-    provider: &impl ReadProvider,
 ) -> Result<Option<DataProcessingStage>, String> {
     let method = dp_method(params.method).ok_or("unknown data processing method")?;
-    let key = || param_content(&params.source, dir, provider);
+    let key = || param_content(&params.source, dir);
     let error = |e: ProcessingError| e.to_string();
     let operation = match method {
         Method::None => return Ok(None),
@@ -298,7 +296,7 @@ pub(super) fn data_processing_stage(
                 nonce: nonce(params).ok_or("#IV is required")?.to_vec(),
                 aad: match &params.options.auth {
                     Some(DataInput::Hex(bytes)) => bytes.clone(),
-                    Some(DataInput::File(file)) => binary_file(&dir.join(file), provider),
+                    Some(DataInput::File(file)) => binary_file(&dir.join(file)),
                     Some(DataInput::Image(_)) | None => Vec::new(),
                 },
             };
@@ -451,9 +449,8 @@ fn padding(name: &str) -> Option<AesPadding> {
 
 /// A file's bytes when they are binary (hold a byte from 0x80); HexView ignores
 /// missing files and files of text as `#AUTH` data.
-fn binary_file(path: &Path, provider: &impl ReadProvider) -> Vec<u8> {
-    provider
-        .read_bytes(path)
+fn binary_file(path: &Path) -> Vec<u8> {
+    std::fs::read(path)
         .ok()
         .filter(|content| content.iter().any(|&b| b >= 0x80))
         .unwrap_or_default()
@@ -485,12 +482,11 @@ pub(super) fn data_processing_output(
 pub(super) fn verify_stage(
     params: &SignatureVerifyParams,
     dir: &Path,
-    provider: &impl ReadProvider,
 ) -> Result<VerifyStage, String> {
     let method = sv_method(params.method).ok_or("unknown signature verification method")?;
     let key = method
         .scheme
-        .verifying_key(&param_content(&params.key, dir, provider)?)
+        .verifying_key(&param_content(&params.key, dir)?)
         .map_err(|e| e.to_string())?;
     let signature = params
         .signature
@@ -499,49 +495,37 @@ pub(super) fn verify_stage(
     Ok(VerifyStage {
         method,
         key,
-        signature: signature_bytes(signature, dir, provider)?,
+        signature: signature_bytes(signature, dir)?,
     })
 }
 
 /// The content of param1: inline text, an INI value, or a file's bytes.
-fn param_content(
-    source: &ParamSource,
-    dir: &Path,
-    provider: &impl ReadProvider,
-) -> Result<Vec<u8>, String> {
+fn param_content(source: &ParamSource, dir: &Path) -> Result<Vec<u8>, String> {
     match source {
         ParamSource::Inline(text) => Ok(text.clone().into_bytes()),
         ParamSource::Ini { file, section, key } => {
             let path = dir.join(file);
-            let ini = load_ini(&path, provider, Some(section))
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let ini =
+                load_ini(&path, Some(section)).map_err(|e| format!("{}: {e}", path.display()))?;
             ini.get(&key.to_ascii_lowercase())
                 .map(|value| value.clone().into_bytes())
                 .ok_or_else(|| format!("{}: no {key} in [{section}]", path.display()))
         }
         ParamSource::File(file) => {
             let path = dir.join(file);
-            provider
-                .read_bytes(&path)
-                .map_err(|e| format!("{}: {e}", path.display()))
+            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
         }
     }
 }
 
 /// Signature bytes from inline hex text or a file of hex text, such as a `/DP` output
 /// file.
-fn signature_bytes(
-    signature: &str,
-    dir: &Path,
-    provider: &impl ReadProvider,
-) -> Result<Vec<u8>, String> {
+fn signature_bytes(signature: &str, dir: &Path) -> Result<Vec<u8>, String> {
     if let Some(bytes) = decode_hex_text(signature.as_bytes()) {
         return Ok(bytes);
     }
     let path = dir.join(signature);
-    let content = provider
-        .read_bytes(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let content = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     decode_hex_text(&content).ok_or_else(|| format!("{}: not hex text", path.display()))
 }
 

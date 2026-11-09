@@ -1,16 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::io::ReadProvider;
-
 /// Keys (lowercased) and values of an INI file; with `section`, only that section's,
 /// matched case-insensitively.
 pub(super) fn load_ini(
     path: &Path,
-    provider: &impl ReadProvider,
     section: Option<&str>,
 ) -> Result<HashMap<String, String>, std::io::Error> {
-    let content = provider.read_string(path)?;
+    let content = std::fs::read_to_string(path)?;
     let mut map = HashMap::new();
     let mut in_section = section.is_none();
 

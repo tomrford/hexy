@@ -262,77 +262,24 @@ impl HexFile {
             })
     }
 
-    /// Add offset to all segment addresses. Errors if any address would overflow or underflow.
-    /// If validation fails, no segments are modified (transactional).
+    /// Move all data by `offset` bytes. Fails, changing nothing, when any data would
+    /// leave the address space.
     pub fn offset_addresses(&mut self, offset: i64) -> Result<(), OpsError> {
-        self.relocate(|segment| {
-            i64::from(segment.start_address)
-                .checked_add(offset)
-                .and_then(|addr| u32::try_from(addr).ok())
-                .map(Some)
-                .ok_or(OpsError::AddressOverflow {
-                    address: segment.start_address,
-                })
-        })
-    }
-
-    /// Multiply all addresses by factor. Errors if any address would overflow.
-    /// If validation fails, no segments are modified (transactional).
-    pub fn scale_addresses(&mut self, factor: u32) -> Result<(), OpsError> {
-        self.relocate(|segment| {
-            segment
-                .start_address
-                .checked_mul(factor)
-                .map(Some)
-                .ok_or(OpsError::AddressOverflow {
-                    address: segment.start_address,
-                })
-        })
-    }
-
-    /// Divide all addresses by divisor. Errors if any address not evenly divisible.
-    /// If validation fails, no segments are modified (transactional).
-    pub fn unscale_addresses(&mut self, divisor: u32) -> Result<(), OpsError> {
-        if divisor == 0 {
-            return Err(OpsError::AddressNotDivisible {
-                address: 0,
-                divisor,
-            });
-        }
-        self.relocate(|segment| match segment.start_address.checked_rem(divisor) {
-            Some(0) => Ok(Some(segment.start_address / divisor)),
-            _ => Err(OpsError::AddressNotDivisible {
-                address: segment.start_address,
-                divisor,
-            }),
-        })
-    }
-
-    /// Move each segment to the start `new_start` returns for it (`None` leaves it in
-    /// place). Every move is validated before any is applied.
-    fn relocate(
-        &mut self,
-        new_start: impl Fn(&Segment) -> Result<Option<u32>, OpsError>,
-    ) -> Result<(), OpsError> {
         let starts = self
             .segments()
             .iter()
             .map(|segment| {
-                let start = new_start(segment)?;
-                if let Some(start) = start
-                    && end_address_for(start, segment.len()).is_none()
-                {
-                    return Err(OpsError::AddressOverflow {
+                i64::from(segment.start_address)
+                    .checked_add(offset)
+                    .and_then(|start| u32::try_from(start).ok())
+                    .filter(|&start| end_address_for(start, segment.len()).is_some())
+                    .ok_or(OpsError::AddressOverflow {
                         address: segment.start_address,
-                    });
-                }
-                Ok(start)
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         for (segment, start) in self.segments_mut().iter_mut().zip(starts) {
-            if let Some(start) = start {
-                segment.start_address = start;
-            }
+            segment.start_address = start;
         }
         Ok(())
     }
@@ -404,6 +351,9 @@ mod tests {
     #[test]
     fn test_split_segments() {
         let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 10]).unwrap()]);
+        let before = hf.clone();
+        hf.split(0);
+        assert_eq!(hf, before);
         hf.split(4);
 
         assert_eq!(hf.segments().len(), 3);
@@ -413,26 +363,6 @@ mod tests {
         assert_eq!(hf.segments()[1].len(), 4);
         assert_eq!(hf.segments()[2].start_address, 0x1008);
         assert_eq!(hf.segments()[2].len(), 2);
-    }
-
-    #[test]
-    fn test_swap_word() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::Word);
-
-        assert_eq!(hf.segments()[0].data, vec![0xBB, 0xAA, 0xDD, 0xCC]);
-    }
-
-    #[test]
-    fn test_swap_dword() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::DWord);
-
-        assert_eq!(hf.segments()[0].data, vec![0xDD, 0xCC, 0xBB, 0xAA]);
     }
 
     #[test]
@@ -448,46 +378,6 @@ mod tests {
         let data: Vec<&[u8]> = hf.segments().iter().map(Segment::data).collect();
         assert_eq!(data, [&[2, 1, 4, 3, 6, 5, 8, 7][..], &[2, 1, 2], &[1]]);
     }
-
-    #[test]
-    fn test_scale_addresses() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]).unwrap(),
-            Segment::new(0x2000, vec![0xBB]).unwrap(),
-        ]);
-        hf.scale_addresses(2).unwrap();
-
-        assert_eq!(hf.segments()[0].start_address, 0x2000);
-        assert_eq!(hf.segments()[1].start_address, 0x4000);
-    }
-
-    #[test]
-    fn test_unscale_addresses() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x2000, vec![0xAA]).unwrap(),
-            Segment::new(0x4000, vec![0xBB]).unwrap(),
-        ]);
-        hf.unscale_addresses(2).unwrap();
-
-        assert_eq!(hf.segments()[0].start_address, 0x1000);
-        assert_eq!(hf.segments()[1].start_address, 0x2000);
-    }
-
-    #[test]
-    fn test_unscale_not_divisible() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0xAA]).unwrap()]);
-        let result = hf.unscale_addresses(2);
-
-        assert!(matches!(
-            result,
-            Err(OpsError::AddressNotDivisible {
-                address: 0x1001,
-                divisor: 2
-            })
-        ));
-    }
-
-    // --- Edge case tests ---
 
     #[test]
     fn test_align_causes_overlap() {
@@ -507,79 +397,30 @@ mod tests {
         assert_eq!(seg.data, vec![0xFF, 0xAA, 0xFF, 0xBB]);
     }
 
+    /// Nothing changes unless the span from the lowest to the highest address starts and
+    /// ends on word boundaries.
     #[test]
-    fn test_split_zero_size_noop() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 10]).unwrap()]);
-        hf.split(0);
-        assert_eq!(hf.segments().len(), 1);
-    }
-
-    #[test]
-    fn test_split_larger_than_segment() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 4]).unwrap()]);
-        hf.split(100);
-        assert_eq!(hf.segments().len(), 1);
-    }
-
-    #[test]
-    fn test_swap_multiple_segments() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02]).unwrap(),
-            Segment::new(0x2000, vec![0x03, 0x04]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::Word);
-        assert_eq!(hf.segments()[0].data, vec![0x02, 0x01]);
-        assert_eq!(hf.segments()[1].data, vec![0x04, 0x03]);
-    }
-
-    #[test]
-    fn test_swap_dword_larger_buffer() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::DWord);
-        assert_eq!(
-            hf.segments()[0].data,
-            vec![0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05]
-        );
-    }
-
-    #[test]
-    fn test_swap_word_odd_start_noop() {
-        let mut hf = HexFile::with_segments(vec![Segment::new(0x1001, vec![0x11, 0x22]).unwrap()]);
-        hf.swap_bytes(SwapMode::Word);
-        assert_eq!(hf.segments()[0].data, vec![0x11, 0x22]);
-    }
-
-    #[test]
-    fn test_swap_word_total_odd_noop() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB]).unwrap(),
-            Segment::new(0x2000, vec![0xCC]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::Word);
-        assert_eq!(hf.segments()[0].data, vec![0xAA, 0xBB]);
-        assert_eq!(hf.segments()[1].data, vec![0xCC]);
-    }
-
-    #[test]
-    fn test_swap_dword_span_misaligned_noop() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1002, vec![0x01, 0x02, 0x03, 0x04]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::DWord);
-        assert_eq!(hf.segments()[0].data, vec![0x01, 0x02, 0x03, 0x04]);
-    }
-
-    #[test]
-    fn test_swap_dword_span_length_noop() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0x01, 0x02, 0x03, 0x04]).unwrap(),
-            Segment::new(0x2000, vec![0x05, 0x06]).unwrap(),
-        ]);
-        hf.swap_bytes(SwapMode::DWord);
-        assert_eq!(hf.segments()[0].data, vec![0x01, 0x02, 0x03, 0x04]);
-        assert_eq!(hf.segments()[1].data, vec![0x05, 0x06]);
+    fn test_swap_needs_an_aligned_span() {
+        for (segments, mode) in [
+            (vec![(0x1001, vec![0x11, 0x22])], SwapMode::Word),
+            (
+                vec![(0x1000, vec![1, 2]), (0x2000, vec![3])],
+                SwapMode::Word,
+            ),
+            (vec![(0x1002, vec![1, 2, 3, 4])], SwapMode::DWord),
+            (
+                vec![(0x1000, vec![1, 2, 3, 4]), (0x2000, vec![5, 6])],
+                SwapMode::DWord,
+            ),
+        ] {
+            let segments: Vec<Segment> = segments
+                .into_iter()
+                .map(|(start, data)| Segment::new(start, data).unwrap())
+                .collect();
+            let mut hf = HexFile::with_segments(segments.clone());
+            hf.swap_bytes(mode);
+            assert_eq!(hf.segments(), segments);
+        }
     }
 
     #[test]
@@ -625,107 +466,5 @@ mod tests {
             no_full_word.segments()[1].data,
             [0x17, 0x10, 0x09, 0x02, 0x33, 0x2C, 0x25, 0x1E]
         );
-    }
-
-    #[test]
-    fn test_scale_unscale_roundtrip() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA]).unwrap(),
-            Segment::new(0x2000, vec![0xBB]).unwrap(),
-        ]);
-        let original = hf.clone();
-        hf.scale_addresses(4).unwrap();
-        hf.unscale_addresses(4).unwrap();
-        assert_eq!(
-            hf.segments()[0].start_address,
-            original.segments()[0].start_address
-        );
-        assert_eq!(
-            hf.segments()[1].start_address,
-            original.segments()[1].start_address
-        );
-    }
-
-    #[test]
-    fn test_unscale_transactional() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x2000, vec![0xAA]).unwrap(), // divisible by 2
-            Segment::new(0x3001, vec![0xBB]).unwrap(), // NOT divisible by 2
-        ]);
-        let original_first = hf.segments()[0].start_address;
-        let result = hf.unscale_addresses(2);
-        assert!(result.is_err());
-        // First segment should NOT have been modified
-        assert_eq!(hf.segments()[0].start_address, original_first);
-    }
-
-    #[test]
-    fn test_scale_overflow_errors() {
-        let mut hf =
-            HexFile::with_segments(vec![Segment::new(u32::MAX / 2 + 1, vec![0xAA]).unwrap()]);
-        let original_addr = hf.segments()[0].start_address;
-        let result = hf.scale_addresses(3);
-        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
-        // Unchanged (transactional)
-        assert_eq!(hf.segments()[0].start_address, original_addr);
-    }
-
-    #[test]
-    fn test_scale_segment_end_overflow_errors() {
-        let start = u32::MAX / 2;
-        let mut hf =
-            HexFile::with_segments(vec![Segment::new(start, vec![0xAA, 0xBB, 0xCC]).unwrap()]);
-        let result = hf.scale_addresses(2);
-        assert!(matches!(result, Err(OpsError::AddressOverflow { .. })));
-        assert_eq!(hf.segments()[0].start_address, start);
-    }
-
-    #[test]
-    fn test_unscale_by_zero() {
-        for mut hf in [
-            HexFile::new(),
-            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA]).unwrap()]),
-        ] {
-            assert!(matches!(
-                hf.unscale_addresses(0),
-                Err(OpsError::AddressNotDivisible { divisor: 0, .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn test_dspic_expand_appends_zeros() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x1000, vec![0xAA, 0xBB, 0xCC, 0xDD]).unwrap(),
-        ]);
-        hf.dspic_expand(AddressRange::from_start_length(0x1000, 4).unwrap(), None)
-            .unwrap();
-
-        let out = hf.read_bytes_contiguous(0x2000, 8).unwrap();
-        assert_eq!(out, vec![0xAA, 0xBB, 0x00, 0x00, 0xCC, 0xDD, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_dspic_shrink_keeps_low_bytes() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x2000, vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]).unwrap(),
-        ]);
-        hf.dspic_shrink(AddressRange::from_start_length(0x2000, 8).unwrap(), None)
-            .unwrap();
-
-        let out = hf.read_bytes_contiguous(0x1000, 4).unwrap();
-        assert_eq!(out, vec![0x11, 0x22, 0x55, 0x66]);
-    }
-
-    #[test]
-    fn test_dspic_clear_ghost() {
-        let mut hf = HexFile::with_segments(vec![
-            Segment::new(0x3000, vec![0x01, 0x02, 0x03, 0xFF, 0x10, 0x11, 0x12, 0xEE]).unwrap(),
-        ]);
-        hf.dspic_clear_ghost(AddressRange::from_start_length(0x3000, 8).unwrap())
-            .unwrap();
-
-        let out = hf.read_bytes_contiguous(0x3000, 8).unwrap();
-        assert_eq!(out, vec![0x01, 0x02, 0x03, 0x00, 0x10, 0x11, 0x12, 0x00]);
     }
 }

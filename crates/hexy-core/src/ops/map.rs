@@ -25,7 +25,7 @@ pub struct RemapOptions {
 /// Which block survives when a mapped piece lands on data that stays in place.
 /// Between two mapped pieces the one from the lower source address survives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MapCollision {
+pub(crate) enum MapCollision {
     /// The mapped piece replaces the data (HexView `/REMAP`, `/S12XMAP`, `/S08MAP`).
     #[default]
     MappedWins,
@@ -35,13 +35,13 @@ pub enum MapCollision {
 
 /// Options for banked address mapping.
 #[derive(Debug, Clone)]
-pub struct BankedMapOptions {
-    pub bank_min: u8,
-    pub bank_max: u8,
-    pub linear_base: u32,
-    pub nonbank_low_base: u32,
-    pub nonbank_high_base: u32,
-    pub collision: MapCollision,
+pub(crate) struct BankedMapOptions {
+    bank_min: u8,
+    bank_max: u8,
+    linear_base: u32,
+    nonbank_low_base: u32,
+    nonbank_high_base: u32,
+    collision: MapCollision,
 }
 
 /// A piece of a block and its mapped start, `None` when it stays in place.
@@ -69,7 +69,7 @@ impl HexFile {
     }
 
     /// Map banked address ranges into a linear space.
-    pub fn map_banked(&mut self, options: &BankedMapOptions) -> Result<(), OpsError> {
+    pub(crate) fn map_banked(&mut self, options: &BankedMapOptions) -> Result<(), OpsError> {
         if options.bank_min > options.bank_max {
             return Err(OpsError::InvalidRemapParams(format!(
                 "bank_min must be <= bank_max (bank_min={}, bank_max={})",

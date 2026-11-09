@@ -7,7 +7,7 @@ use hexy_core::HexFile;
 
 use super::error::CliError;
 use super::ini::add_ini_keys;
-use super::io::{ReadProvider, checksum_options, load_ini_or_empty};
+use super::io::{checksum_options, load_ini_or_empty};
 use super::parse_util::parse_lenient_number;
 use super::report::Report;
 use super::types::{Args, OutputFormat};
@@ -17,7 +17,6 @@ use super::types::{Args, OutputFormat};
 pub(super) fn write_output_for_args(
     args: &Args,
     hexfile: &HexFile,
-    provider: &impl ReadProvider,
     report: &Report,
 ) -> Result<(), CliError> {
     let Some(format) = &args.output_format else {
@@ -40,15 +39,15 @@ pub(super) fn write_output_for_args(
         OutputFormat::Binary => hexfile.write_binary_file(&path, &Default::default())?,
         OutputFormat::HexAscii(options) => hexfile.write_hex_ascii_file(&path, options)?,
         OutputFormat::SeparateBinary => write_separate_binary(hexfile, &path)?,
-        OutputFormat::CCode => write_c_code_output(args, hexfile, &path, provider)?,
+        OutputFormat::CCode => write_c_code_output(args, hexfile, &path)?,
         OutputFormat::FordIntelHex => {
-            write_ford_ihex_output(args, hexfile, &path, provider, report)?;
+            write_ford_ihex_output(args, hexfile, &path, report)?;
         }
-        OutputFormat::FlashKernel => write_flash_kernel_output(args, hexfile, &path, provider)?,
+        OutputFormat::FlashKernel => write_flash_kernel_output(args, hexfile, &path)?,
         // HexView writes no file for an empty image.
         OutputFormat::GacSwil if hexfile.segments().is_empty() => {}
         OutputFormat::GacSwil => std::fs::write(&path, crate::write_gac_swil(hexfile)?)?,
-        OutputFormat::Porsche => write_porsche_output(args, hexfile, &path, provider)?,
+        OutputFormat::Porsche => write_porsche_output(args, hexfile, &path)?,
     }
     Ok(())
 }
@@ -56,13 +55,8 @@ pub(super) fn write_output_for_args(
 /// `.c` and `.h` files named after `path`, configured by `[C_EXPORT]` as HexView reads
 /// it: `Prefix` (default empty), `WordSize` 0-2, `WordType` (non-zero is Motorola),
 /// `Decryption` (default on) and `Decryptvalue`.
-fn write_c_code_output(
-    args: &Args,
-    hexfile: &HexFile,
-    path: &Path,
-    provider: &impl ReadProvider,
-) -> Result<(), CliError> {
-    let ini = load_export_ini(args, provider, "C_EXPORT")?;
+fn write_c_code_output(args: &Args, hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
+    let ini = load_export_ini(args, "C_EXPORT")?;
     let number = |key: &str, default| {
         ini.get(key)
             .map_or(default, |value| parse_lenient_number(value))
@@ -106,12 +100,7 @@ fn write_c_code_output(
 /// it take the block's defaults, and HexView writes the name, comment and RAM values
 /// it used back to the INI file. `FLASH_KERNEL_RAM_START=@file.map:pattern` scans the
 /// map file for the first line `pattern` reads a `%lx` address from.
-fn write_flash_kernel_output(
-    args: &Args,
-    hexfile: &HexFile,
-    path: &Path,
-    provider: &impl ReadProvider,
-) -> Result<(), CliError> {
+fn write_flash_kernel_output(args: &Args, hexfile: &HexFile, path: &Path) -> Result<(), CliError> {
     const SECTION: &str = "FLASH_KERNEL_CONFIG";
     let blocks = hexfile.blocks();
     let [block] = blocks.as_slice() else {
@@ -120,7 +109,7 @@ fn write_flash_kernel_output(
             blocks.len()
         )));
     };
-    let ini = load_export_ini(args, provider, SECTION)?;
+    let ini = load_export_ini(args, SECTION)?;
     let file_name = path.file_name().unwrap_or_default().to_string_lossy();
     let defaults = crate::FlashKernelHeader::new(
         ini.get("flash_kernel_name")
@@ -150,7 +139,7 @@ fn write_flash_kernel_output(
         add_ini_keys(&ini_path, SECTION, &missing)?;
     }
     let header = crate::FlashKernelHeader {
-        ram_start: map_address(&header.ram_start, provider).unwrap_or(header.ram_start),
+        ram_start: map_address(&header.ram_start).unwrap_or(header.ram_start),
         ..header
     };
     std::fs::write(path, crate::write_flash_kernel(hexfile, &header)?)?;
@@ -159,7 +148,7 @@ fn write_flash_kernel_output(
 
 /// The address `@file.map:pattern` finds: the first map line from which `pattern`, read
 /// like C's `sscanf`, converts its `%lx`.
-fn map_address(value: &str, provider: &impl ReadProvider) -> Option<String> {
+fn map_address(value: &str) -> Option<String> {
     let reference = value.strip_prefix('@')?;
     let drive = if reference.as_bytes().get(1) == Some(&b':') {
         2
@@ -167,7 +156,7 @@ fn map_address(value: &str, provider: &impl ReadProvider) -> Option<String> {
         0
     };
     let split = drive + reference[drive..].find(':')?;
-    let map = provider.read_bytes(Path::new(&reference[..split])).ok()?;
+    let map = std::fs::read(Path::new(&reference[..split])).ok()?;
     let pattern = &reference[split + 1..];
     String::from_utf8_lossy(&map)
         .lines()
@@ -208,10 +197,9 @@ fn write_ford_ihex_output(
     args: &Args,
     hexfile: &HexFile,
     path: &Path,
-    provider: &impl ReadProvider,
     report: &Report,
 ) -> Result<(), CliError> {
-    let ini = load_export_ini(args, provider, "FORDHEADER")?;
+    let ini = load_export_ini(args, "FORDHEADER")?;
     let text = |key: &str| ini.get(key).filter(|value| !value.is_empty()).cloned();
     let header = crate::FordHeader {
         application: text("application"),
@@ -251,7 +239,6 @@ fn write_porsche_output(
     args: &Args,
     hexfile: &HexFile,
     output_path: &Path,
-    provider: &impl ReadProvider,
 ) -> Result<(), CliError> {
     let region = HexFile::with_segments(
         hexfile
@@ -273,8 +260,7 @@ fn write_porsche_output(
                 little_endian_output: false,
                 forced_range: None,
                 exclude_ranges: Vec::new(),
-                ..checksum_options(params, provider)
-                    .map_err(|e| CliError::Other(format!("{flag}: {e}")))?
+                ..checksum_options(params).map_err(|e| CliError::Other(format!("{flag}: {e}")))?
             };
             region
                 .calculate_checksum(&options)
@@ -308,12 +294,11 @@ fn ini_path(args: &Args) -> Option<PathBuf> {
 /// `section` of the export INI file; empty without one.
 pub(super) fn load_export_ini(
     args: &Args,
-    provider: &impl ReadProvider,
     section: &str,
 ) -> Result<HashMap<String, String>, CliError> {
     ini_path(args).map_or_else(
         || Ok(HashMap::new()),
-        |path| load_ini_or_empty(&path, provider, Some(section)),
+        |path| load_ini_or_empty(&path, Some(section)),
     )
 }
 
