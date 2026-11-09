@@ -314,6 +314,8 @@ def test_validation_structures_match_hexview():
         group_id=0x1234, mode=1, hash=9
     )
     assert result.hexfile.read(0x8000 - 20, 20) == result.hsm_signature
+
+
 def test_zero_line_length_srec_exports_only_termination(tmp_path):
     source = hexy.HexFile.from_binary(b"\xaa", 0xFFFF_FFFF)
     for record_type, expected in [
@@ -328,7 +330,6 @@ def test_zero_line_length_srec_exports_only_termination(tmp_path):
         assert path.read_bytes() == expected
 
 
-
 def test_pipeline_places_checksums_in_order():
     pipeline = hexy.Pipeline()
     pipeline.checksum(0, placement="append")
@@ -339,7 +340,6 @@ def test_pipeline_places_checksums_in_order():
     assert result.checksums == [b"\x00\x0a", b"\x14\x00"]
     assert result.hexfile.read(0x1004, 2) == b"\x00\x0a"
     assert result.hexfile.read(0x2000, 2) == b"\x14\x00"
-
 
 
 def test_large_dword_swap_matches_direct_and_pipeline_results():
@@ -356,7 +356,6 @@ def test_large_dword_swap_matches_direct_and_pipeline_results():
     assert direct.read(0, 16) == expected
     assert result.hexfile.read(0, 16) == expected
     assert result.checksums == [b"\xff\xf0"]
-
 
 
 def test_validation_c_preserves_long_tags_and_explicit_overrides():

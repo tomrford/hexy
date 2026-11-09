@@ -310,33 +310,6 @@ fn test_cli_checksum_multi_mixed_targets_with_file() {
 }
 
 #[test]
-fn test_cli_checksum_file_survives_a_later_stage_error() {
-    for (checksum_flag, later_flag, exports) in [
-        ("CSM0", "/CSM23", false),
-        ("CS0", "/SV4:missing-key.pem!0xF", true),
-    ] {
-        let dir = temp_dir("cli_checksum_before_error");
-        let input = dir.join("input.bin");
-        let checksum = dir.join("checksum.txt");
-        let out = dir.join("out.hex");
-        write_file(&input, &[1, 2, 3, 4]);
-
-        let output = run_hexy(&[
-            format!("/IN:{};0x1000", input.display()),
-            format!("/{checksum_flag}:{}", checksum.display()),
-            later_flag.to_owned(),
-            "/XI".to_owned(),
-            "-o".to_owned(),
-            out.display().to_string(),
-        ]);
-
-        assert!(!output.status.success());
-        assert_eq!(std::fs::read_to_string(checksum).unwrap(), "0x00, 0x0A");
-        assert_eq!(out.exists(), exports);
-    }
-}
-
-#[test]
 fn test_cli_checksum_reject_mix_legacy_and_multi() {
     let dir = temp_dir("cli_checksum_mix_reject");
     let input_path = dir.join("input.bin");
@@ -361,20 +334,32 @@ fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-/// HexView 1.15.2 reports a failed checksum but still runs the export.
+/// HexView 1.15.2 reports a failed checksum but still runs the later stages and the
+/// export: a method that fails on the data, one it does not know, and a `/CS16`
+/// constant it cannot read.
 #[test]
 fn test_cli_failed_checksum_still_exports() {
-    let dir = temp_dir("cli_checksum_failed");
-    write_file(&dir.join("in.bin"), &[0x01, 0x08, 0x0F]);
-    let output = run_in(
-        &dir,
-        &["/IN:in.bin;0x1000", "/CS12:@append", "/XI", "-o", "out.hex"],
-    );
-    assert!(!output.status.success());
-    assert_eq!(
-        std::fs::read(dir.join("out.hex")).unwrap(),
-        b":0310000001080FD5\r\n:00000001FF\r\n"
-    );
+    for flag in [
+        "/CS12:@append",
+        "/CS99:@append",
+        "/CS23:cs.txt",
+        "/CS16:cs.txt",
+    ] {
+        let dir = temp_dir("cli_checksum_failed");
+        write_file(&dir.join("in.bin"), &[0x01, 0x08, 0x0F]);
+        write_file(&dir.join("expdatproc.ini"), b"[constant]\r\nNumBytes=0\r\n");
+        let output = run_in(
+            &dir,
+            &["/IN:in.bin;0x1000", flag, "/DP1:FF", "/XI", "-o", "out.hex"],
+        );
+        assert!(!output.status.success(), "{flag}");
+        assert_eq!(
+            std::fs::read(dir.join("out.hex")).unwrap(),
+            b":03100000FEF7F008\r\n:00000001FF\r\n",
+            "{flag}"
+        );
+        assert!(!dir.join("cs.txt").exists(), "{flag}");
+    }
 }
 
 /// HexView 1.15.2 checksums nothing when the limiting range is invalid.
@@ -417,21 +402,35 @@ fn test_cli_constant_checksum_reads_expdatproc_ini() {
     );
 }
 
+/// HexView 1.15.2 builds and inserts the `/vs` structure with an empty checksum for a
+/// `/CS16` constant it cannot read, as for a method it does not know, and fails the run.
 #[test]
-fn test_cli_validation_config_error_preserves_earlier_output() {
-    let dir = temp_dir("cli_validation_config_order");
-    write_file(&dir.join("in.bin"), &[1, 2, 3, 4]);
-    write_file(&dir.join("in.ini"), b"[VALIDATION]\nBlockChecksumType=16\n");
-    write_file(&dir.join("expdatproc.ini"), b"[constant]\nNumBytes=0\n");
-    let output = run_in(
-        &dir,
-        &["/IN:in.bin", "/CS0:cs.txt", "/vs", "/XN", "-o", "out.bin"],
+fn test_cli_validation_unreadable_constant_leaves_checksum_empty() {
+    let dir = temp_dir("cli_validation_constant");
+    write_file(
+        &dir.join("in.hex"),
+        b":0400000001020304F2\r\n:00000001FF\r\n",
     );
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("/vs"));
-    assert_eq!(
-        std::fs::read_to_string(dir.join("cs.txt")).unwrap(),
-        "0x00, 0x0A"
-    );
-    assert_eq!(std::fs::read(dir.join("out.bin")).unwrap(), [1, 2, 3, 4]);
+    write_file(&dir.join("expdatproc.ini"), b"[constant]\r\nNumBytes=0\r\n");
+    for method in ["16", "99"] {
+        write_file(
+            &dir.join("in.ini"),
+            format!("[VALIDATION]\r\nBlockChecksumType={method}\r\nInsertData=1\r\nBaseAddress=0x100\r\n")
+                .as_bytes(),
+        );
+        let output = run_in(
+            &dir,
+            &["in.hex", "/CS0:cs.txt", "/vs", "/XI", "-o", "out.hex"],
+        );
+        assert!(!output.status.success(), "{method}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("cs.txt")).unwrap(),
+            "0x00, 0x0A"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("out.hex")).unwrap(),
+            b":0400000001020304F2\r\n:050100000100000004F5\r\n:00000001FF\r\n",
+            "{method}"
+        );
+    }
 }

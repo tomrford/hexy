@@ -7,11 +7,11 @@ use crate::{
 
 use super::error::CliError;
 use super::export::write_output_for_args;
-use super::io::{checksum_options, load_input, write_checksum_text, write_data_processing_text};
+use super::io::{checksum_options, load_input, write_checksum_text};
 use super::log::execute_log;
 use super::processing::{
-    data_processing_output, data_processing_stage, validate_data_processing,
-    validate_signature_verify, verify_stage,
+    data_processing_stage, validate_data_processing, validate_signature_verify, verify_stage,
+    write_data_processing_output,
 };
 use super::report::Report;
 use super::types::{Args, ChecksumParams, ChecksumTarget, ImportKind};
@@ -57,28 +57,16 @@ impl Args {
         let dir = self.processing_dir();
         let mut stage_error = None;
         for stage in pipeline.stages() {
-            self.before_stage(stage, &mut pipeline)?;
             let result = if let Stage::Merge(index) = stage {
                 self.merge_stage(index, &mut pipeline, &mut hexfile, &mut output)?;
                 Ok(())
             } else {
-                let prepared = if stage == Stage::Validation && self.validation {
-                    Validation::from_ini(self, report)
-                        .map(|prepared| {
-                            pipeline.validation =
-                                prepared.as_ref().map(|validation| validation.stage.clone());
-                            validation = prepared;
-                        })
-                        .map_err(|error| error.to_string())
-                } else {
-                    Ok(())
-                };
-                prepared
-                    .and_then(|()| self.prepare_stage(stage, &mut pipeline, &dir))
-                    .and_then(|()| {
+                self.prepare_stage(stage, &mut pipeline, &mut validation, report, &dir)
+                    .and_then(|deferred| {
                         pipeline
                             .run_stage(stage, &mut hexfile, &mut output)
-                            .map_err(|e| e.to_string())
+                            .map_err(|e| e.to_string())?;
+                        deferred.map_or(Ok(()), Err)
                     })
             };
             let result = result.and_then(|()| match (stage, &validation, &output.validation) {
@@ -133,20 +121,31 @@ impl Args {
             .unwrap_or_default()
     }
 
-    /// `/DP` and `/SV` parameters are read when their stage runs, so that a method
-    /// HexView does not know fails only its stage and `/SV` can read `/DP`'s output.
+    /// Checksum, `/DP`, `/SV` and validation parameters are read when their stage runs,
+    /// so that a method HexView does not know fails only its stage and `/SV` can read
+    /// `/DP`'s output. `Ok(Some(error))` runs the stage and then fails it.
     fn prepare_stage(
         &self,
         stage: Stage,
         pipeline: &mut Pipeline,
+        validation: &mut Option<Validation>,
+        report: &Report,
         dir: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         match stage {
+            Stage::Checksum(index) => {
+                pipeline.checksums[index].options = checksum_options(self.checksum_stage(index).0)?;
+            }
+            Stage::Validation if self.validation => {
+                *validation = Validation::from_ini(self, report).map_err(|e| e.to_string())?;
+                pipeline.validation = validation.as_ref().map(|v| v.stage.clone());
+            }
             Stage::HsmValidation => {
-                pipeline.hsm_validation = self
-                    .hsm_validation
-                    .map(|placement| hsm_validation_stage(self, placement, dir))
-                    .transpose()?;
+                if let Some(placement) = self.hsm_validation {
+                    let (stage, error) = hsm_validation_stage(self, placement, dir)?;
+                    pipeline.hsm_validation = Some(stage);
+                    return Ok(error);
+                }
             }
             Stage::DataProcessing => {
                 pipeline.data_processing = self
@@ -165,11 +164,12 @@ impl Args {
             }
             _ => {}
         }
-        Ok(())
+        Ok(None)
     }
 
     /// The core pipeline for these flags; each field is set only from its own flags.
-    /// `data_processing` and `verify` are set by [`Self::prepare_stage`].
+    /// Checksum options and the processing and validation stages are set by
+    /// [`Self::prepare_stage`].
     fn pipeline(&self, report: &Report) -> Pipeline {
         let address_map = if self.s12_map {
             Some(AddressMap::Star12)
@@ -236,16 +236,6 @@ impl Args {
             hsm_validation: None,
             validation: None,
         }
-    }
-
-    /// Preparation failures are fatal, after side effects from earlier stages.
-    fn before_stage(&self, stage: Stage, pipeline: &mut Pipeline) -> Result<(), CliError> {
-        if let Stage::Checksum(index) = stage {
-            let (params, flag) = self.checksum_stage(index);
-            pipeline.checksums[index].options = checksum_options(params)
-                .map_err(|error| CliError::Other(format!("{flag}: {error}")))?;
-        }
-        Ok(())
     }
 
     /// Resolve each wildcard group at its stage and apply matches before reading
@@ -321,17 +311,14 @@ impl Args {
                 if let Some(signature) = &output.hsm_signature
                     && let Some(params) = hsm_signature_params(self)
                         .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?
-                    && let Some((path, crlf)) = data_processing_output(&params, dir)
                 {
-                    write_data_processing_text(&path, signature, crlf)
+                    write_data_processing_output(&params, dir, signature)
                         .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?;
                 }
             }
             Stage::DataProcessing => {
-                if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing)
-                    && let Some((path, crlf)) = data_processing_output(dp, dir)
-                {
-                    write_data_processing_text(&path, bytes, crlf)
+                if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing) {
+                    write_data_processing_output(dp, dir, bytes)
                         .map_err(|e| CliError::Other(format!("/DP{}: {e}", dp.method)))?;
                 }
             }

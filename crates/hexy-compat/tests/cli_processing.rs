@@ -91,9 +91,11 @@ fn test_dp_ini_key_and_sv_of_dp_output() {
     assert_eq!(text, output_text(RSA_DATA));
 }
 
+/// HexView 1.15.2 uses `/DP` and `/SV` fields exactly as given, blanks and quotes
+/// included, and writes a signature it cannot write to param4 to the default file.
 #[test]
-fn test_processing_paths_accept_quoted_fields() {
-    let (dir, input) = input("dp_quoted");
+fn test_processing_fields_are_used_as_given() {
+    let (dir, input) = input("dp_fields");
     let private = fixture("rsa_his_private.txt");
     write_file(&dir.join("private key.txt"), &private);
     write_file(&dir.join("public key.txt"), &fixture("rsa_his_public.txt"));
@@ -101,23 +103,31 @@ fn test_processing_paths_accept_quoted_fields() {
         &dir.join("key file.ini"),
         format!("[Keys]\nPrivate={}\n", String::from_utf8(private).unwrap()).as_bytes(),
     );
-    for source in [
-        "\"private key.txt\"",
-        "\"key file.ini\",\"Keys\",\"Private\"",
-        " private key.txt ",
-        " key file.ini , Keys , Private ",
-        " \"key file.ini\" , \"Keys\" , \"Private\" ",
+    let out = dir.join("out.hex");
+    let out_arg = out.display().to_string();
+    let sign = "/DP32:private key.txt;sig.txt";
+    for flags in [
+        ["/DP32:\"private key.txt\";sig.txt", "/XI"],
+        ["/DP32: private key.txt;sig.txt", "/XI"],
+        ["/DP32:\"key file.ini\",\"Keys\",\"Private\";sig.txt", "/XI"],
+        ["/DP32:key file.ini, Keys,Private;sig.txt", "/XI"],
+        [sign, "/SV4:\"public key.txt\"!sig.txt"],
+        [sign, "/SV4:public key.txt! sig.txt"],
     ] {
-        let dp = format!("/DP32:{source}; \"signature file.txt\" ");
-        assert_success(&run(
-            &input,
-            &[&dp, "/SV4: \"public key.txt\" ! \"signature file.txt\" "],
-        ));
-        assert_eq!(
-            std::fs::read_to_string(dir.join("signature file.txt")).unwrap(),
-            output_text(RSA_DATA)
-        );
+        let output = run(&input, &[flags[0], flags[1], "/XI", "-o", &out_arg]);
+        assert!(!output.status.success(), "{flags:?}");
+        assert!(out.exists(), "{flags:?}");
+        assert_eq!(dir.join("sig.txt").exists(), flags[0] == sign, "{flags:?}");
+        std::fs::remove_file(&out).unwrap();
+        let _ = std::fs::remove_file(dir.join("sig.txt"));
     }
+
+    assert_success(&run(&input, &["/DP32:private key.txt; sig.txt"]));
+    let text = std::fs::read_to_string(dir.join(" sig.txt")).unwrap();
+    assert_eq!(text, output_text(RSA_DATA));
+    assert_success(&run(&input, &["/DP32:private key.txt;missing/sig.txt"]));
+    let text = std::fs::read_to_string(dir.join("SignD_SHA256.RSA")).unwrap();
+    assert_eq!(text, output_text(RSA_DATA));
 }
 
 /// `/SV` runs after `/DP` places its output, and neither failure stops the export.

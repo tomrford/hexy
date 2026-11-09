@@ -45,25 +45,28 @@ impl Validation {
             parse_lenient_number(value.strip_prefix(['+', '-']).unwrap_or(value)) != 0
         };
         let mut error = None;
-        let mut checksum = |key: &str| -> Result<Option<ChecksumAlgorithm>, CliError> {
+        let mut checksum = |key: &str| {
             let value = text(key).trim();
             if value.is_empty() || value.starts_with('-') {
-                return Ok(None);
+                return None;
             }
-            match ChecksumAlgorithm::try_from(parse_lenient_number(value).min(255) as u8) {
-                Ok(ChecksumAlgorithm::Constant(_)) => Ok(Some(ChecksumAlgorithm::Constant(
-                    checksum_constant().map_err(CliError::Other)?,
-                ))),
-                Ok(algorithm) => Ok(Some(algorithm)),
-                // HexView writes an empty checksum and fails the run.
-                Err(e) => {
-                    error.get_or_insert(format!("/vs {key}: {e}"));
-                    Ok(Some(ChecksumAlgorithm::Constant(Vec::new())))
-                }
-            }
+            let algorithm = ChecksumAlgorithm::try_from(parse_lenient_number(value).min(255) as u8)
+                .map_err(|e| e.to_string())
+                .and_then(|algorithm| match algorithm {
+                    ChecksumAlgorithm::Constant(_) => {
+                        checksum_constant().map(ChecksumAlgorithm::Constant)
+                    }
+                    algorithm => Ok(algorithm),
+                });
+            // For a method it does not know or a constant it cannot read, HexView
+            // writes an empty checksum and fails the run.
+            Some(algorithm.unwrap_or_else(|e| {
+                error.get_or_insert(format!("/vs {key}: {e}"));
+                ChecksumAlgorithm::Constant(Vec::new())
+            }))
         };
-        let block_checksum = checksum("blockchecksumtype")?;
-        let file_checksum = checksum("filechecksumtype")?;
+        let block_checksum = checksum("blockchecksumtype");
+        let file_checksum = checksum("filechecksumtype");
         let length = |key: &str| number(&format!("{key}length")) as usize;
         let tag = |key: &str| match tag_bytes(text(key), length(key)) {
             None if length(key) == 0 => Some(Vec::new()),
@@ -130,11 +133,13 @@ impl Validation {
 /// `GROUP_ID` and `MODE` (default 0),
 /// `HASH_METHOD` (default 20, SHA-256), and `SIGNATURE_METHOD` with `SIGNATURE_PARAM`
 /// for a `/DP` signature over the structure. Relative key paths resolve against `dir`.
+/// A signature that cannot be prepared leaves the structure unsigned, as HexView inserts
+/// it, and is returned as the stage's error.
 pub(super) fn hsm_validation_stage(
     args: &Args,
     placement: Option<Placement>,
     dir: &Path,
-) -> Result<HsmValidationStage, String> {
+) -> Result<(HsmValidationStage, Option<String>), String> {
     let ini = load_export_ini(args, "HSMBOOT").map_err(|e| e.to_string())?;
     let text = |key: &str| ini.get(key).map_or("", String::as_str).trim();
     let hash = match text("hash_method") {
@@ -146,11 +151,16 @@ pub(super) fn hsm_validation_stage(
             algorithm => algorithm,
         },
     };
-    let signature = match hsm_signature_params(args)? {
-        Some(params) => data_processing_stage(&params, dir)?.map(|stage| stage.operation),
-        None => None,
+    let signature = hsm_signature_params(args).and_then(|params| {
+        params
+            .map(|params| data_processing_stage(&params, dir))
+            .transpose()
+    });
+    let (signature, error) = match signature {
+        Ok(stage) => (stage.flatten().map(|stage| stage.operation), None),
+        Err(error) => (None, Some(error)),
     };
-    Ok(HsmValidationStage {
+    let stage = HsmValidationStage {
         options: HsmValidationOptions {
             group_id: parse_lenient_number(text("group_id")),
             mode: parse_lenient_number(text("mode")) as u16,
@@ -158,7 +168,8 @@ pub(super) fn hsm_validation_stage(
         },
         placement,
         signature,
-    })
+    };
+    Ok((stage, error))
 }
 
 /// The `/DP` parameters of the `[HSMBOOT]` signature, which also name its output file.

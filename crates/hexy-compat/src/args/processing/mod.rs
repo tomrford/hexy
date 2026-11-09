@@ -6,7 +6,7 @@
 
 mod params;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{
     AesGcm, AesKey, AesMode, AesPadding, Compression, DataProcessing, DataProcessingStage, GcmTag,
@@ -16,6 +16,7 @@ use crate::{
 
 use super::error::CliError;
 use super::ini::load_ini;
+use super::io::write_data_processing_text;
 use super::report::Report;
 
 pub(super) use params::{
@@ -456,25 +457,31 @@ fn binary_file(path: &Path) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-/// The file `/DP` writes its output to, and whether the text ends with CRLF: param4 or
-/// HexView's default name for signatures and MACs, and the `#TAG` file for AES-GCM
-/// encryption.
-pub(super) fn data_processing_output(
+/// Write `/DP` output as HexView does: a signature or MAC to param4, or to the method's
+/// default file when there is no param4 or it cannot be written, and an AES-GCM tag to
+/// its `#TAG` file, if that can be written.
+pub(super) fn write_data_processing_output(
     params: &DataProcessingParams,
     dir: &Path,
-) -> Option<(PathBuf, bool)> {
-    let (name, crlf) = match dp_method(params.method)? {
-        Method::Mac(_, output) | Method::Sign(_, output) => (
-            Path::new(params.param4.as_deref().unwrap_or(output.name)),
-            output.crlf,
-        ),
-        Method::Gcm { decrypt: false } => match &params.options.tag {
-            Some(DataInput::File(file)) => (file.as_path(), false),
-            _ => return None,
-        },
-        _ => return None,
-    };
-    Some((dir.join(name), crlf))
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    match dp_method(params.method) {
+        Some(Method::Mac(_, output) | Method::Sign(_, output)) => {
+            let write =
+                |name: &str| write_data_processing_text(&dir.join(name), bytes, output.crlf);
+            match params.param4.as_deref() {
+                Some(name) => write(name).or_else(|_| write(output.name)),
+                None => write(output.name),
+            }
+        }
+        Some(Method::Gcm { decrypt: false }) => {
+            if let Some(DataInput::File(file)) = &params.options.tag {
+                let _ = write_data_processing_text(&dir.join(file), bytes, false);
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The core stage for `/SV`, read when the stage runs so that the signature can be the
