@@ -12,9 +12,11 @@ File writers mirror the in-memory serializers:
 `write_intel_hex(path)`, `write_srec(path)`, `write_binary(path)`, and
 `write_hex_ascii(path)`.
 
-`Pipeline` is the reusable operation recipe API. It applies operations in hexy
-CLI compatibility order, not in the order methods are called. For ad-hoc custom
-ordering, call methods directly on `HexFile`.
+`Pipeline` is the reusable operation recipe API over `hexy_core::Pipeline`. It
+applies stages in the same order as the compat CLI, not in the order methods are
+called, and `apply` returns the processed `hexfile` with the `checksums` in stage
+order. Signing stages are not exposed yet. For ad-hoc custom ordering, call
+methods directly on `HexFile`.
 
 Range-taking Python APIs use one range string for single-range operations and a
 list of range strings for operations that accept multiple ranges. Each string

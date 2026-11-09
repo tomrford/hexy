@@ -1,5 +1,5 @@
 use hexy_core::{
-    AddressRange, IntelHexMode, MergeMode, SRecordType, SwapMode, parse_compat_ranges,
+    AddressRange, IntelHexMode, MergeMode, Placement, SRecordType, SwapMode, parse_compat_ranges,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -99,4 +99,23 @@ pub(crate) fn parse_srec_type(record_type: Option<&str>) -> PyResult<Option<SRec
 
 pub(crate) fn py_bytes(py: Python<'_>, data: &[u8]) -> Py<PyBytes> {
     PyBytes::new(py, data).unbind()
+}
+
+/// A placement address, or `"append"`, `"begin"`, `"prepend"` or `"overwrite_end"`.
+pub(crate) fn parse_placement(obj: &Bound<'_, PyAny>) -> PyResult<Placement> {
+    if let Ok(address) = obj.extract::<u32>() {
+        return Ok(Placement::Address(address));
+    }
+    let name: String = obj
+        .extract()
+        .map_err(|_| PyTypeError::new_err("expected an address or placement name"))?;
+    match name.to_ascii_lowercase().as_str() {
+        "append" => Ok(Placement::Append),
+        "begin" => Ok(Placement::Begin),
+        "prepend" => Ok(Placement::Prepend),
+        "overwrite_end" => Ok(Placement::OverwriteEnd),
+        other => Err(PyValueError::new_err(format!(
+            "unknown placement '{other}', expected 'append', 'begin', 'prepend' or 'overwrite_end'"
+        ))),
+    }
 }

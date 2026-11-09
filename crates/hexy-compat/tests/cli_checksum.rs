@@ -310,6 +310,30 @@ fn test_cli_checksum_multi_mixed_targets_with_file() {
 }
 
 #[test]
+fn test_cli_checksum_file_survives_a_later_stage_error() {
+    for (checksum_flag, later_flag) in [("CSM0", "/CSM16"), ("CS0", "/SV4:missing-key.pem!0xF")] {
+        let dir = temp_dir("cli_checksum_before_error");
+        let input = dir.join("input.bin");
+        let checksum = dir.join("checksum.txt");
+        let out = dir.join("out.hex");
+        write_file(&input, &[1, 2, 3, 4]);
+
+        let output = run_hexy(&[
+            format!("/IN:{};0x1000", input.display()),
+            format!("/{checksum_flag}:{}", checksum.display()),
+            later_flag.to_owned(),
+            "/XI".to_owned(),
+            "-o".to_owned(),
+            out.display().to_string(),
+        ]);
+
+        assert!(!output.status.success());
+        assert_eq!(std::fs::read_to_string(checksum).unwrap(), "0x00, 0x0A");
+        assert!(!out.exists());
+    }
+}
+
+#[test]
 fn test_cli_checksum_reject_mix_legacy_and_multi() {
     let dir = temp_dir("cli_checksum_mix_reject");
     let input_path = dir.join("input.bin");

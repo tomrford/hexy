@@ -60,7 +60,7 @@ fn test_sign_and_verify_rsa_pkcs1() {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Bytes(&private_key),
+        key_source: SignatureKeySource::Bytes(private_key),
         placement: None,
     };
     let signature = hexfile.sign(&sign).unwrap();
@@ -70,8 +70,8 @@ fn test_sign_and_verify_rsa_pkcs1() {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Bytes(&public_key),
-        signature_source: SignatureBytesSource::Bytes(&signature),
+        key_source: SignatureKeySource::Bytes(public_key),
+        signature_source: SignatureBytesSource::Bytes(signature),
     };
     hexfile.verify_signature(&verify).unwrap();
 }
@@ -85,7 +85,7 @@ fn test_sign_and_verify_ed25519() {
         method: SignatureMethod::Ed25519Ph {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Bytes(&private_key),
+        key_source: SignatureKeySource::Bytes(private_key),
         placement: None,
     };
     let signature = hexfile.sign(&sign).unwrap();
@@ -95,8 +95,8 @@ fn test_sign_and_verify_ed25519() {
         method: SignatureMethod::Ed25519Ph {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Bytes(&public_key),
-        signature_source: SignatureBytesSource::Bytes(&signature),
+        key_source: SignatureKeySource::Bytes(public_key),
+        signature_source: SignatureBytesSource::Bytes(signature),
     };
     hexfile.verify_signature(&verify).unwrap();
 }
@@ -111,7 +111,7 @@ fn test_sign_append_places_signature_in_data() {
         method: SignatureMethod::Ed25519Ph {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Bytes(&private_key),
+        key_source: SignatureKeySource::Bytes(private_key),
         placement: Some(Placement::Append),
     };
     let signature = hexfile.sign(&sign).unwrap();
@@ -132,7 +132,7 @@ fn test_sign_append_on_empty_input_is_noop() {
         method: SignatureMethod::Ed25519Ph {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::Bytes(&private_key),
+        key_source: SignatureKeySource::Bytes(private_key),
         placement: Some(Placement::Append),
     };
     let signature = hexfile.sign(&sign).unwrap();
@@ -157,7 +157,7 @@ fn test_sign_and_verify_with_explicit_file_sources() {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::File(&private_path),
+        key_source: SignatureKeySource::File(private_path),
         placement: None,
     };
     let signature = hexfile.sign(&sign).unwrap();
@@ -165,8 +165,8 @@ fn test_sign_and_verify_with_explicit_file_sources() {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
-        key_source: SignatureKeySource::File(&public_path),
-        signature_source: SignatureBytesSource::Bytes(&signature),
+        key_source: SignatureKeySource::File(public_path),
+        signature_source: SignatureBytesSource::Bytes(signature),
     };
     hexfile.verify_signature(&verify).unwrap();
 }

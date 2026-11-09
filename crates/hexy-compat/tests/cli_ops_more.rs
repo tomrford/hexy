@@ -130,6 +130,43 @@ fn test_cli_remap_s08map_conflict() {
 }
 
 #[test]
+fn test_cli_dspic_error_precedes_loading_merge_inputs() {
+    let dir = temp_dir("cli_dspic_before_merge");
+    let input = dir.join("input.bin");
+    write_file(&input, &[1, 2, 3, 4]);
+
+    let output = run_hexy(&[
+        format!("/IN:{};0", input.display()),
+        "/CDSPX:0-2;0x10".to_owned(),
+        format!("/MO:{}", dir.join("missing.hex").display()),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/CDSPX"));
+}
+
+#[test]
+fn test_cli_merge_error_precedes_loading_later_merge_inputs() {
+    let dir = temp_dir("cli_merge_before_later_merge");
+    let input = dir.join("input.bin");
+    let merge = dir.join("merge.bin");
+    write_file(&input, &[1]);
+    write_file(&merge, &[0xAA, 0xBB]);
+
+    let output = run_hexy(&[
+        format!("/IN:{};0", input.display()),
+        format!(
+            "/MO:{};0xFFFFFFFF+{}",
+            merge.display(),
+            dir.join("missing.bin").display()
+        ),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/MO: address overflow"));
+}
+
+#[test]
 fn test_cli_log_file_open_relative_path_is_rejected_with_raw_path() {
     let dir = temp_dir("cli_log_open_relative_rejected");
     let log = dir.join("commands.log");
@@ -723,4 +760,41 @@ fn test_cli_s12xmap_basic() {
     assert_eq!(segments[1].start_address(), 0x784000);
     assert_eq!(segments[2].start_address(), 0x7F4000);
     assert_eq!(segments[3].start_address(), 0x7FC000);
+}
+
+#[test]
+fn test_cli_fa_uses_align_fill_before_length_alignment() {
+    let dir = temp_dir("cli_fa_align_fill");
+    let base = dir.join("base.hex");
+    let out_cli = dir.join("out.bin");
+
+    let hexfile = HexFile::with_segments(vec![
+        Segment::new(0x1003, vec![0xAA, 0xBB]).unwrap(),
+        Segment::new(0x1021, vec![0xCC, 0xDD]).unwrap(),
+    ]);
+    write_file(
+        &base,
+        &write_intel_hex(&hexfile, &IntelHexWriteOptions::default()).unwrap(),
+    );
+
+    let args = vec![
+        base.display().to_string(),
+        "/AD20".to_owned(),
+        "/AFFF".to_owned(),
+        "/FA".to_owned(),
+        "/AL".to_owned(),
+        "/XN".to_owned(),
+        "-o".to_owned(),
+        out_cli.display().to_string(),
+    ];
+
+    let output = run_hexy(&args);
+    assert_success(&output);
+    let cli_bytes = std::fs::read(&out_cli).unwrap();
+
+    let mut expected = vec![0xFF; 0x40];
+    expected[0x03..0x05].copy_from_slice(&[0xAA, 0xBB]);
+    expected[0x21..0x23].copy_from_slice(&[0xCC, 0xDD]);
+
+    assert_eq!(cli_bytes, expected);
 }

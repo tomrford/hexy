@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use crate::{AddressRange, ForcedRange, Placement};
+use crate::{AddressRange, DspicOp, ForcedRange, Placement, RemapOptions};
 
 use super::types::{
-    ChecksumParams, ChecksumTarget, DataProcessingParams, DspicOp, ImportParam, MergeParam,
-    ParseArgError, RemapParams, SignatureVerifyParams,
+    ChecksumParams, ChecksumTarget, DataProcessingParams, ImportParam, MergeParam, ParseArgError,
+    SignatureVerifyParams,
 };
 
 pub(super) fn split_option(opt: &str) -> Option<(&str, &str)> {
@@ -191,7 +191,7 @@ pub(super) fn parse_import_param(value: &str) -> Result<ImportParam, ParseArgErr
     })
 }
 
-pub(super) fn parse_remap(s: &str) -> Result<RemapParams, ParseArgError> {
+pub(super) fn parse_remap(s: &str) -> Result<RemapOptions, ParseArgError> {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 4 {
         return Err(ParseArgError::InvalidOption(format!(
@@ -203,7 +203,7 @@ pub(super) fn parse_remap(s: &str) -> Result<RemapParams, ParseArgError> {
         ParseArgError::InvalidOption(format!("remap range invalid: {}", parts[0]))
     })?;
 
-    Ok(RemapParams {
+    Ok(RemapOptions {
         start: parse_number(start_str)?,
         end: parse_number(end_str)?,
         linear: parse_number(parts[1])?,

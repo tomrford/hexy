@@ -4,104 +4,41 @@ use hexy_core::{
     SignatureBytesSource, SignatureKeySource, SignatureMethod, SignatureSignOptions,
     SignatureVerifyOptions,
 };
-use std::path::Path;
+use std::path::PathBuf;
 
-pub(super) fn is_supported_data_processing_method(method: u8) -> bool {
-    matches!(method, 32 | 33 | 38 | 39 | 46 | 47 | 48 | 49)
+/// `/SV4`..`/SV11`: odd methods include the address/length metadata.
+fn verify_method(method: u8) -> Option<SignatureMethod> {
+    let with_metadata = method % 2 == 1;
+    Some(match method {
+        4 | 5 => SignatureMethod::RsaPkcs1v15Sha256 { with_metadata },
+        6 | 7 => SignatureMethod::RsaPssSha256 { with_metadata },
+        8 | 9 => SignatureMethod::Ed25519Ph { with_metadata },
+        10 | 11 => SignatureMethod::Ed25519Sha512Data { with_metadata },
+        _ => return None,
+    })
 }
 
-pub(super) fn is_supported_signature_verify_method(method: u8) -> bool {
-    matches!(method, 4..=11)
+/// The `/DP` signing method; each pairs with one `/SV` verification method.
+pub(super) fn data_processing_method(method: u8) -> Result<SignatureMethod, CliError> {
+    let verify = match method {
+        32 | 33 => method - 28,
+        38 | 39 => method - 32,
+        46..=49 => method - 38,
+        _ => 0,
+    };
+    verify_method(verify).ok_or_else(|| {
+        CliError::Unsupported(format!(
+            "data processing (/DP{method}) is not supported yet"
+        ))
+    })
 }
 
-fn map_data_processing_method(method: u8) -> Option<SignatureMethod> {
-    match method {
-        32 => Some(SignatureMethod::RsaPkcs1v15Sha256 {
-            with_metadata: false,
-        }),
-        33 => Some(SignatureMethod::RsaPkcs1v15Sha256 {
-            with_metadata: true,
-        }),
-        38 => Some(SignatureMethod::RsaPssSha256 {
-            with_metadata: false,
-        }),
-        39 => Some(SignatureMethod::RsaPssSha256 {
-            with_metadata: true,
-        }),
-        46 => Some(SignatureMethod::Ed25519Ph {
-            with_metadata: false,
-        }),
-        47 => Some(SignatureMethod::Ed25519Ph {
-            with_metadata: true,
-        }),
-        48 => Some(SignatureMethod::Ed25519Sha512Data {
-            with_metadata: false,
-        }),
-        49 => Some(SignatureMethod::Ed25519Sha512Data {
-            with_metadata: true,
-        }),
-        _ => None,
-    }
-}
-
-fn map_signature_verify_method(method: u8) -> Option<SignatureMethod> {
-    match method {
-        4 => Some(SignatureMethod::RsaPkcs1v15Sha256 {
-            with_metadata: false,
-        }),
-        5 => Some(SignatureMethod::RsaPkcs1v15Sha256 {
-            with_metadata: true,
-        }),
-        6 => Some(SignatureMethod::RsaPssSha256 {
-            with_metadata: false,
-        }),
-        7 => Some(SignatureMethod::RsaPssSha256 {
-            with_metadata: true,
-        }),
-        8 => Some(SignatureMethod::Ed25519Ph {
-            with_metadata: false,
-        }),
-        9 => Some(SignatureMethod::Ed25519Ph {
-            with_metadata: true,
-        }),
-        10 => Some(SignatureMethod::Ed25519Sha512Data {
-            with_metadata: false,
-        }),
-        11 => Some(SignatureMethod::Ed25519Sha512Data {
-            with_metadata: true,
-        }),
-        _ => None,
-    }
-}
-
-enum ResolvedKeySource<'a> {
-    File(&'a Path),
-    Text(&'a str),
-    Bytes(Vec<u8>),
-}
-
-impl<'a> ResolvedKeySource<'a> {
-    fn as_core(&'a self) -> SignatureKeySource<'a> {
-        match self {
-            Self::File(path) => SignatureKeySource::File(path),
-            Self::Text(text) => SignatureKeySource::Text(text),
-            Self::Bytes(bytes) => SignatureKeySource::Bytes(bytes),
-        }
-    }
-}
-
-enum ResolvedSignatureSource<'a> {
-    File(&'a Path),
-    Bytes(Vec<u8>),
-}
-
-impl<'a> ResolvedSignatureSource<'a> {
-    fn as_core(&'a self) -> SignatureBytesSource<'a> {
-        match self {
-            Self::File(path) => SignatureBytesSource::File(path),
-            Self::Bytes(bytes) => SignatureBytesSource::Bytes(bytes),
-        }
-    }
+pub(super) fn signature_verify_method(method: u8) -> Result<SignatureMethod, CliError> {
+    verify_method(method).ok_or_else(|| {
+        CliError::Unsupported(format!(
+            "signature verification (/SV{method}) is not supported yet"
+        ))
+    })
 }
 
 fn decode_hex_bytes(hex: &str) -> Result<Vec<u8>, String> {
@@ -155,85 +92,62 @@ fn looks_like_asn_key_bytes(raw: &str) -> bool {
     known_prefix && raw.len().is_multiple_of(2) && raw.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn resolve_key_source(raw: &str) -> Result<ResolvedKeySource<'_>, CliError> {
+fn resolve_key_source(raw: &str) -> Result<SignatureKeySource, CliError> {
     if looks_like_inline_pem(raw) {
-        return Ok(ResolvedKeySource::Text(raw));
+        return Ok(SignatureKeySource::Text(raw.to_owned()));
     }
     if looks_like_asn_key_bytes(raw) {
         let bytes = decode_hex_bytes(raw.trim())
             .map_err(|e| CliError::Other(format!("signature key info: {e}")))?;
-        return Ok(ResolvedKeySource::Bytes(bytes));
+        return Ok(SignatureKeySource::Bytes(bytes));
     }
-    Ok(ResolvedKeySource::File(Path::new(raw)))
+    Ok(SignatureKeySource::File(PathBuf::from(raw)))
 }
 
-fn resolve_signature_source(raw: &str) -> Result<ResolvedSignatureSource<'_>, CliError> {
+fn resolve_signature_source(raw: &str) -> Result<SignatureBytesSource, CliError> {
     if let Some(bytes) = parse_explicit_hex_bytes(raw)
         .map_err(|e| CliError::Other(format!("signature info: {e}")))?
     {
-        return Ok(ResolvedSignatureSource::Bytes(bytes));
+        return Ok(SignatureBytesSource::Bytes(bytes));
     }
-    Ok(ResolvedSignatureSource::File(Path::new(raw)))
+    Ok(SignatureBytesSource::File(PathBuf::from(raw)))
 }
 
-pub(super) fn apply_data_processing(
-    hexfile: &mut crate::HexFile,
+/// Core signing options for a supported `/DP` method.
+pub(super) fn sign_options(
     params: &DataProcessingParams,
-) -> Result<Option<Vec<u8>>, CliError> {
-    let Some(method) = map_data_processing_method(params.method) else {
-        return Ok(None);
-    };
-    let key_source = resolve_key_source(&params.key_info)
-        .map_err(|e| CliError::Other(format!("/DP{}: {e}", params.method)))?;
-    let options = SignatureSignOptions {
-        method,
-        key_source: key_source.as_core(),
+) -> Result<SignatureSignOptions, CliError> {
+    let flag_error = |e: String| CliError::Other(format!("/DP{}: {e}", params.method));
+    Ok(SignatureSignOptions {
+        method: data_processing_method(params.method)?,
+        key_source: resolve_key_source(&params.key_info).map_err(|e| flag_error(e.to_string()))?,
         placement: params.placement,
-    };
-    let signature = hexfile
-        .sign(&options)
-        .map_err(|e| CliError::Other(format!("/DP{}: {e}", params.method)))?;
-    if let Some(path) = params.output_file.as_ref() {
-        std::fs::write(path, &signature)
-            .map_err(|e| CliError::Other(format!("/DP{}: {e}", params.method)))?;
-    }
-    Ok(Some(signature))
+    })
 }
 
-pub(super) fn apply_signature_verification(
-    hexfile: &crate::HexFile,
+/// Core verification options for a supported `/SV` method.
+pub(super) fn verify_options(
     params: &SignatureVerifyParams,
-) -> Result<(), CliError> {
-    let Some(method) = map_signature_verify_method(params.method) else {
-        return Ok(());
-    };
-    let key_source = resolve_key_source(&params.key_info)
-        .map_err(|e| CliError::Other(format!("/SV{}: {e}", params.method)))?;
-    let signature_source = resolve_signature_source(&params.signature_info)
-        .map_err(|e| CliError::Other(format!("/SV{}: {e}", params.method)))?;
-    let options = SignatureVerifyOptions {
-        method,
-        key_source: key_source.as_core(),
-        signature_source: signature_source.as_core(),
-    };
-    hexfile
-        .verify_signature(&options)
-        .map_err(|e| CliError::Other(format!("/SV{}: {e}", params.method)))?;
-    Ok(())
+) -> Result<SignatureVerifyOptions, CliError> {
+    let flag_error = |e: String| CliError::Other(format!("/SV{}: {e}", params.method));
+    Ok(SignatureVerifyOptions {
+        method: signature_verify_method(params.method)?,
+        key_source: resolve_key_source(&params.key_info).map_err(|e| flag_error(e.to_string()))?,
+        signature_source: resolve_signature_source(&params.signature_info)
+            .map_err(|e| flag_error(e.to_string()))?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ResolvedKeySource, ResolvedSignatureSource, parse_explicit_hex_bytes, resolve_key_source,
-        resolve_signature_source,
-    };
+    use super::{parse_explicit_hex_bytes, resolve_key_source, resolve_signature_source};
+    use hexy_core::{SignatureBytesSource, SignatureKeySource};
 
     #[test]
     fn test_resolve_key_source_defaults_bare_tokens_to_file() {
         let source = resolve_key_source("mykey").unwrap();
         assert!(
-            matches!(source, ResolvedKeySource::File(path) if path == std::path::Path::new("mykey"))
+            matches!(source, SignatureKeySource::File(path) if path == std::path::Path::new("mykey"))
         );
     }
 
@@ -241,7 +155,7 @@ mod tests {
     fn test_resolve_key_source_windows_absolute_path_is_file() {
         let source = resolve_key_source(r"C:\temp\key.pem").unwrap();
         assert!(
-            matches!(source, ResolvedKeySource::File(path) if path == std::path::Path::new(r"C:\temp\key.pem"))
+            matches!(source, SignatureKeySource::File(path) if path == std::path::Path::new(r"C:\temp\key.pem"))
         );
     }
 
@@ -250,14 +164,14 @@ mod tests {
         let source =
             resolve_key_source("-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----")
                 .unwrap();
-        assert!(matches!(source, ResolvedKeySource::Text(_)));
+        assert!(matches!(source, SignatureKeySource::Text(_)));
     }
 
     #[test]
     fn test_resolve_key_source_compat_asn_bytes_are_inline() {
         let source = resolve_key_source("FF490001").unwrap();
         assert!(
-            matches!(source, ResolvedKeySource::Bytes(bytes) if bytes == vec![0xFF, 0x49, 0x00, 0x01])
+            matches!(source, SignatureKeySource::Bytes(bytes) if bytes == vec![0xFF, 0x49, 0x00, 0x01])
         );
     }
 
@@ -277,7 +191,7 @@ mod tests {
     fn test_resolve_signature_source_defaults_bare_tokens_to_file() {
         let source = resolve_signature_source("deadbeef").unwrap();
         assert!(
-            matches!(source, ResolvedSignatureSource::File(path) if path == std::path::Path::new("deadbeef"))
+            matches!(source, SignatureBytesSource::File(path) if path == std::path::Path::new("deadbeef"))
         );
     }
 
@@ -285,15 +199,13 @@ mod tests {
     fn test_resolve_signature_source_windows_absolute_path_is_file() {
         let source = resolve_signature_source(r"D:\temp\sig.bin").unwrap();
         assert!(
-            matches!(source, ResolvedSignatureSource::File(path) if path == std::path::Path::new(r"D:\temp\sig.bin"))
+            matches!(source, SignatureBytesSource::File(path) if path == std::path::Path::new(r"D:\temp\sig.bin"))
         );
     }
 
     #[test]
     fn test_resolve_signature_source_explicit_hex_is_inline() {
         let source = resolve_signature_source("0xA1B2").unwrap();
-        assert!(
-            matches!(source, ResolvedSignatureSource::Bytes(bytes) if bytes == vec![0xA1, 0xB2])
-        );
+        assert!(matches!(source, SignatureBytesSource::Bytes(bytes) if bytes == vec![0xA1, 0xB2]));
     }
 }

@@ -123,6 +123,26 @@ impl HexFile {
         Ok(())
     }
 
+    /// Fill the gaps in each range with pseudo-random bytes. The bytes depend only on
+    /// `seed` and the range, so a fixed seed reproduces the same image.
+    pub fn fill_random(&mut self, ranges: &[AddressRange], seed: u64) -> Result<(), OpsError> {
+        for &range in ranges {
+            let len = materialized_len(range)?;
+            let mut state = seed ^ (u64::from(range.start()) << 32) ^ range.length();
+            if state == 0 {
+                state = 0x9E37_79B9_7F4A_7C15;
+            }
+            let data = (0..len)
+                .map(|_| {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    (state >> 32) as u8
+                })
+                .collect();
+            self.prepend_segment(Segment::new(range.start(), data)?);
+        }
+        Ok(())
+    }
+
     /// Replace all data with one contiguous segment from first to last byte, filling
     /// gaps with `fill_byte` (last-wins on overlap). Errors if the span exceeds `limit`.
     pub fn fill_gaps(&mut self, fill_byte: u8, limit: u64) -> Result<(), OpsError> {

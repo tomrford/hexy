@@ -19,6 +19,7 @@ Hexy has three public surfaces:
 - filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, address scaling, banked mapping, and remap operations
 - checksum calculation and writeback through `ChecksumOptions` and a `Placement`
 - signature signing and verification primitives
+- `Pipeline`, the HexView stage order with typed parameters per stage, which the compat CLI and `hexy-py` both drive
 
 ### `hexy-compat`
 
@@ -40,9 +41,9 @@ Hexy has three public surfaces:
 - `HexFile`, `Segment`, and `AddressRange`
 - binary, Intel HEX, 16-bit Intel HEX import, S-Record, HEX ASCII, auto-detected file input, in-memory serializers, and file writers for binary, Intel HEX, S-Record, and HEX ASCII
 - segment inspection, sparse reads, contiguous byte export, direct byte writes, normalization, append/prepend segment operations, filter, cut, fill, gap fill, merge, offset, align, split, byte swap, dsPIC transforms, remap, and S08/S12/S12X mapping
-- `Pipeline`, which applies operations in hexy CLI compatibility order
+- `Pipeline`, which applies stages in hexy CLI order, including checksum calculation and writeback
 
-`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksum calculation/writeback, signing, verification, C-code export, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
+`hexy-py` does not expose the full `hexy-core` surface. Missing Python bindings include checksums outside `Pipeline`, signing, verification, C-code export, Ford/Porsche/separate-binary exporters, address scaling/unscaling, direct banked-map configuration, and the Rust option/source types that back those operations.
 
 ## HexView Compatibility Limits
 
