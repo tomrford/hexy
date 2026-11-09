@@ -1,5 +1,6 @@
 use super::error::CliError;
 use super::types::{DataProcessingParams, SignatureVerifyParams};
+use hexy_core::signature::decode_signature_text;
 use hexy_core::{
     SignatureBytesSource, SignatureKeySource, SignatureMethod, SignatureSignOptions,
     SignatureVerifyOptions,
@@ -110,7 +111,10 @@ fn resolve_signature_source(raw: &str) -> Result<SignatureBytesSource, CliError>
     {
         return Ok(SignatureBytesSource::Bytes(bytes));
     }
-    Ok(SignatureBytesSource::File(PathBuf::from(raw)))
+    let content = std::fs::read(raw).map_err(|e| CliError::Other(format!("{raw}: {e}")))?;
+    Ok(SignatureBytesSource::Bytes(
+        decode_signature_text(&content).unwrap_or(content),
+    ))
 }
 
 /// Core signing options for a supported `/DP` method.
@@ -140,7 +144,10 @@ pub(super) fn verify_options(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_explicit_hex_bytes, resolve_key_source, resolve_signature_source};
+    use super::{
+        decode_signature_text, parse_explicit_hex_bytes, resolve_key_source,
+        resolve_signature_source,
+    };
     use hexy_core::{SignatureBytesSource, SignatureKeySource};
 
     #[test]
@@ -188,19 +195,13 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_signature_source_defaults_bare_tokens_to_file() {
-        let source = resolve_signature_source("deadbeef").unwrap();
-        assert!(
-            matches!(source, SignatureBytesSource::File(path) if path == std::path::Path::new("deadbeef"))
+    fn test_decode_signature_text_reads_dp_outfiles_only() {
+        assert_eq!(
+            decode_signature_text(b"0xAD ,0x4C ,0x0F"),
+            Some(vec![0xAD, 0x4C, 0x0F])
         );
-    }
-
-    #[test]
-    fn test_resolve_signature_source_windows_absolute_path_is_file() {
-        let source = resolve_signature_source(r"D:\temp\sig.bin").unwrap();
-        assert!(
-            matches!(source, SignatureBytesSource::File(path) if path == std::path::Path::new(r"D:\temp\sig.bin"))
-        );
+        assert_eq!(decode_signature_text(b"0xAD4C"), None);
+        assert_eq!(decode_signature_text(&[0x30, 0x78, 0xFF]), None);
     }
 
     #[test]

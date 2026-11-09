@@ -46,10 +46,10 @@ SPKI or PKCS #1 PEM or DER. Ed25519 private keys use PKCS #8 PEM or DER, and
 Ed25519 public keys use SPKI PEM or DER. Public keys may also come from PEM or
 DER X.509 certificates.
 
-The signature payload is the data from normalized segments, concatenated in
-address order without gap bytes. When `with_metadata` is `true`, the payload is
-prefixed with the minimum address and data length as two big-endian `u32`
-values.
+The signature payload is the data of each block (`HexFile::blocks`),
+concatenated in address order without gap bytes. When `with_metadata` is
+`true`, each block's data is preceded by its start address and length as two
+big-endian `u32` values, as HexView 1.15.2 hashes them.
 
 ## Compat mapping
 
@@ -77,7 +77,13 @@ Compat classifies key input as follows:
 Compat classifies signature input as inline bytes when it is an even-length
 hexadecimal value prefixed with `0x`, or when removing byte separators (space,
 tab, `:`, `-`, or `_`) leaves an even-length hexadecimal value. Any other value
-is a file path, including an unprefixed value such as `deadbeef`.
+is a file path, including an unprefixed value such as `deadbeef`. A signature
+file holding `/DP` outfile text is decoded; any other file is raw signature
+bytes. The file is read when the verify stage runs, so it can be the outfile of
+a `/DP` in the same command.
+
+A `/DP` outfile holds the signature as HexView writes it: `0xAA ,0xBB ,...` on
+one line, without a line ending.
 
 After classification, compat constructs `SignatureSignOptions` or
 `SignatureVerifyOptions` and sets them as the `sign` or `verify` stage of the

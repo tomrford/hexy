@@ -2,7 +2,7 @@
 
 use hexy_core::{
     AddressRange, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, Fill, FillData,
-    HexFile, Merge, MergeMode, MergeOptions, Pipeline, Segment,
+    HexFile, Merge, MergeMode, MergeOptions, Pipeline, Segment, SwapMode,
 };
 
 /// Bytes `(seed + 7 * i) & 0xFF`, the harness fixture pattern.
@@ -92,4 +92,72 @@ fn test_random_fill_is_seeded_and_fills_only_gaps() {
     assert_ne!(first, run(2));
     assert_eq!(first.read_bytes_contiguous(0x1004, 4).unwrap(), pat(4, 1));
     assert_eq!(first.total_bytes(), 0x10);
+}
+
+#[test]
+fn test_unconfigured_stages_keep_split_blocks() {
+    let mut file = HexFile::with_segments(vec![Segment::new(0x1000, vec![0xAA; 0x200]).unwrap()]);
+    file.split(0x100);
+    let pipeline = Pipeline {
+        remove_small_blocks: Some(0x101),
+        ..Default::default()
+    };
+    pipeline.run(&mut file).unwrap();
+    assert!(file.is_empty());
+}
+
+#[test]
+fn test_large_dword_swap_is_shared_by_direct_operations_and_pipeline() {
+    for (length, expected_prefix, expected_sum) in [
+        (
+            0x100_0000,
+            [3, 2, 1, 0, 7, 6, 5, 4, 7, 6, 5, 4, 7, 6, 5, 4],
+            [0xFF, 0xF0],
+        ),
+        (
+            0xFF_FFFC,
+            [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12],
+            [0xFF, 0xCA],
+        ),
+    ] {
+        let source = HexFile::with_segments(vec![
+            Segment::new(0, (0..length).map(|i| (i % 16) as u8).collect()).unwrap(),
+        ]);
+        let mut direct = source.clone();
+        direct.swap_bytes(SwapMode::DWord);
+
+        let mut staged = source;
+        let output = Pipeline {
+            swap_dword: true,
+            checksums: vec![ChecksumStage {
+                options: ChecksumOptions::default(),
+                placement: None,
+            }],
+            ..Default::default()
+        }
+        .run(&mut staged)
+        .unwrap();
+
+        assert_eq!(&direct.segments()[0].data()[..16], &expected_prefix);
+        assert_eq!(&staged.segments()[0].data()[..16], &expected_prefix);
+        assert_eq!(output.checksums, vec![expected_sum.to_vec()]);
+    }
+}
+
+#[test]
+fn test_large_dword_swap_resolves_overlaps_but_keeps_split_blocks() {
+    let mut overlap = HexFile::with_segments(vec![
+        Segment::new(0, vec![0x11; 0x90_0000]).unwrap(),
+        Segment::new(0x70_0000, vec![0x22; 0x90_0000]).unwrap(),
+    ]);
+    overlap.swap_bytes(SwapMode::DWord);
+    assert_eq!(overlap.read_byte(0xFF_FFFF), Some(0x11));
+
+    let mut split = HexFile::with_segments(vec![
+        Segment::new(0, vec![0x11; 0x80_0000]).unwrap(),
+        Segment::new(0x80_0000, vec![0x22; 0x80_0000]).unwrap(),
+    ]);
+    split.swap_bytes(SwapMode::DWord);
+    assert_eq!(split.read_byte(0xFF_FFFF), Some(0x22));
+    assert_eq!(split.blocks().len(), 2);
 }

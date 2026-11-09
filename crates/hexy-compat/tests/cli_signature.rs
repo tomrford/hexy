@@ -7,7 +7,10 @@ use ed25519_dalek::SigningKey as EdSigningKey;
 use ed25519_dalek::pkcs8::{
     EncodePrivateKey as EdEncodePrivateKey, EncodePublicKey as EdEncodePublicKey,
 };
-use hexy_core::parse_intel_hex;
+use hexy_core::{
+    HexFile, Pipeline, Segment, SignatureBytesSource, SignatureKeySource, SignatureMethod,
+    SignatureVerifyOptions, parse_intel_hex,
+};
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 
@@ -56,8 +59,8 @@ fn test_cli_dp_sv_rsa_pkcs1_success() {
     let output = run_hexy(&args);
     assert_success(&output);
 
-    let signature = std::fs::read(&sig_path).unwrap();
-    assert_eq!(signature.len(), 256);
+    let signature = std::fs::read_to_string(&sig_path).unwrap();
+    assert_eq!(signature.split(" ,").count(), 256);
 }
 
 #[test]
@@ -98,8 +101,25 @@ fn test_cli_dp_sv_ed25519_success() {
     let output = run_hexy(&args);
     assert_success(&output);
 
-    let signature = std::fs::read(&sig_path).unwrap();
-    assert_eq!(signature.len(), 64);
+    let signature = std::fs::read_to_string(&sig_path).unwrap();
+    assert_eq!(signature.split(" ,").count(), 64);
+
+    let mut image =
+        HexFile::with_segments(vec![Segment::new(0x1000, b"ed25519".to_vec()).unwrap()]);
+    let verify = SignatureVerifyOptions {
+        method: SignatureMethod::Ed25519Ph {
+            with_metadata: false,
+        },
+        key_source: SignatureKeySource::File(public_path),
+        signature_source: SignatureBytesSource::File(sig_path),
+    };
+    image.verify_signature(&verify).unwrap();
+    Pipeline {
+        verify: Some(verify),
+        ..Default::default()
+    }
+    .run(&mut image)
+    .unwrap();
 }
 
 #[test]
@@ -175,8 +195,8 @@ fn assert_dp_placement_empty_input_noop(target: &str) {
     let output = run_hexy(&args);
     assert_success(&output);
 
-    let signature = std::fs::read(&sig_path).unwrap();
-    assert_eq!(signature.len(), 64);
+    let signature = std::fs::read_to_string(&sig_path).unwrap();
+    assert_eq!(signature.split(" ,").count(), 64);
 
     let encoded = std::fs::read(&out_hex).unwrap();
     let parsed = parse_intel_hex(&encoded).unwrap();

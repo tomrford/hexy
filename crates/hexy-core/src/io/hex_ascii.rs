@@ -3,15 +3,17 @@ use crate::{HexFile, Segment};
 
 #[derive(Debug, Clone)]
 pub struct HexAsciiWriteOptions {
+    /// Bytes per line; 0 writes one line.
     pub line_length: usize,
-    pub separator: Option<String>,
+    /// Written after every byte that does not end a line.
+    pub separator: String,
 }
 
 impl Default for HexAsciiWriteOptions {
     fn default() -> Self {
         Self {
             line_length: 16,
-            separator: None,
+            separator: String::new(),
         }
     }
 }
@@ -72,31 +74,23 @@ pub fn parse_hex_ascii(data: &[u8], base_address: u32) -> Result<HexFile, ParseE
 }
 
 /// Write the HexFile to HEX ASCII bytes. CLI: /XA.
+///
+/// Every byte is followed by CRLF when it completes a line and by the separator
+/// otherwise, the last byte included, as HexView writes it.
 pub fn write_hex_ascii(hexfile: &HexFile, options: &HexAsciiWriteOptions) -> Vec<u8> {
-    let segments = hexfile.normalized().into_segments();
-
+    let normalized = hexfile.normalized();
     let mut out = Vec::new();
-    let mut line_len = options.line_length;
-    if line_len == 0 {
-        line_len = usize::MAX;
-    }
-
-    let sep = options.separator.as_deref().unwrap_or("");
-    let mut current_count = 0usize;
-
-    for segment in segments {
-        for &byte in &segment.data {
-            if current_count == line_len {
-                push_crlf(&mut out);
-                current_count = 0;
-            } else if current_count > 0 && !sep.is_empty() {
-                out.extend_from_slice(sep.as_bytes());
-            }
-            push_hex_byte(&mut out, byte);
-            current_count += 1;
+    let mut column = 0;
+    for &byte in normalized.segments().iter().flat_map(|s| &s.data) {
+        push_hex_byte(&mut out, byte);
+        column += 1;
+        if column == options.line_length {
+            push_crlf(&mut out);
+            column = 0;
+        } else {
+            out.extend_from_slice(options.separator.as_bytes());
         }
     }
-
     out
 }
 
@@ -118,7 +112,7 @@ mod tests {
             HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE]).unwrap()]);
         let options = HexAsciiWriteOptions {
             line_length: 2,
-            separator: Some(", ".to_owned()),
+            separator: ", ".to_owned(),
         };
         let out = write_hex_ascii(&hexfile, &options);
         let parsed = parse_hex_ascii(&out, 0x1000).unwrap();
@@ -127,16 +121,20 @@ mod tests {
         assert_eq!(parsed.segments()[0].data, vec![0xDE, 0xAD, 0xBE]);
     }
 
+    /// HexView 1.15.2 `/XA:8:,` and `/XA:16:,` on eight bytes.
     #[test]
-    fn test_hex_ascii_omits_final_newline() {
-        let hexfile =
-            HexFile::with_segments(vec![Segment::new(0x1000, vec![0xDE, 0xAD, 0xBE]).unwrap()]);
-        let options = HexAsciiWriteOptions {
-            line_length: 2,
-            separator: None,
+    fn test_hex_ascii_ends_with_line_end_or_separator() {
+        let data = vec![0x01, 0x08, 0x0F, 0x16, 0x1D, 0x24, 0x2B, 0x32];
+        let hexfile = HexFile::with_segments(vec![Segment::new(0x1000, data).unwrap()]);
+        let write = |line_length| {
+            let options = HexAsciiWriteOptions {
+                line_length,
+                separator: ",".to_owned(),
+            };
+            write_hex_ascii(&hexfile, &options)
         };
-
-        assert_eq!(write_hex_ascii(&hexfile, &options), b"DEAD\r\nBE");
+        assert_eq!(write(8), b"01,08,0F,16,1D,24,2B,32\r\n");
+        assert_eq!(write(16), b"01,08,0F,16,1D,24,2B,32,");
     }
 
     #[test]

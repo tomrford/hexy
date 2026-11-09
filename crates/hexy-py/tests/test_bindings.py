@@ -1,6 +1,20 @@
 import hexy
 
 
+def test_zero_line_length_srec_exports_only_termination(tmp_path):
+    source = hexy.HexFile.from_binary(b"\xaa", 0xFFFF_FFFF)
+    for record_type, expected in [
+        ("auto", b"S9030000FC\r\n"),
+        ("s1", b"S9030000FC\r\n"),
+        ("s2", b"S804000000FB\r\n"),
+        ("s3", b"S70500000000FA\r\n"),
+    ]:
+        assert source.to_srec(bytes_per_line=0, record_type=record_type) == expected
+        path = tmp_path / f"{record_type}.s19"
+        source.write_srec(path, bytes_per_line=0, record_type=record_type)
+        assert path.read_bytes() == expected
+
+
 def test_file_autodetect_and_write_helpers(tmp_path):
     source = hexy.HexFile.from_binary(b"\xde\xad\xbe\xef", 0x1000)
     intel_path = tmp_path / "firmware.hex"
@@ -218,6 +232,35 @@ def test_pipeline_places_checksums_in_order():
     assert result.checksums == [b"\x00\x0a", b"\x14\x00"]
     assert result.hexfile.read(0x1004, 2) == b"\x00\x0a"
     assert result.hexfile.read(0x2000, 2) == b"\x14\x00"
+
+
+def test_large_dword_swap_matches_direct_and_pipeline_results():
+    data = bytes(range(16)) * (0x100_0000 // 16)
+    direct = hexy.HexFile.from_binary(data)
+    direct.swap("dword")
+    pipeline = hexy.Pipeline()
+    pipeline.swap("dword")
+    pipeline.checksum(0)
+
+    result = pipeline.apply(hexy.HexFile.from_binary(data))
+
+    expected = b"\x03\x02\x01\x00" + b"\x07\x06\x05\x04" * 3
+    assert direct.read(0, 16) == expected
+    assert result.hexfile.read(0, 16) == expected
+    assert result.checksums == [b"\xff\xf0"]
+
+
+def test_pipeline_removes_split_pieces_and_places_constant():
+    # HexView 1.15.2: /SB:0x100 /RB=0x101 removes every piece; /CS16 writes a constant.
+    pipeline = hexy.Pipeline()
+    pipeline.remove_small_blocks(0x101)
+    pipeline.split(0x100)
+    pipeline.checksum(16, constant=b"", placement=0x5000)
+
+    result = pipeline.apply(hexy.HexFile.from_binary(bytes(0x300), 0x1000))
+
+    assert result.checksums == [b""]
+    assert [s.start for s in result.hexfile.segments()] == [0x5000]
 
 
 def test_dspic_and_mapping_surfaces_are_available():

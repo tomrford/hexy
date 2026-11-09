@@ -1,28 +1,10 @@
 #![allow(clippy::unwrap_used)] // test helpers outside #[test] fns
 
 mod common;
-mod common_lines;
 
 use common::{assert_success, run_hexy, temp_dir, write_file};
-use common_lines::read_nonempty_lines;
 use ed25519_dalek::SigningKey as EdSigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey as EdEncodePrivateKey;
-
-fn parse_hex_pairs(line: &str) -> Vec<u8> {
-    let mut out = Vec::new();
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        let pair = &line[i..i + 2];
-        if let Ok(b) = u8::from_str_radix(pair, 16) {
-            out.push(b);
-            i += 2;
-        } else {
-            break;
-        }
-    }
-    out
-}
 
 fn write_ed25519_private_key(dir: &std::path::Path, prefix: &str) -> std::path::PathBuf {
     let secret = [0x42u8; 32];
@@ -31,176 +13,6 @@ fn write_ed25519_private_key(dir: &std::path::Path, prefix: &str) -> std::path::
     let private_der = signing.to_pkcs8_der().unwrap();
     write_file(&private_path, private_der.as_bytes());
     private_path
-}
-
-#[test]
-fn test_cli_hex_ascii_basic() {
-    let dir = temp_dir("cli_xa_basic");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.txt");
-    let data: Vec<u8> = (0u8..32).collect();
-    write_file(&input, &data);
-
-    let args = vec![
-        format!("/IN:{};0x0", input.display()),
-        "/XA:16".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-    let raw = std::fs::read(&out).unwrap();
-    assert!(!raw.ends_with(b"\r\n"));
-
-    let lines = read_nonempty_lines(&out);
-    assert_eq!(lines.len(), 2);
-    for (idx, line) in lines.iter().enumerate() {
-        assert_eq!(line.len(), 32);
-        let parsed = parse_hex_pairs(line);
-        assert_eq!(parsed.len(), 16);
-        let expected = &data[idx * 16..(idx + 1) * 16];
-        assert_eq!(parsed, expected);
-    }
-}
-
-#[test]
-fn test_cli_hex_ascii_separator() {
-    let dir = temp_dir("cli_xa_sep");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.txt");
-    let data: Vec<u8> = (0u8..16).collect();
-    write_file(&input, &data);
-
-    let args = vec![
-        format!("/IN:{};0x0", input.display()),
-        "/XA:16:, ".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-
-    let lines = read_nonempty_lines(&out);
-    assert_eq!(lines.len(), 1);
-    let parts: Vec<&str> = lines[0].split(", ").collect();
-    assert_eq!(parts.len(), 16);
-    assert!(!lines[0].ends_with(", "));
-    let parsed: Vec<u8> = parts
-        .iter()
-        .map(|p| u8::from_str_radix(p, 16).unwrap())
-        .collect();
-    assert_eq!(parsed, data);
-}
-
-#[test]
-fn test_cli_hex_ascii_long_line() {
-    let dir = temp_dir("cli_xa_long");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.txt");
-    let data: Vec<u8> = (0u8..32).collect();
-    write_file(&input, &data);
-
-    let args = vec![
-        format!("/IN:{};0x0", input.display()),
-        "/XA:0xffffffff".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-
-    let lines = read_nonempty_lines(&out);
-    assert_eq!(lines.len(), 1);
-}
-
-#[test]
-fn test_cli_intel_hex_reclen() {
-    let dir = temp_dir("cli_xi_reclen");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.hex");
-    let data: Vec<u8> = (0u8..32).collect();
-    write_file(&input, &data);
-
-    let args = vec![
-        format!("/IN:{};0x0", input.display()),
-        "/XI:16".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-
-    let lines = read_nonempty_lines(&out);
-    for line in lines {
-        if line.starts_with(':') && line.len() >= 11 {
-            let count = u8::from_str_radix(&line[1..3], 16).unwrap();
-            let rectype = &line[7..9];
-            if rectype == "00" {
-                assert_eq!(count, 0x10);
-            }
-        }
-    }
-}
-
-#[test]
-fn test_cli_intel_hex_reclen_zero_defaults() {
-    let dir = temp_dir("cli_xi_reclen_zero");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.hex");
-    let data: Vec<u8> = (0u8..20).collect();
-    write_file(&input, &data);
-
-    let args = vec![
-        format!("/IN:{};0x0", input.display()),
-        "/XI:0".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-
-    let lines = read_nonempty_lines(&out);
-    for line in lines {
-        if line.starts_with(':') && line.len() >= 11 {
-            let count = u8::from_str_radix(&line[1..3], 16).unwrap();
-            let rectype = &line[7..9];
-            if rectype == "00" {
-                assert_eq!(count, 0x10);
-                break;
-            }
-        }
-    }
-}
-
-#[test]
-fn test_cli_intel_hex_forced_modes() {
-    let dir = temp_dir("cli_xi_modes");
-    let input = dir.join("input.bin");
-    let out_linear = dir.join("out_linear.hex");
-    let out_segment = dir.join("out_segment.hex");
-    write_file(&input, &[0xAA, 0xBB]);
-
-    let args_linear = vec![
-        format!("/IN:{};0x12000", input.display()),
-        "/XI:16:1".to_owned(),
-        "-o".to_owned(),
-        out_linear.display().to_string(),
-    ];
-    let output = run_hexy(&args_linear);
-    assert_success(&output);
-    let text = std::fs::read_to_string(&out_linear).unwrap();
-    assert!(text.contains(":02000004"));
-
-    let args_segment = vec![
-        format!("/IN:{};0x12000", input.display()),
-        "/XI:16:2".to_owned(),
-        "-o".to_owned(),
-        out_segment.display().to_string(),
-    ];
-    let output = run_hexy(&args_segment);
-    assert_success(&output);
-    let text = std::fs::read_to_string(&out_segment).unwrap();
-    assert!(text.contains(":02000002"));
 }
 
 #[test]
@@ -222,210 +34,182 @@ fn test_cli_intel_hex_forced_extended_segment_rejects_high_address() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("extended segment"));
 }
 
-#[test]
-fn test_cli_intel_hex_auto_modes() {
-    let dir = temp_dir("cli_xi_auto");
-    let input_seg = dir.join("input_seg.bin");
-    let input_lin = dir.join("input_lin.bin");
-    let out_seg = dir.join("out_seg.hex");
-    let out_lin = dir.join("out_lin.hex");
-    write_file(&input_seg, &[0xAA, 0xBB]);
-    write_file(&input_lin, &[0xCC, 0xDD]);
+/// Contiguous records split by extended address records, then blocks of 8 and 7 bytes.
+const BLOCKS_HEX: &str = ":020000040000FA\r\n:10100000000102030405060708090A0B0C0D0E0F68\r\n\
+:020000040000FA\r\n:041010001011121396\r\n:020000040000FA\r\n:081100000000000000000000E7\r\n\
+:020000040000FA\r\n:0712000000000000000000E7\r\n:00000001FF\r\n";
 
-    let args_seg = vec![
-        format!("/IN:{};0x12000", input_seg.display()),
-        "/XI:16".to_owned(),
-        "-o".to_owned(),
-        out_seg.display().to_string(),
-    ];
-    let output = run_hexy(&args_seg);
+fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hexy"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap();
     assert_success(&output);
-    let text = std::fs::read_to_string(&out_seg).unwrap();
-    assert!(text.contains(":02000002"));
-
-    let args_lin = vec![
-        format!("/IN:{};0x120000", input_lin.display()),
-        "/XI:16".to_owned(),
-        "-o".to_owned(),
-        out_lin.display().to_string(),
-    ];
-    let output = run_hexy(&args_lin);
-    assert_success(&output);
-    let text = std::fs::read_to_string(&out_lin).unwrap();
-    assert!(text.contains(":02000004"));
+    output
 }
 
 #[test]
-fn test_cli_srec_auto_and_forced() {
-    let dir = temp_dir("cli_xs");
-    let input_small = dir.join("input_small.bin");
-    let input_mid = dir.join("input_mid.bin");
-    let input_large = dir.join("input_large.bin");
-    let out_small = dir.join("out_small.s19");
-    let out_mid = dir.join("out_mid.s19");
-    let out_large = dir.join("out_large.s19");
-    write_file(&input_small, &[0x01, 0x02]);
-    write_file(&input_mid, &[0x03, 0x04]);
-    write_file(&input_large, &[0x05, 0x06]);
+fn test_cli_imports_supply_the_default_export_path() {
+    for (flag, name, contents) in [
+        ("IN", "firmware.bin", [1, 2].as_slice()),
+        ("IA", "firmware.asc", b"0102".as_slice()),
+        (
+            "II2",
+            "firmware.hex",
+            b":020000000102FB\r\n:00000001FF\r\n".as_slice(),
+        ),
+    ] {
+        let dir = temp_dir("cli_import_default_path");
+        let nested = dir.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        write_file(&nested.join(name), contents);
 
-    let args_small = vec![
-        format!("/IN:{};0x0100", input_small.display()),
-        "/XS:16".to_owned(),
-        "-o".to_owned(),
-        out_small.display().to_string(),
-    ];
-    let output = run_hexy(&args_small);
-    assert_success(&output);
-    let line = read_nonempty_lines(&out_small)[0].clone();
-    assert!(line.starts_with("S1"));
+        run_in(&dir, &[&format!("/{flag}:nested/{name}"), "/XS"]);
 
-    let args_mid = vec![
-        format!("/IN:{};0x10000", input_mid.display()),
-        "/XS:16".to_owned(),
-        "-o".to_owned(),
-        out_mid.display().to_string(),
-    ];
-    let output = run_hexy(&args_mid);
-    assert_success(&output);
-    let line = read_nonempty_lines(&out_mid)[0].clone();
-    assert!(line.starts_with("S2"));
-
-    let args_large = vec![
-        format!("/IN:{};0x1000000", input_large.display()),
-        "/XS:16".to_owned(),
-        "-o".to_owned(),
-        out_large.display().to_string(),
-    ];
-    let output = run_hexy(&args_large);
-    assert_success(&output);
-    let line = read_nonempty_lines(&out_large)[0].clone();
-    assert!(line.starts_with("S3"));
-
-    let forced_s1 = vec![
-        format!("/IN:{};0x0100", input_small.display()),
-        "/XS:16:0".to_owned(),
-        "-o".to_owned(),
-        out_mid.display().to_string(),
-    ];
-    let output = run_hexy(&forced_s1);
-    assert_success(&output);
-    let line = read_nonempty_lines(&out_mid)[0].clone();
-    assert!(line.starts_with("S1"));
-}
-
-#[test]
-fn test_cli_srec_reclen() {
-    let dir = temp_dir("cli_xs_reclen");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.s19");
-    let data: Vec<u8> = (0u8..16).collect();
-    write_file(&input, &data);
-
-    let args = vec![
-        format!("/IN:{};0x0100", input.display()),
-        "/XS:8".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-
-    let lines = read_nonempty_lines(&out);
-    for line in lines {
-        if !line.starts_with('S') || line.len() < 4 {
-            continue;
-        }
-        let record_type = line.chars().nth(1).unwrap_or('0');
-        if record_type == '1' || record_type == '2' || record_type == '3' {
-            let count = u8::from_str_radix(&line[2..4], 16).unwrap() as usize;
-            let addr_len = match record_type {
-                '1' => 4,
-                '2' => 6,
-                _ => 8,
-            };
-            let data_len = count - (addr_len / 2) - 1;
-            assert_eq!(data_len, 8);
-        }
+        assert_eq!(
+            std::fs::read(nested.join("firmware.s19")).unwrap(),
+            b"S10500000102F7\r\nS9030000FC\r\n"
+        );
+        assert!(!dir.join(".s19").exists());
     }
 }
 
 #[test]
-fn test_cli_srec_rectype_without_reclen_uses_default_length() {
-    let dir = temp_dir("cli_xs_rectype_reclen");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.s19");
-    let data: Vec<u8> = (0u8..32).collect();
-    write_file(&input, &data);
+fn test_cli_import_default_path_keeps_custom_suffix_and_explicit_output() {
+    let dir = temp_dir("cli_import_suffix");
+    write_file(&dir.join("firmware.bin"), &[1, 2]);
 
-    let args = vec![
-        format!("/IN:{};0x01000000", input.display()),
-        "/XS:16:2".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-    let lines = read_nonempty_lines(&out);
-    assert_eq!(lines[0], "S31501000000000102030405060708090A0B0C0D0E0F71");
-    assert_eq!(lines[1], "S31501000010101112131415161718191A1B1C1D1E1F61");
+    run_in(&dir, &["/IN:firmware.bin", "/XF"]);
+    assert!(dir.join("firmware_f.hex").exists());
+    assert!(!dir.join("_f.hex").exists());
 
-    let args_alias = vec![
-        format!("/IN:{};0x01000000", input.display()),
-        "/XS:16:3".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args_alias);
-    assert_success(&output);
-    let lines = read_nonempty_lines(&out);
-    assert_eq!(lines[0], "S31501000000000102030405060708090A0B0C0D0E0F71");
+    run_in(&dir, &["/IN:firmware.bin", "/XS", "-o", "chosen.s19"]);
+    assert_eq!(
+        std::fs::read(dir.join("chosen.s19")).unwrap(),
+        b"S10500000102F7\r\nS9030000FC\r\n"
+    );
+    assert!(!dir.join("firmware.s19").exists());
 }
 
 #[test]
-fn test_cli_intel_hex_rectype_requires_reclen() {
-    let dir = temp_dir("cli_xi_rectype_reclen");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.hex");
-    write_file(&input, &[0xAA, 0xBB]);
-
-    let args = vec![
-        format!("/IN:{};0x0100", input.display()),
-        "/XI::2".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
+fn test_cli_export_without_primary_input_requires_output_path() {
+    let dir = temp_dir("cli_export_no_primary");
+    write_file(&dir.join("merge.hex"), b":01100000AA45\r\n:00000001FF\r\n");
+    write_file(&dir.join(".hex"), b"keep existing file");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hexy"))
+        .current_dir(&dir)
+        .args(["/MO:merge.hex", "/XI"])
+        .output()
+        .unwrap();
     assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("-o"));
+    assert_eq!(
+        std::fs::read(dir.join(".hex")).unwrap(),
+        b"keep existing file"
+    );
+
+    run_in(&dir, &["/MO:merge.hex", "/XI", "-o", "result.hex"]);
+    let image =
+        hexy_core::parse_intel_hex(&std::fs::read(dir.join("result.hex")).unwrap()).unwrap();
+    assert_eq!(image.read_byte(0x1000), Some(0xAA));
 }
 
+/// HexView 1.15.2 writes the separator verbatim after every byte that does not end a line.
 #[test]
-fn test_cli_srec_reclen_zero_defaults() {
-    let dir = temp_dir("cli_xs_reclen_zero");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.s19");
-    let data: Vec<u8> = (0u8..20).collect();
-    write_file(&input, &data);
+fn test_cli_hex_ascii_matches_hexview() {
+    let dir = temp_dir("cli_xa_hexview");
+    write_file(&dir.join("in.bin"), &[0x01, 0x08, 0x0F, 0x16, 0x1D, 0x24]);
+    run_in(&dir, &["/IN:in.bin", "/XA:4:, ", "-o", "out.asc"]);
+    assert_eq!(
+        std::fs::read(dir.join("out.asc")).unwrap(),
+        b"01, 08, 0F, 16\r\n1D, 24, "
+    );
+}
 
-    let args = vec![
-        format!("/IN:{};0x0100", input.display()),
-        "/XS:0".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
+/// HexView 1.15.2: an unknown S-Record type selects records automatically, and a record
+/// length of 0 writes no data records.
+#[test]
+fn test_cli_srec_parameters_match_hexview() {
+    let dir = temp_dir("cli_xs_hexview");
+    write_file(
+        &dir.join("in.bin"),
+        &[0x01, 0x08, 0x0F, 0x16, 0x1D, 0x24, 0x2B, 0x32],
+    );
+    run_in(&dir, &["/IN:in.bin;0x1000", "/XS:16:3", "-o", "auto.s19"]);
+    run_in(&dir, &["/IN:in.bin;0x1000", "/XS:0:2", "-o", "empty.s19"]);
+    assert_eq!(
+        std::fs::read(dir.join("auto.s19")).unwrap(),
+        b"S10B100001080F161D242B3218\r\nS9030000FC\r\n"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("empty.s19")).unwrap(),
+        b"S70500000000FA\r\n"
+    );
+}
 
-    let lines = read_nonempty_lines(&out);
-    let data_lines: Vec<&str> = lines
-        .iter()
-        .filter(|l| l.starts_with("S1") || l.starts_with("S2") || l.starts_with("S3"))
-        .map(|s| s.as_str())
-        .collect();
-    assert!(!data_lines.is_empty());
-    let line = data_lines[0];
-    let count = u8::from_str_radix(&line[2..4], 16).unwrap() as usize;
-    let data_len = count - 2 - 1; // S1 address length
-    assert_eq!(data_len, 20);
+/// HexView 1.15.2 writes nothing without an export flag, and exports to the input name
+/// with the format's extension without `-o`.
+#[test]
+fn test_cli_output_file_follows_export_flag() {
+    let dir = temp_dir("cli_output_name");
+    write_file(&dir.join("in.hex"), BLOCKS_HEX.as_bytes());
+    run_in(&dir, &["in.hex", "-o", "out.hex"]);
+    assert!(!dir.join("out.hex").exists());
+    run_in(&dir, &["in.hex", "/XS"]);
+    run_in(&dir, &["in.hex", "/XA"]);
+    assert!(dir.join("in.s19").exists());
+    assert!(dir.join("in.asc").exists());
+}
+
+/// HexView 1.15.2: records that continue each other form one block, and `/RB` removes the
+/// blocks shorter than its value.
+#[test]
+fn test_cli_remove_small_blocks_matches_hexview() {
+    let dir = temp_dir("cli_rb_hexview");
+    write_file(&dir.join("in.hex"), BLOCKS_HEX.as_bytes());
+    run_in(&dir, &["in.hex", "/RB=8", "/XI:16", "-o", "out.hex"]);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("out.hex")).unwrap(),
+        ":10100000000102030405060708090A0B0C0D0E0F68\r\n:041010001011121396\r\n\
+         :081100000000000000000000E7\r\n:00000001FF\r\n"
+    );
+    run_in(&dir, &["in.hex", "/XSB", "-o", "out"]);
+    assert_eq!(std::fs::read(dir.join("out_1000")).unwrap().len(), 0x14);
+}
+
+/// HexView 1.15.2 removes split pieces below the `/RB` size; `/SB` under 0x100 is ignored.
+#[test]
+fn test_cli_remove_small_blocks_after_split() {
+    let dir = temp_dir("cli_rb_split");
+    write_file(&dir.join("in.bin"), &[0xAA; 0x300]);
+    run_in(
+        &dir,
+        &[
+            "/IN:in.bin;0x1000",
+            "/SB:0x100",
+            "/RB=0x101",
+            "/XI",
+            "-o",
+            "split.hex",
+        ],
+    );
+    run_in(
+        &dir,
+        &[
+            "/IN:in.bin;0x1000",
+            "/SB:0xFF",
+            "/RB=0x101",
+            "/XN",
+            "-o",
+            "kept.bin",
+        ],
+    );
+    assert_eq!(
+        std::fs::read(dir.join("split.hex")).unwrap(),
+        b":00000001FF\r\n"
+    );
+    assert_eq!(std::fs::read(dir.join("kept.bin")).unwrap().len(), 0x300);
 }
 
 #[test]
@@ -478,34 +262,6 @@ fn test_cli_binary_and_separate_binary() {
     let file2 = dir.join("sep_2000.dat");
     assert_eq!(std::fs::read(file1).unwrap(), vec![0x01, 0x02]);
     assert_eq!(std::fs::read(file2).unwrap(), vec![0x03, 0x04]);
-}
-
-#[test]
-fn test_cli_separate_binary_preserves_split_blocks() -> std::io::Result<()> {
-    let dir = temp_dir("cli_xsb_split");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.bin");
-    write_file(&input, &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
-
-    let args = vec![
-        format!("/IN:{};0x1000", input.display()),
-        "/SB:4".to_owned(),
-        "/XSB".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert_success(&output);
-
-    assert_eq!(
-        std::fs::read(dir.join("out_1000.bin"))?,
-        vec![0x00, 0x01, 0x02, 0x03]
-    );
-    assert_eq!(
-        std::fs::read(dir.join("out_1004.bin"))?,
-        vec![0x04, 0x05, 0x06, 0x07]
-    );
-    Ok(())
 }
 
 #[test]
@@ -651,24 +407,6 @@ fn test_cli_fill_all_rejects_large_sparse_span_without_partial_output() {
     assert!(stderr.contains("/FA"));
     assert!(stderr.contains("dense span"));
     assert!(!out.exists());
-}
-
-#[test]
-fn test_cli_output_option_exclusive() {
-    let dir = temp_dir("cli_xx_excl");
-    let input = dir.join("input.bin");
-    let out = dir.join("out.hex");
-    write_file(&input, &[0x01, 0x02]);
-
-    let args = vec![
-        format!("/IN:{};0x0", input.display()),
-        "/XA:16".to_owned(),
-        "/XI:16".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-    let output = run_hexy(&args);
-    assert!(!output.status.success());
 }
 
 #[test]

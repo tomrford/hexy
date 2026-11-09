@@ -63,10 +63,12 @@ Compat flags execute in a fixed pipeline order, not in argument order. Steps 2-1
 5. Cut (`/CR`)
 6. Merge (`/MT` or `/MO`)
 7. Address range filter (`/AR`)
-8. Collapse (`/FA`), align (`/AD`, `/AL`, `/AF`), split (`/SB`), swap (`/SWAPWORD`, `/SWAPLONG`)
+8. Collapse (`/FA`), align (`/AD`, `/AL`, `/AF`), split (`/SB`), swap (`/SWAPWORD`, `/SWAPLONG`), remove small blocks (`/RB`)
 9. Checksum (`/CS`, `/CSR`, `/CSM`, `/CSMR`)
 10. Signing (`/DP`) and verification (`/SV`)
-11. Export (`/XI`, `/XS`, `/XN`, `/XSB`, `/XA`, `/XC`, `/XF`, `/XP`) via `-o`
+11. Export (`/XI`, `/XS`, `/XN`, `/XSB`, `/XA`, `/XC`, `/XF`, `/XP`) to `-o`, or to the input name with the format's extension; without an export flag nothing is written
+
+The pipeline keeps the image as HexView keeps its blocks: adjacent data forms one block after every stage that changes data, while `/SB` pieces stay separate blocks until a checksum or signature is placed. `/RB`, `/XSB` and the `/DP` metadata methods work on these blocks (`HexFile::blocks`).
 
 See [cli-reference.md](skill/hexy-compat/references/cli-reference.md) for flag syntax and examples.
 

@@ -1,12 +1,14 @@
 mod checksum;
 mod error;
 mod filter;
+mod map;
 mod transform;
 
 pub use checksum::{ChecksumAlgorithm, ChecksumOptions, ForcedRange};
 pub use error::OpsError;
 pub use filter::{DEFAULT_DENSE_SPAN_LIMIT, FillOptions, MergeMode, MergeOptions};
-pub use transform::{AlignOptions, BankedMapOptions, RemapOptions, SwapMode};
+pub use map::{BankedMapOptions, MapCollision, RemapOptions};
+pub use transform::{AlignOptions, SwapMode};
 
 use crate::AddressRange;
 

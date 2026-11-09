@@ -2,7 +2,7 @@
 
 Compact reference for the cleanroom `hexy` command-line surface for non-proprietary slash-style workflows. Organize commands by execution order, because order controls behavior.
 
-Use binary-form commands such as `hexy input.hex ... -o output.hex`. Keep one output format per command.
+Use binary-form commands such as `hexy input.hex ... -o output.hex`.
 
 The external compatibility target also supports additional proprietary or OEM-specific formats and DLL-backed features that are not covered here.
 
@@ -12,8 +12,10 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Use slash flags for operations: `/FLAG`, `/FLAG:value`, or `/FLAG=value`.
 - Use `-o <file>` for the output path.
 - Use `--` before an absolute Unix path if it would otherwise look like an option.
-- Expect numeric values to accept decimal, `0x` hex, trailing `h` hex, `0b` or trailing `b` binary, and `_` or `.` separators.
-- Expect only one output format flag in a command.
+- Expect numeric values to accept decimal, `0x` hex, trailing `h` hex, `0b` or trailing `b` binary, and `_` or `.` separators. `/XI`, `/XS`, `/XA`, `/SB` and `/RB` values follow HexView instead: `0x` hex or decimal digits up to the first other character, and no digits reads as 0.
+- If several output format flags are given, the last one wins.
+- Ranges that are empty or reach past `0xFFFFFFFF` are skipped and a reversed range ends a range list, as in HexView; malformed range text is an error.
+- Data is kept as blocks: adjacent data forms one block after every stage that changes data, except that `/SB` pieces stay separate blocks until a checksum or signature is placed. `/RB`, `/XSB` and `/DP` metadata work on blocks.
 
 ## Execution order
 
@@ -34,10 +36,11 @@ The external compatibility target also supports additional proprietary or OEM-sp
 13. Align addresses or length with `/AD`, `/AL`, `/AF`, `/AE`.
 14. Split blocks with `/SB`.
 15. Swap bytes with `/SWAPWORD` or `/SWAPLONG`.
-16. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
-17. Apply supported signing with `/DP`.
-18. Apply supported signature verification with `/SV`.
-19. Export with `/X...` and `-o`.
+16. Remove small blocks with `/RB`.
+17. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
+18. Apply supported signing with `/DP`.
+19. Apply supported signature verification with `/SV`.
+20. Export with `/X...` and `-o`.
 
 ## Input and runtime
 
@@ -61,6 +64,9 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Accept compatibility threshold flags for compatibility.
 - Parse the values, but treat them as no-op tuning hints in `hexy`.
 
+`/G`, `/M[:license-file]`
+- Accept HexView's disclaimer and license switches; they have no effect in `hexy`.
+
 ## Explicit imports
 
 `/IN:file[;offset]`
@@ -78,7 +84,7 @@ The external compatibility target also supports additional proprietary or OEM-sp
 ## Address mapping
 
 `/S08` or `/S08MAP`
-- Apply the shared S08 banked mapping rules.
+- Map Star08 pages to `0x100000 + page * 0x4000`: `0x0000`, `0x4000` and `0xC000` are pages 0, 1 and 3, and the `0x8000-0xBFFF` window of bank `PP` is page `PP` for banks 0, 2 and 4 to `0x1F`. Banks 1 and 3 stay where they are, and `0x0000-0x3FFF` stays when its data would land on data of the bank 0 window.
 - Use it before later filtering, checksums, or export.
 
 `/S12MAP`
@@ -93,13 +99,15 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Banked remap: within `start-end`, source banks start every `inc` bytes, only the first `size` bytes of each bank are remapped, and output windows are packed contiguously from `linear`.
 - Use it when you need explicit control instead of the built-in S08/S12 rules.
 
+Mapping cuts blocks where windows start and end. When a mapped piece lands on other data, one block is dropped whole: `/S12MAP` keeps the data already there, the other mappings keep the mapped piece. Between two mapped pieces, the one from the lower source address wins, so non-banked pages win over banks.
+
 ## dsPIC transforms
 
-`/CDSPX:range[,target]`
+`/CDSPX:range[;target]`
 - Expand dsPIC words by inserting two zero bytes per two-byte word.
 - Omit `target` to write back in place using the default mapping.
 
-`/CDSPS:range[,target]`
+`/CDSPS:range[;target]`
 - Shrink dsPIC data by keeping the lower two bytes from each four-byte group.
 - Use it to convert expanded storage back to packed words.
 
@@ -129,10 +137,9 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Merge opaquely and overwrite existing bytes on overlap.
 - Do not combine `/MO` and `/MT` in the same command.
 
-`/AR:range`
-- Keep only one address range after earlier edits and merges.
+`/AR:range[:range...]`
+- Keep only the data inside the intersection of the listed ranges; disjoint ranges keep nothing.
 - If `/AR` appears more than once, the last `/AR` wins.
-- A colon in the `/AR` value is not a union; command-line export writes an empty image for that form.
 
 `/L:logfile`
 - Replay supported slash-style log commands from a file.
@@ -162,22 +169,28 @@ The external compatibility target also supports additional proprietary or OEM-sp
 - Treat it as Ford-export metadata, not a general transform by itself.
 
 `/SB:maxblocksize`
-- Split large regions into chunks no larger than `maxblocksize`.
-- Use it before export when downstream consumers require bounded block sizes.
+- Split each block into pieces no larger than `maxblocksize`; the pieces stay separate blocks.
+- Values below `0x100` are ignored with a warning, as in HexView.
+
+`/RB=size`
+- Remove blocks shorter than `size` bytes, after `/SB` and the swaps. Only `=` is accepted.
 
 `/SWAPWORD`
 - Swap bytes within each 16-bit word.
+- Like `/SWAPLONG`, nothing changes unless the span from the lowest to the highest address starts and ends on a word boundary; a word whose first byte holds data is swapped, its missing bytes taking the values of the last complete word.
 - Apply it after structural edits, before checksum or export.
 
 `/SWAPLONG`
 - Swap bytes within each 32-bit word.
-- Use it for DWORD-endian reshaping before final output.
+- As in HexView, a block of 16 MiB or more repeats its second swapped word after the first.
 
 ## Checksums
 
 `/CSx[:target]` and `/CSRx[:target]`
 - Compute checksum method `x`; `/CSR` flips the output endianness from the algorithm's native format.
-- Omit `:target` to default to `@append`.
+- Omit `:target` to calculate without writing the result anywhere.
+- Methods 0-22 are supported. Method 16 writes a constant instead of a checksum: `NumBytes` bytes (default 2) of `HexDataString` (default `0815`) from the `[constant]` section of `expdatproc.ini` in the working directory. Methods 21 and 22 are CRC-16 with the CCITT polynomial and start value `0xCAFE`, little- and big-endian.
+- A failed checksum gives a non-zero exit, but the later stages and the export still run, as in HexView.
 
 `/CSMx[:target]` and `/CSMRx[:target]`
 - Run multi-checksum mode and allow repeated checksum flags in order.
@@ -185,10 +198,10 @@ The external compatibility target also supports additional proprietary or OEM-sp
 
 `target`
 - Use `@append`, `@begin`, `@upfront`, `@end`, `@0xADDR`, or a file path.
-- File targets write checksum bytes out-of-band instead of modifying the image.
+- File targets write the checksum bytes as `0xAA, 0xBB` text instead of modifying the image.
 
 `range modifiers`
-- Add `;range` to limit the checksum region.
+- Add `;range` to limit the checksum region; an invalid limiting range covers nothing.
 - Add `;!forced_range[#fill]` to force bytes to exist over a range before calculating.
 - Add `/exclude_range` after the limited range to subtract specific sub-ranges.
 
@@ -201,38 +214,41 @@ The external compatibility target also supports additional proprietary or OEM-sp
 
 `placement`
 - Use the same placement targets as checksums except file targets are invalid for in-image placement.
-- Use `;outfilename` to write the signature bytes to a separate file.
+- Use `;outfilename` to write the signature as `0xAA ,0xBB` text, as HexView does.
+- The metadata methods (`/DP33`, `/DP39`, `/DP47`, `/DP49`) sign each block's big-endian start address and length followed by its data.
 
 `/SVn:keyinfo!signatureinfo`
-- Verify a signature after all prior transforms.
+- Verify a signature after all prior transforms. A signature file may hold raw bytes or `/DP` outfile text.
 - Do not combine `/SV` with a placed `/DP` in the same command; write and verify the signature as separate steps instead.
 - Supported methods are `/SV4` through `/SV11`.
 
 ## Output and export
 
 `-o output.ext`
-- Write the chosen export to `output.ext`.
-- Treat it as required for most practical commands.
+- Write the export to `output.ext`.
+- Without `-o`, the export goes to the input file name with the format's extension: `.hex` for `/XI`, `.s19` for `/XS`, `.bin` for `/XN`, `/XP` and `/XSB`, `.asc` for `/XA`, `.c` for `/XC` and `_f.hex` for `/XF`. `/XI` without `-o` therefore overwrites a `.hex` input.
+- Without an `/X...` flag nothing is exported, even with `-o`.
 
 `/XI[:reclinelen[:rectype]]`
-- Export Intel HEX.
-- Use `rectype` only when `reclinelen` is also present.
+- Export Intel HEX, 32 bytes per record by default or for length 0.
+- `rectype` 1 forces extended linear and 2 extended segment address records; others select automatically (segment records up to 1 MiB). An extended address record is written only where the upper address changes, starting from zero.
 
 `/XS[:reclinelen[:rectype]]`
-- Export Motorola S-Record.
-- Use `rectype` only when `reclinelen` is also present.
+- Export Motorola S-Record, 32 bytes per record by default.
+- `rectype` 0, 1 and 2 force S1, S2 and S3 records; others select automatically.
+- A record length of 0, including an empty one (`/XS::2`), writes only the termination record, as HexView does.
 
 `/XN`
 - Export one raw binary stream by concatenating segments in ascending address order.
 - Use `/FA` first if a single contiguous image matters.
 
 `/XSB`
-- Export one binary file per segment, with the base address added to the filename.
-- Use it when segment boundaries matter downstream.
+- Export one binary file per block as `<stem>_<address>` plus the extension of the output name, if any (`-o out.bin` gives `out_1000.bin`).
+- Use it when block boundaries matter downstream.
 
 `/XA[:linelen[:separator]]`
-- Export HEX ASCII.
-- Set a separator when a consumer needs tokenized output instead of contiguous pairs.
+- Export HEX ASCII, 16 bytes per line by default or for length 0.
+- Every byte is followed by CRLF when it ends a line and by the separator otherwise, the last byte included. The separator is used verbatim, quotes included.
 
 `/XC`
 - Export C source and header output using INI-driven settings from `/P`.

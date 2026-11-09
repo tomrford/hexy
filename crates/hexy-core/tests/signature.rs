@@ -161,12 +161,14 @@ fn test_sign_and_verify_with_explicit_file_sources() {
         placement: None,
     };
     let signature = hexfile.sign(&sign).unwrap();
+    let signature_path = dir.join("signature.bin");
+    std::fs::write(&signature_path, &signature).unwrap();
     let verify = SignatureVerifyOptions {
         method: SignatureMethod::RsaPkcs1v15Sha256 {
             with_metadata: false,
         },
         key_source: SignatureKeySource::File(public_path),
-        signature_source: SignatureBytesSource::Bytes(signature),
+        signature_source: SignatureBytesSource::File(signature_path),
     };
     hexfile.verify_signature(&verify).unwrap();
 }

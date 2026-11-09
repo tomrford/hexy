@@ -311,7 +311,7 @@ fn test_cli_checksum_multi_mixed_targets_with_file() {
 
 #[test]
 fn test_cli_checksum_file_survives_a_later_stage_error() {
-    for (checksum_flag, later_flag) in [("CSM0", "/CSM16"), ("CS0", "/SV4:missing-key.pem!0xF")] {
+    for (checksum_flag, later_flag) in [("CSM0", "/CSM23"), ("CS0", "/SV4:missing-key.pem!0xF")] {
         let dir = temp_dir("cli_checksum_before_error");
         let input = dir.join("input.bin");
         let checksum = dir.join("checksum.txt");
@@ -349,4 +349,68 @@ fn test_cli_checksum_reject_mix_legacy_and_multi() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("invalid option"));
     assert!(stderr.contains("/CSM0:@append"));
+}
+
+fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_hexy"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// HexView 1.15.2 reports a failed checksum but still runs the export.
+#[test]
+fn test_cli_failed_checksum_still_exports() {
+    let dir = temp_dir("cli_checksum_failed");
+    write_file(&dir.join("in.bin"), &[0x01, 0x08, 0x0F]);
+    let output = run_in(
+        &dir,
+        &["/IN:in.bin;0x1000", "/CS12:@append", "/XI", "-o", "out.hex"],
+    );
+    assert!(!output.status.success());
+    assert_eq!(
+        std::fs::read(dir.join("out.hex")).unwrap(),
+        b":0310000001080FD5\r\n:00000001FF\r\n"
+    );
+}
+
+/// HexView 1.15.2 checksums nothing when the limiting range is invalid.
+#[test]
+fn test_cli_checksum_invalid_limit_range_covers_nothing() {
+    let file = run_checksum_hex(&[0x01, 0x02, 0x03, 0x04], "/CS0:@0x3000;0x1003-0x1000");
+    assert_eq!(
+        file.read_bytes_contiguous(0x3000, 2),
+        Some(vec![0x00, 0x00])
+    );
+}
+
+/// HexView 1.15.2 `/CS16` reads `[constant]` from expdatproc.ini in the working directory.
+#[test]
+fn test_cli_constant_checksum_reads_expdatproc_ini() {
+    let dir = temp_dir("cli_checksum_constant");
+    write_file(&dir.join("in.bin"), &[0x01]);
+    let constant = |ini: &str, flag: &str| {
+        write_file(&dir.join("expdatproc.ini"), ini.as_bytes());
+        assert_success(&run_in(&dir, &["/IN:in.bin", flag]));
+        std::fs::read_to_string(dir.join("cs.txt")).unwrap()
+    };
+    assert_eq!(
+        constant(
+            "[CONSTANT]\r\nnumbytes=0x4\r\nHexDataString=0123456789ABCDEF\r\n",
+            "/CS16:cs.txt"
+        ),
+        "0x01, 0x23, 0x45, 0x67"
+    );
+    assert_eq!(
+        constant(
+            "[constant]\r\nNumBytes=2\r\nHexDataString=123\r\n",
+            "/CSR16:cs.txt"
+        ),
+        "0x03, 0x12"
+    );
+    assert_eq!(
+        constant("[other]\r\nNumBytes=4\r\n", "/CS16:cs.txt"),
+        "0x08, 0x15"
+    );
 }

@@ -1,19 +1,21 @@
 use std::path::PathBuf;
 
-use crate::AddressRange;
+use crate::{
+    AddressRange, DEFAULT_INTEL_HEX_BYTES_PER_LINE, DEFAULT_SREC_BYTES_PER_LINE,
+    HexAsciiWriteOptions, IntelHexMode, IntelHexWriteOptions, SRecordType, SRecordWriteOptions,
+};
 
 use super::parse_util::{
-    parse_checksum, parse_compat_ranges, parse_data_processing_params, parse_dspic_op,
-    parse_hex_ascii_params, parse_hex_bytes, parse_import_param, parse_merge_params, parse_number,
-    parse_output_params, parse_remap, parse_signature_verify_params, split_option, strip_quotes,
+    parse_checksum, parse_data_processing_params, parse_dspic_op, parse_hex_bytes,
+    parse_import_param, parse_lenient_number, parse_lenient_ranges, parse_merge_params,
+    parse_number, parse_remap, parse_signature_verify_params, split_option, strip_quotes,
 };
 use super::types::{Args, MergeParam, OutputFormat, ParseArgError};
 
 type ValueParser = fn(&mut Args, &str, &str) -> Result<bool, ParseArgError>;
 
 fn extend_ranges(target: &mut Vec<AddressRange>, value: &str) -> Result<(), ParseArgError> {
-    let ranges = parse_compat_ranges(value)?;
-    target.extend(ranges);
+    target.extend(parse_lenient_ranges(value)?);
     Ok(())
 }
 
@@ -73,6 +75,8 @@ fn parse_simple_flag(args: &mut Args, opt_upper: &str) -> bool {
             args.align_length = true;
             true
         }
+        // Disclaimer acceptance and license path: HexView runtime switches with no effect here.
+        "G" | "M" => true,
         _ => false,
     }
 }
@@ -117,6 +121,7 @@ fn parse_path_option(args: &mut Args, key_upper: &str, value: &str) -> Result<bo
             args.postbuild = Some(PathBuf::from(strip_quotes(value)));
             Ok(true)
         }
+        "M" => Ok(true),
         _ => Ok(false),
     }
 }
@@ -127,14 +132,15 @@ fn parse_range_option(
     value: &str,
 ) -> Result<bool, ParseArgError> {
     match key_upper {
+        // HexView keeps the intersection of the valid ranges; with none, /AR has no effect.
         "AR" => {
-            args.address_range.clear();
-            args.address_range_empty_output = false;
-            if value.contains(':') {
-                args.address_range_empty_output = true;
-            } else {
-                extend_ranges(&mut args.address_range, value)?;
-            }
+            let mut ranges = parse_lenient_ranges(value)?.into_iter();
+            args.address_range = ranges.next().map(|first| {
+                ranges
+                    .try_fold(first, |acc, range| acc.intersection(&range))
+                    .into_iter()
+                    .collect()
+            });
             Ok(true)
         }
         "CR" => {
@@ -210,7 +216,7 @@ fn parse_numeric_option(
             Ok(true)
         }
         "SB" => {
-            args.split_block_size = Some(parse_number(value)?);
+            args.split_block_size = Some(parse_lenient_number(value));
             Ok(true)
         }
         _ => Ok(false),
@@ -395,12 +401,10 @@ fn parse_output_option_value(
     parse_output_option(args, key_upper, Some(value))
 }
 
-fn set_output_format(args: &mut Args, format: OutputFormat) -> Result<(), ParseArgError> {
-    if args.output_format.is_some() {
-        return Err(ParseArgError::DuplicateOutputFormat);
-    }
-    args.output_format = Some(format);
-    Ok(())
+/// `/XI` and `/XS` record length; HexView crashes above 255.
+fn record_length(value: &str) -> Result<u8, ParseArgError> {
+    u8::try_from(parse_lenient_number(value))
+        .map_err(|_| ParseArgError::InvalidNumber(value.to_owned()))
 }
 
 fn parse_output_option(
@@ -408,83 +412,57 @@ fn parse_output_option(
     key_upper: &str,
     value: Option<&str>,
 ) -> Result<bool, ParseArgError> {
-    match key_upper {
+    let mut params = value.map(|value| value.splitn(2, ':'));
+    let mut param = || params.as_mut().and_then(Iterator::next);
+    let format = match key_upper {
         "XI" => {
-            if let Some(value) = value {
-                let (len, rec_type) = parse_output_params(value)?;
-                if rec_type.is_some() && len.is_none() {
-                    return Err(ParseArgError::InvalidOption(
-                        "record type requires reclinelen".to_owned(),
-                    ));
-                }
-                args.bytes_per_line = len;
-                set_output_format(
-                    args,
-                    OutputFormat::IntelHex {
-                        record_type: rec_type,
-                    },
-                )?;
-            } else {
-                set_output_format(args, OutputFormat::IntelHex { record_type: None })?;
-            }
-            Ok(true)
-        }
-        "XS" => {
-            if let Some(value) = value {
-                let (len, rec_type) = parse_output_params(value)?;
-                args.bytes_per_line = len;
-                set_output_format(
-                    args,
-                    OutputFormat::SRecord {
-                        record_type: rec_type,
-                    },
-                )?;
-            } else {
-                set_output_format(args, OutputFormat::SRecord { record_type: None })?;
-            }
-            Ok(true)
-        }
-        "XN" => {
-            set_output_format(args, OutputFormat::Binary)?;
-            Ok(true)
-        }
-        "XA" => {
-            let (line_length, separator) = if let Some(value) = value {
-                parse_hex_ascii_params(value)?
-            } else {
-                (None, None)
-            };
-            set_output_format(
-                args,
-                OutputFormat::HexAscii {
-                    line_length,
-                    separator,
+            let bytes_per_line = param().map(record_length).transpose()?;
+            OutputFormat::IntelHex(IntelHexWriteOptions {
+                bytes_per_line: bytes_per_line
+                    .filter(|&len| len != 0)
+                    .unwrap_or(DEFAULT_INTEL_HEX_BYTES_PER_LINE),
+                mode: match param().map(parse_lenient_number) {
+                    Some(1) => IntelHexMode::ExtendedLinear,
+                    Some(2) => IntelHexMode::ExtendedSegment,
+                    _ => IntelHexMode::Auto,
                 },
-            )?;
-            Ok(true)
+            })
         }
-        "XC" => {
-            set_output_format(args, OutputFormat::CCode)?;
-            Ok(true)
+        "XS" => OutputFormat::SRecord(SRecordWriteOptions {
+            bytes_per_line: param()
+                .map(record_length)
+                .transpose()?
+                .unwrap_or(DEFAULT_SREC_BYTES_PER_LINE),
+            record_type: match param().map(parse_lenient_number) {
+                Some(0) => Some(SRecordType::S1),
+                Some(1) => Some(SRecordType::S2),
+                Some(2) => Some(SRecordType::S3),
+                _ => None,
+            },
+        }),
+        "XN" => OutputFormat::Binary,
+        "XA" => {
+            let line_length = param().map_or(0, parse_lenient_number);
+            OutputFormat::HexAscii(HexAsciiWriteOptions {
+                line_length: if line_length == 0 {
+                    HexAsciiWriteOptions::default().line_length
+                } else {
+                    line_length as usize
+                },
+                separator: param().unwrap_or_default().to_owned(),
+            })
         }
-        "XF" => {
-            set_output_format(args, OutputFormat::FordIntelHex)?;
-            Ok(true)
+        "XC" => OutputFormat::CCode,
+        "XF" => OutputFormat::FordIntelHex,
+        "XP" => OutputFormat::Porsche,
+        "XSB" => OutputFormat::SeparateBinary,
+        "XG" | "XGC" | "XGCC" | "XGAC" | "XGACSWIL" | "XK" | "XV" | "XVBF" | "XB" => {
+            return Err(unsupported_output_format(key_upper));
         }
-        "XG" | "XGC" | "XGCC" | "XGAC" | "XGACSWIL" | "XK" => {
-            Err(unsupported_output_format(key_upper))
-        }
-        "XP" => {
-            set_output_format(args, OutputFormat::Porsche)?;
-            Ok(true)
-        }
-        "XSB" => {
-            set_output_format(args, OutputFormat::SeparateBinary)?;
-            Ok(true)
-        }
-        "XV" | "XVBF" | "XB" => Err(unsupported_output_format(key_upper)),
-        _ => Ok(false),
-    }
+        _ => return Ok(false),
+    };
+    args.output_format = Some(format);
+    Ok(true)
 }
 
 pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<(), ParseArgError> {
@@ -494,6 +472,11 @@ pub(super) fn parse_option(args: &mut Args, opt: &str) -> Result<(), ParseArgErr
         return Ok(());
     }
     if parse_bare_checksum_option(args, &opt_upper)? {
+        return Ok(());
+    }
+    // HexView accepts /RB only with '='.
+    if let Some(value) = opt_upper.strip_prefix("RB=") {
+        args.remove_blocks_below = Some(parse_lenient_number(value));
         return Ok(());
     }
 

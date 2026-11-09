@@ -13,7 +13,7 @@ Use slash-style compatibility syntax in examples and commands. Keep examples in 
 
 Keep CLI parsing rules in mind:
 
-- Use `-o <file>` for the output path; most other options use `/FLAG:value` or `/FLAG=value`.
+- Use `-o <file>` for the output path; without it the export overwrites or creates the input name with the format's extension, and without an `/X...` flag nothing is exported. Most other options use `/FLAG:value` or `/FLAG=value`.
 - Use `--` before an absolute Unix path if it might be mistaken for a slash option.
 - Expect the first positional argument to be the input file when no explicit import option is used.
 - Expect numeric arguments to accept common compatibility forms such as `0x1234`, `1234h`, `0b1010`, and separators like `_` or `.`.

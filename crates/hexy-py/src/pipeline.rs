@@ -2,6 +2,7 @@ use hexy_core::{
     AddressMap, AlignOptions, ChecksumAlgorithm, ChecksumOptions, ChecksumStage, DspicOp, Fill,
     FillData, ForcedRange, Merge, MergeOptions, Pipeline, RemapOptions, SwapMode,
 };
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -149,6 +150,10 @@ impl PyPipeline {
         self.inner.split = Some(max_size);
     }
 
+    fn remove_small_blocks(&mut self, min_len: u32) {
+        self.inner.remove_small_blocks = Some(min_len);
+    }
+
     fn swap(&mut self, mode: &str) -> PyResult<()> {
         match parse_swap_mode(mode)? {
             SwapMode::Word => self.inner.swap_word = true,
@@ -166,6 +171,7 @@ impl PyPipeline {
         exclude=None,
         forced_range=None,
         forced_pattern=None,
+        constant=None,
     ))]
     #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
     fn checksum(
@@ -177,7 +183,20 @@ impl PyPipeline {
         exclude: Option<&Bound<'_, PyAny>>,
         forced_range: Option<&Bound<'_, PyAny>>,
         forced_pattern: Option<&[u8]>,
+        constant: Option<&[u8]>,
     ) -> PyResult<()> {
+        let algorithm = match (
+            ChecksumAlgorithm::try_from(algorithm).map_err(value_error)?,
+            constant,
+        ) {
+            (ChecksumAlgorithm::Constant(_), Some(bytes)) => {
+                ChecksumAlgorithm::Constant(bytes.to_vec())
+            }
+            (_, Some(_)) => {
+                return Err(PyValueError::new_err("constant requires algorithm 16"));
+            }
+            (algorithm, None) => algorithm,
+        };
         let forced_range = forced_range
             .map(|range| -> PyResult<ForcedRange> {
                 Ok(ForcedRange {
@@ -188,7 +207,7 @@ impl PyPipeline {
             .transpose()?;
         self.inner.checksums.push(ChecksumStage {
             options: ChecksumOptions {
-                algorithm: ChecksumAlgorithm::try_from(algorithm).map_err(value_error)?,
+                algorithm,
                 range: range.map(parse_range_arg).transpose()?,
                 little_endian_output: reverse,
                 forced_range,
