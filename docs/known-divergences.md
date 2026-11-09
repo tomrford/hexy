@@ -81,20 +81,24 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 - forced S1 or S2 records (`/XS:len:0`, `/XS:len:1`) for addresses that do not fit: HexView truncates the addresses; hexy rejects the export
 - `/XI` and `/XS` record lengths above 255 crash HexView; hexy rejects them
 - `/CS16` `HexDataString` values with characters other than hex digits: HexView's parse is irregular; hexy rejects them
-- `/DP` and `/SV` key formats HexView rejects but hexy reads: RSA public keys as SPKI PEM, binary DER or X.509 certificates; RSA private keys as binary PKCS #1 DER; Ed25519 keys with the standard `id-Ed25519` OID, as SPKI, as binary DER or from certificates (see [data processing](data-processing.md))
+- `/DP` and `/SV` key formats HexView rejects but hexy reads: RSA public keys as SPKI PEM, binary DER or X.509 certificates; RSA private keys as binary PKCS #1 DER; ECC keys with the standard `id-Ed25519` OID or a PEM label other than `PRIVATE KEY` and `EC PRIVATE KEY`; ECC public keys as SPKI or from certificates; P-256 public keys inside PKCS #8 keys (see [data processing](data-processing.md))
 - `/DP` hex key files of 2999 bytes or more: HexView fails to read them; hexy reads them
 - `/DP` key text with stray characters, such as `12x34`: HexView reads some of them as zero bytes; hexy rejects the text
 - `/DP` option values that are not valid, such as `#IV=00;sig.txt`: HexView ignores options a method does not use; hexy rejects them
 - `/DP` with more than one `;`, or `@placement` without a following `:`: HexView fails the stage and still exports; hexy rejects the command
 - `/DP` output file in a folder that does not exist: HexView writes the default output file instead; hexy fails
-- `/DP` ignores `#IV`, `#AUTH`, `#TAG`, `#LZSS` and `#SALT` for methods that do not use them, as HexView does; hexy also warns. `#SALT` with `/DP38` and `/DP39` is not supported yet
+- `/DP` ignores `#IV`, `#AUTH`, `#TAG`, `#LZSS` and `#SALT` for methods that do not use them, as HexView does; hexy also warns
 - `/DP` ciphers whose padding grows a block into the next block, such as `/SB` pieces: HexView keeps both blocks and exports the overlapping bytes twice; hexy keeps the later block's bytes
 - `/DP55` without `#IV`: HexView takes the IV from the data but drops 16 bytes of ciphertext; hexy rejects the command
 - `/DP55` and `/DP56` with `#AUTH=@address,length`: HexView leaves that data unencrypted but also out of the tag; hexy rejects the command
 - `/DP56` with a `#TAG` file: HexView never reads it, so the check always fails; hexy rejects the command
 - `/DP56` with an image `#TAG` in the middle of a block: HexView decrypts part of the data before it fails; hexy fails without changing the data
-- `/DP38`, `/DP39`: HexView's RSA-PSS salt is reproducible between runs; hexy uses a random salt, so only verification matches
-- `/DP48`, `/DP49`: HexView signs the SHA-512 digest with Ed25519ph; hexy signs it with plain Ed25519
+- `/DP38`, `/DP39` without `#SALT`: HexView's salt is 32 bytes of the C runtime's `rand()` seeded with the time in seconds, so it changes every second; hexy uses a random salt. With `#SALT` the signatures match; without it each tool verifies the other's
+- `/DP50`, `/DP51`: HexView signs with the same nonce for every key and message, which reveals the private key to anyone holding two of its signatures; hexy uses deterministic nonces (RFC 6979). Each tool verifies the other's signatures
+- `/DP17`, `/DP40`, `/DP42`: HexView's padding comes from the C runtime's `rand()` with a fixed seed, so its output is the same on every run; hexy pads with random bytes. Each tool decrypts the other's output
+- RSA encryption and decryption of more than one padded block: HexView handles only the first. It writes later `/DP17`, `/DP40` and `/DP42` blocks padded but unencrypted, leaves the padding on later `/DP18` blocks, fails later `/DP41` and `/DP43` blocks, and fails a padded `/DP17` block after a block of whole key lengths; hexy processes every block
+- `/DP17` blocks that are longer than one padded key length but not a whole number of key lengths, and `/DP18` blocks that are not a whole number of key lengths: HexView writes unusable data; hexy fails
+- `/DP52` on more than one block: both fail, but HexView first writes the signature of the first block to the output file; hexy writes no output file
 - `/CSM*` and `/CSMR*` are hexy extensions; HexView ignores them
 - wildcards (`?`, `*`) in `/MO` and `/MT` file names are not supported
 - `/IA` or `/II2` with a positional input file: HexView ignores the import with a warning; hexy adds `/IA` data to the input and rejects `/II2`

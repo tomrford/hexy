@@ -1,7 +1,7 @@
 use hexy_core::{
     AddressRange, AesGcm, AesKey, AesMode, AesPadding, DataProcessing, GcmTag, IntelHexMode,
-    MacAlgorithm, MacKey, MacMethod, MergeMode, Placement, SRecordType, SignatureMethod,
-    SignatureScheme, SwapMode, parse_compat_ranges,
+    MacAlgorithm, MacKey, MacMethod, MergeMode, Placement, RsaPadding, RsaPrivateKey, RsaPublicKey,
+    SRecordType, SignatureMethod, SignatureScheme, SwapMode, parse_compat_ranges,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -125,10 +125,15 @@ pub(crate) fn parse_placement(obj: &Bound<'_, PyAny>) -> PyResult<Placement> {
 /// A signature method from its Python name.
 pub(crate) fn parse_signature_method(scheme: &str, metadata: bool) -> PyResult<SignatureMethod> {
     let scheme = match scheme.to_ascii_lowercase().as_str() {
+        "rsa-pkcs1v15-md5" => SignatureScheme::RsaPkcs1v15Md5,
+        "rsa-pkcs1v15-sha1" => SignatureScheme::RsaPkcs1v15Sha1,
+        "rsa-pkcs1v15-ripemd160" => SignatureScheme::RsaPkcs1v15Ripemd160,
         "rsa-pkcs1v15-sha256" => SignatureScheme::RsaPkcs1v15Sha256,
         "rsa-pss-sha256" => SignatureScheme::RsaPssSha256,
+        "ecdsa-p256-sha256" => SignatureScheme::EcdsaP256Sha256,
+        "ed25519" => SignatureScheme::Ed25519,
         "ed25519ph" => SignatureScheme::Ed25519Ph,
-        "ed25519-sha512" => SignatureScheme::Ed25519Sha512,
+        "ed25519ph-sha512" => SignatureScheme::Ed25519PhSha512,
         other => {
             return Err(PyValueError::new_err(format!(
                 "unknown signature method '{other}'"
@@ -174,24 +179,53 @@ pub(crate) fn mac_operation(method: &str, key: &[u8], metadata: bool) -> PyResul
     })
 }
 
-/// The AES arguments shared by `encrypt` and `decrypt`.
-pub(crate) struct AesArgs<'a> {
+/// The cipher arguments shared by `encrypt` and `decrypt`.
+pub(crate) struct CipherArgs<'a, 'py> {
     pub mode: &'a str,
-    pub key: &'a [u8],
+    pub key: &'a Bound<'py, PyAny>,
     pub iv: Option<&'a [u8]>,
     pub padding: Option<&'a str>,
     pub aad: &'a [u8],
 }
 
-/// An AES encryption or decryption; GCM decryption checks `tag`, bytes or a range of
-/// the image.
-pub(crate) fn aes_operation(
-    args: AesArgs<'_>,
+/// An AES or RSA encryption or decryption. AES takes the raw key and GCM decryption
+/// checks `tag`, bytes or a range of the image; RSA takes key file content or key text.
+pub(crate) fn cipher_operation(
+    args: CipherArgs<'_, '_>,
     decrypt: bool,
     tag: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<DataProcessing> {
-    let key = AesKey::new(args.key).map_err(value_error)?;
     let mode = args.mode.to_ascii_lowercase();
+    let rsa_padding = match mode.as_str() {
+        "rsa-pkcs1v15" => Some(RsaPadding::Pkcs1v15),
+        "rsa-oaep-sha1" => Some(RsaPadding::OaepSha1),
+        "rsa-oaep-sha256" => Some(RsaPadding::OaepSha256),
+        _ => None,
+    };
+    if let Some(padding) = rsa_padding {
+        if args.iv.is_some() || args.padding.is_some() || !args.aad.is_empty() || tag.is_some() {
+            return Err(PyValueError::new_err(
+                "RSA modes take no iv, padding, aad or tag",
+            ));
+        }
+        let key = key_content(args.key)?;
+        return Ok(if decrypt {
+            DataProcessing::RsaDecrypt {
+                key: RsaPrivateKey::from_key_file(&key).map_err(value_error)?,
+                padding,
+            }
+        } else {
+            DataProcessing::RsaEncrypt {
+                key: RsaPublicKey::from_key_file(&key).map_err(value_error)?,
+                padding,
+            }
+        });
+    }
+    let key = args
+        .key
+        .extract::<&[u8]>()
+        .map_err(|_| PyTypeError::new_err("AES keys are bytes"))?;
+    let key = AesKey::new(key).map_err(value_error)?;
     if mode == "gcm" {
         let gcm = AesGcm {
             key,
@@ -227,7 +261,7 @@ pub(crate) fn aes_operation(
         ("ecb", Some(_)) => return Err(PyValueError::new_err("ecb takes no iv")),
         (other, _) => {
             return Err(PyValueError::new_err(format!(
-                "unknown AES mode '{other}', expected 'ecb', 'cbc', 'ctr' or 'gcm'"
+                "unknown mode '{other}', expected 'ecb', 'cbc', 'ctr', 'gcm', 'rsa-pkcs1v15',                  'rsa-oaep-sha1' or 'rsa-oaep-sha256'"
             )));
         }
     };

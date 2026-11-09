@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     AesGcm, AesKey, AesMode, AesPadding, DataProcessing, DataProcessingStage, GcmTag, MacAlgorithm,
-    MacKey, MacMethod, ProcessingError, SignatureMethod, SignatureScheme, VerifyStage,
-    decode_hex_text,
+    MacKey, MacMethod, ProcessingError, RsaPadding, RsaPrivateKey, RsaPublicKey, SignatureMethod,
+    SignatureScheme, VerifyStage, decode_hex_text,
 };
 
 use super::error::CliError;
@@ -23,10 +23,11 @@ pub(super) use params::{
     parse_signature_verify,
 };
 
-/// HexView 1.15.2 numbers its `/DP` methods 0 to 60 and its `/SV` methods 0 to 11.
+/// HexView 1.15.2 numbers its `/DP` methods 0 to 60 and its `/SV` methods 0 to 14; the
+/// manual lists `/SV` methods 0 to 11.
 const DP_METHODS: u8 = 61;
 /// The `/DP` method that creates the signature each `/SV` method verifies.
-const SV_SIGNATURES: [u8; 12] = [28, 9, 8, 10, 32, 33, 38, 39, 46, 47, 48, 49];
+const SV_SIGNATURES: [u8; 15] = [28, 9, 8, 10, 32, 33, 38, 39, 46, 47, 48, 49, 50, 51, 52];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cipher {
@@ -60,12 +61,20 @@ enum Method {
         decrypt: bool,
     },
     Mac(MacMethod, OutputFile),
+    /// `#SALT` is the RSA-PSS salt.
     Sign(SignatureMethod, OutputFile),
+    Rsa {
+        padding: RsaPadding,
+        decrypt: bool,
+    },
 }
 
 fn dp_method(number: u8) -> Option<Method> {
     use MacAlgorithm::{CmacAes128, HmacMd5, HmacRipemd160, HmacSha1, HmacSha256};
-    use SignatureScheme::{Ed25519Ph, Ed25519Sha512, RsaPkcs1v15Sha256, RsaPssSha256};
+    use SignatureScheme::{
+        EcdsaP256Sha256, Ed25519, Ed25519Ph, Ed25519PhSha512, RsaPkcs1v15Md5, RsaPkcs1v15Ripemd160,
+        RsaPkcs1v15Sha1, RsaPkcs1v15Sha256, RsaPssSha256,
+    };
     let mac = |algorithm, with_metadata, name, crlf| {
         let method = MacMethod {
             algorithm,
@@ -81,6 +90,7 @@ fn dp_method(number: u8) -> Option<Method> {
         Method::Sign(method, OutputFile { name, crlf: false })
     };
     let aes = |cipher, decrypt| Method::Aes { cipher, decrypt };
+    let rsa = |padding, decrypt| Method::Rsa { padding, decrypt };
     Some(match number {
         0 => Method::None,
         1 => Method::Xor,
@@ -90,22 +100,37 @@ fn dp_method(number: u8) -> Option<Method> {
         5 => mac(HmacSha1, true, "SignDAL_SHA1.txt", true),
         6 => mac(HmacRipemd160, false, "SignD_Rmd160.txt", true),
         7 => mac(HmacRipemd160, true, "SignDAL_Rmd160.txt", true),
+        8 => sign(RsaPkcs1v15Sha1, false, "SignD_SHA1.RSA"),
+        9 => sign(RsaPkcs1v15Ripemd160, true, "SignDAL_RMD160.RSA"),
+        10 => sign(RsaPkcs1v15Sha1, true, "SignDAL_SHA1.RSA"),
         11 => aes(Cipher::Cbc, false),
         12 => aes(Cipher::Cbc, true),
         13 => mac(HmacMd5, false, "SignD_MD5.txt", false),
         14 => mac(HmacMd5, true, "SignDAL_MD5.txt", false),
+        15 => sign(RsaPkcs1v15Md5, false, "SignD_MD5.RSA"),
+        16 => sign(RsaPkcs1v15Md5, true, "SignDAL_MD5.RSA"),
+        17 => rsa(RsaPadding::Pkcs1v15, false),
+        18 => rsa(RsaPadding::Pkcs1v15, true),
+        28 => sign(RsaPkcs1v15Ripemd160, false, "SignD_RMD160.RSA"),
         30 => mac(HmacSha256, false, "SignD_SHA256.txt", false),
         31 => mac(HmacSha256, true, "SignDAL_SHA256.txt", false),
         32 => sign(RsaPkcs1v15Sha256, false, "SignD_SHA256.RSA"),
         33 => sign(RsaPkcs1v15Sha256, true, "SignDAL_SHA256.RSA"),
         38 => sign(RsaPssSha256, false, "SignD_PSS_SHA256.RSA"),
         39 => sign(RsaPssSha256, true, "SignDAL_PSS_SHA256.RSA"),
+        40 => rsa(RsaPadding::OaepSha1, false),
+        41 => rsa(RsaPadding::OaepSha1, true),
+        42 => rsa(RsaPadding::OaepSha256, false),
+        43 => rsa(RsaPadding::OaepSha256, true),
         44 => mac(CmacAes128, false, "SignD_CmacAes.txt", false),
         45 => mac(CmacAes128, true, "SignDAL_CmacAes.txt", false),
         46 => sign(Ed25519Ph, false, "SignD_ED25519.ECC"),
         47 => sign(Ed25519Ph, true, "SignDAL_ED25519.ECC"),
-        48 => sign(Ed25519Sha512, false, "SignD_SHA512_ED25519PH.ECC"),
-        49 => sign(Ed25519Sha512, true, "SignDAL_SHA512_ED25519PH.ECC"),
+        48 => sign(Ed25519PhSha512, false, "SignD_SHA512_ED25519PH.ECC"),
+        49 => sign(Ed25519PhSha512, true, "SignDAL_SHA512_ED25519PH.ECC"),
+        50 => sign(EcdsaP256Sha256, false, "SignD_SHA256_ANSIP256.ECC"),
+        51 => sign(EcdsaP256Sha256, true, "SignDAL_SHA256_ANSIP256.ECC"),
+        52 => sign(Ed25519, false, "SignD_ED25519.ECC"),
         53 => aes(Cipher::Ctr, false),
         54 => aes(Cipher::Ctr, true),
         55 => Method::Gcm { decrypt: false },
@@ -140,8 +165,8 @@ pub(super) fn validate_data_processing(
     let mut used = Vec::new();
     match method {
         Method::Sign(method, _) => {
-            if method.scheme == SignatureScheme::RsaPssSha256 && options.salt.is_some() {
-                return unsupported("#SALT is not supported yet");
+            if method.scheme == SignatureScheme::RsaPssSha256 {
+                used.push("#SALT");
             }
         }
         Method::Aes { cipher, .. } => {
@@ -173,7 +198,7 @@ pub(super) fn validate_data_processing(
                 }
             }
         }
-        Method::None | Method::Xor | Method::Mac(..) => {}
+        Method::None | Method::Xor | Method::Mac(..) | Method::Rsa { .. } => {}
     }
     for name in options.names().filter(|name| !used.contains(name)) {
         if !silent {
@@ -266,6 +291,27 @@ pub(super) fn data_processing_stage(
         Method::Sign(method, _) => DataProcessing::Sign {
             method,
             key: method.scheme.signing_key(&key()?).map_err(error)?,
+            // HexView takes an empty `#SALT` as none.
+            salt: params
+                .options
+                .salt
+                .as_deref()
+                .filter(|salt| method.scheme == SignatureScheme::RsaPssSha256 && !salt.is_empty())
+                .map(<[u8]>::to_vec),
+        },
+        Method::Rsa {
+            padding,
+            decrypt: false,
+        } => DataProcessing::RsaEncrypt {
+            key: RsaPublicKey::from_key_file(&key()?).map_err(error)?,
+            padding,
+        },
+        Method::Rsa {
+            padding,
+            decrypt: true,
+        } => DataProcessing::RsaDecrypt {
+            key: RsaPrivateKey::from_key_file(&key()?).map_err(error)?,
+            padding,
         },
     };
     Ok(Some(DataProcessingStage {

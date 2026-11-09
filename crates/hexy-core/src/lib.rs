@@ -26,8 +26,9 @@ pub use pipeline::{
 };
 pub use processing::{
     AesGcm, AesKey, AesMode, AesPadding, DataProcessing, Ed25519PrivateKey, Ed25519PublicKey,
-    GcmTag, MacAlgorithm, MacKey, MacMethod, ProcessingError, RsaPrivateKey, RsaPublicKey,
-    SignatureMethod, SignatureScheme, SigningKey, VerifyingKey, decode_hex_text,
+    GcmTag, MacAlgorithm, MacKey, MacMethod, P256PrivateKey, P256PublicKey, ProcessingError,
+    RsaPadding, RsaPrivateKey, RsaPublicKey, SignatureMethod, SignatureScheme, SigningKey,
+    VerifyingKey, decode_hex_text,
 };
 pub use range::{AddressRange, AddressRangeError, merge_ranges, parse_compat_ranges, parse_ranges};
 pub use segment::{Segment, SegmentError};

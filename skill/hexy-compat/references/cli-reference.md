@@ -38,7 +38,7 @@ The external compatibility target also supports additional proprietary or OEM-sp
 15. Swap bytes with `/SWAPWORD` or `/SWAPLONG`.
 16. Remove small blocks with `/RB`.
 17. Apply checksum operations with `/CS`, `/CSR`, `/CSM`, `/CSMR`.
-18. Apply supported data processing (signing, MACs, XOR, AES) with `/DP`.
+18. Apply supported data processing (signing, MACs, XOR, AES, RSA encryption) with `/DP`.
 19. Apply supported signature verification with `/SV`.
 20. Export with `/X...` and `-o`.
 
@@ -208,23 +208,25 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 ## Data processing and verification
 
 `/DPn[:@placement]:[param1][,param2,param3][;param4][#NAME=value]...`
-- Run after checksum operations. Supported methods: `/DP0` (no action), `/DP1` (XOR), AES `/DP2`/`/DP3` (ECB), `/DP11`/`/DP12` (CBC), `/DP53`/`/DP54` (CTR) and `/DP55`/`/DP56` (GCM), HMAC `/DP4`-`/DP7`, `/DP13`, `/DP14`, `/DP30`, `/DP31`, CMAC `/DP44`, `/DP45`, and signatures `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`-`/DP49`. Other HexView methods are rejected before any output is written, and unknown numbers fail when the stage runs. See [data processing](../../../docs/data-processing.md) for the method table.
-- param1 is the key: hex text inline (for example a HIS `FF49...` RSA key, a HIS `FF5B...` MAC key, an AES key or an Ed25519 seed), `file,section,key` to read it from an INI file, or a key file (hex text, PEM or DER; symmetric keys must be hex text). See [data processing](../../../docs/data-processing.md) for the key formats.
+- Run after checksum operations. Supported methods: `/DP0` (no action), `/DP1` (XOR), AES `/DP2`/`/DP3` (ECB), `/DP11`/`/DP12` (CBC), `/DP53`/`/DP54` (CTR) and `/DP55`/`/DP56` (GCM), HMAC `/DP4`-`/DP7`, `/DP13`, `/DP14`, `/DP30`, `/DP31`, CMAC `/DP44`, `/DP45`, RSA signatures `/DP8`-`/DP10`, `/DP15`, `/DP16`, `/DP28`, `/DP32`, `/DP33`, `/DP38`, `/DP39`, RSA encryption `/DP17`, `/DP18`, `/DP40`-`/DP43`, Ed25519 `/DP46`-`/DP49`, `/DP52`, and ECDSA P-256 `/DP50`, `/DP51`. Other HexView methods (compression) are rejected before any output is written, and unknown numbers fail when the stage runs. See [data processing](../../../docs/data-processing.md) for the method table.
+- param1 is the key: hex text inline (for example a HIS `FF49...` RSA key, a HIS `FF5B...` MAC key, an AES key, an Ed25519 seed or a P-256 scalar), `file,section,key` to read it from an INI file, or a key file (hex text, PEM or DER; symmetric keys must be hex text). See [data processing](../../../docs/data-processing.md) for the key formats.
 - For signatures and MACs, param4 is the output file. Without it, the output goes to HexView's default file, such as `SignD_SHA256.RSA` for `/DP32` or `SignD_SHA1.txt` for `/DP4`. The file holds `0xAA ,0xBB` text.
-- Everything after the first `#` is options (`#SALT=`, `#IV=`, `#AUTH=`, `#TAG=`, `#LZSS=`), so `key#IV=00;sig.txt` has no param4. Methods ignore options they do not use, with a warning; `#SALT` with `/DP38` and `/DP39` is not supported yet.
+- Everything after the first `#` is options (`#SALT=`, `#IV=`, `#AUTH=`, `#TAG=`, `#LZSS=`), so `key#IV=00;sig.txt` has no param4. Methods ignore options they do not use, with a warning. `#SALT=hex` is the `/DP38` and `/DP39` RSA-PSS salt (at most 255 hex digits are read); without it the salt is 32 random bytes.
 - `/DP1` XORs the data with param1, repeated across the blocks; without a hex key it inverts the data.
 - AES: the key length picks AES-128, -192 or -256. param4 is the padding (`PKCS7`, `ANSIX.923` or `RFC1321`; the first four letters count). ECB, CBC and CTR process and pad each block on its own; without padding, ECB and CBC need each block to be a multiple of 16 bytes. `#IV=hex` is the CBC or CTR IV, padded with zeros; without it the first 16 bytes of the first block are the IV and stay unencrypted.
 - AES-GCM encrypts all blocks as one stream: `#IV` (required) is the nonce, `#AUTH=hex` or a binary file adds authenticated data, and `/DP55` writes the 16-byte tag to `#TAG=file` and to `@placement`. `/DP56` checks `#TAG=hex` or `#TAG=@address,length`, image bytes at the start or end of a block that stay in place.
+- RSA encryption (`/DP17` PKCS #1 v1.5, `/DP40` OAEP SHA-1, `/DP42` OAEP SHA-256) encrypts each block on its own with a public key; `/DP17` encrypts blocks of whole key lengths without padding. Decryption needs the private key: `/DP41` and `/DP43` require exactly one key length per block, while `/DP18` accepts whole key lengths and removes PKCS #1 v1.5 padding from a single key length when it is valid.
+- `/DP50`/`/DP51` (ECDSA P-256 over SHA-256) write r and s, 64 bytes; hexy's nonces are deterministic (RFC 6979), so its signatures differ from HexView's but verify the same. `/DP52` (Ed25519 without pre-hash) fails on more than one block.
 - Relative paths, including the output file, resolve against the input file's folder, or the working directory without a positional input file.
-- The metadata methods (`/DP5`, `/DP7`, `/DP14`, `/DP31`, `/DP33`, `/DP39`, `/DP45`, `/DP47`, `/DP49`) cover each block's big-endian start address and length followed by its data.
+- The metadata methods (`/DP5`, `/DP7`, `/DP9`, `/DP10`, `/DP14`, `/DP16`, `/DP31`, `/DP33`, `/DP39`, `/DP45`, `/DP47`, `/DP49`, `/DP51`) cover each block's big-endian start address and length followed by its data.
 - A failed `/DP` is reported, but the remaining stages still run and the export is still written; the exit status is non-zero. A cipher that fails keeps the blocks it already processed.
 
 `placement`
-- Use the same placement targets as checksums except file targets are invalid for in-image placement. The output file is written as well. XOR and AES ECB, CBC and CTR have no output, so they ignore placement.
+- Use the same placement targets as checksums except file targets are invalid for in-image placement. The output file is written as well. XOR, AES ECB, CBC and CTR, and RSA encryption have no output, so they ignore placement.
 
 `/SVn:keyinfo!signatureinfo`
-- Verify a signature after `/DP`, so a placed signature is part of the verified data. Supported methods are `/SV4` through `/SV11`.
-- `keyinfo` takes the `/DP` param1 forms. RSA private keys supply their public key; Ed25519 private PEM/DER must include the public key.
+- Verify a signature after `/DP`, so a placed signature is part of the verified data. `/SV0`-`/SV3` verify `/DP28`, `/DP9`, `/DP8`, `/DP10`; `/SV4`-`/SV11` verify `/DP32`, `/DP33`, `/DP38`, `/DP39`, `/DP46`-`/DP49`; `/SV12`-`/SV14` verify `/DP50`-`/DP52`. RSA-PSS verification accepts any salt length.
+- `keyinfo` takes the `/DP` param1 forms; a private key gives its public key. An ECC private key must include its public key.
 - `signatureinfo` is hex text inline, or a file of hex text such as a `/DP` output file.
 - A failed verification is reported like a failed `/DP`.
 

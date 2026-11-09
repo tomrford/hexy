@@ -323,12 +323,38 @@ def test_signing_reports_small_pss_key_as_value_error():
 
 def test_signing_rejects_empty_ed25519_key_material():
     source = hexy.HexFile.from_binary(b"\x01\x02", 0x1000)
-    for method in ("ed25519ph", "ed25519-sha512"):
+    for method in ("ed25519", "ed25519ph", "ed25519ph-sha512"):
         for key in (b"", b" \r\n,", b"0x"):
             with pytest.raises(ValueError):
                 source.sign(method, key, placement="append")
     assert source.read(0x1000, 2) == b"\x01\x02"
     assert source.total_bytes == 2
+
+
+def test_asymmetric_methods_match_hexview():
+    source = _from_pats((0x1000, 0x30, 1), (0x2000, 0x10, 2))
+    # HexView 1.15.2 /DP38 with #SALT=0102030405, and /DP48.
+    private = (KEYS / "rsa_pkcs8.pem").read_bytes()
+    pss = source.sign("rsa-pss-sha256", private, salt=bytes(range(1, 6)))
+    assert pss[:8] == bytes.fromhex("3691474c28b26247")
+    seed = (KEYS / "ed25519_seed.txt").read_text()
+    assert source.sign("ed25519ph-sha512", seed)[:8] == bytes.fromhex(
+        "4461b57de6c357df"
+    )
+    with pytest.raises(ValueError):
+        source.sign("ed25519", seed)
+
+    p256 = (KEYS / "p256_sec1.pem").read_bytes()
+    pipeline = hexy.Pipeline()
+    pipeline.sign("ecdsa-p256-sha256", p256, metadata=True)
+    signature = pipeline.apply(source).data_processing
+    source.verify_signature("ecdsa-p256-sha256", p256, signature, metadata=True)
+
+    encrypted = source.copy()
+    encrypted.encrypt("rsa-oaep-sha256", (KEYS / "rsa_his_public.txt").read_text())
+    assert encrypted.read(0x2000, 0x10) != source.read(0x2000, 0x10)
+    encrypted.decrypt("rsa-oaep-sha256", private)
+    assert encrypted.read(0x2000, 0x10) == source.read(0x2000, 0x10)
 
 
 AES_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
