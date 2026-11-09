@@ -395,3 +395,29 @@ def test_symmetric_methods_match_hexview():
     assert tagged.read(0x2000, 0x20) == source.read(0x2000, 0x20)
     with pytest.raises(ValueError):
         tagged.decrypt("gcm", AES_KEY, iv=bytes(12), tag=bytes(16))
+
+
+def test_compression_matches_hexview():
+    # HexView 1.15.2 /DP26, /DP36 and /DP59 (no #IV: a zero IV).
+    source = hexy.HexFile.from_binary(b"ABCDEFGH", 0x1000)
+    packed = source.copy()
+    packed.compress()
+    assert packed.read(0x1000, 11) == bytes.fromhex("a0d0a8744a2d1a8f480000")
+    packed.decompress("lzss", window_bits=10, length_bits=4)
+    assert packed.read(0x1000, 8) == b"ABCDEFGH"
+
+    runs = hexy.HexFile.from_binary(b"AAAABAB", 0x1000)
+    runs.compress("arle")
+    assert runs.read(0x1000, 7) == bytes.fromhex("82414103424142")
+
+    pipeline = hexy.Pipeline()
+    pipeline.compress(key=AES_KEY, padding="pkcs7")
+    encrypted = pipeline.apply(hexy.HexFile.from_binary(b"ABC" * 6, 0x1000)).hexfile
+    assert encrypted.read(0x1000, 16) == bytes.fromhex("b9f09bea7f33b9812a576f2d1a3ae0e1")
+    encrypted.decompress(key=AES_KEY, padding="pkcs7")
+    assert encrypted.read(0x1000, 18) == b"ABC" * 6
+
+    with pytest.raises(ValueError):
+        hexy.HexFile.from_binary(b"\x40\x00", 0).decompress("arle")
+    with pytest.raises(ValueError):
+        source.compress(window_bits=4, length_bits=4)

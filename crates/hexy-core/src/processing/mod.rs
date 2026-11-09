@@ -2,10 +2,12 @@
 //!
 //! A [`DataProcessing`] operation runs over the image's blocks (see
 //! [`HexFile::blocks`]). Signatures and MACs produce output bytes, which can be placed
-//! into the image; ciphers replace the data of the blocks.
+//! into the image; ciphers and compression replace the data of the blocks.
 
+mod arle;
 mod gcm;
 mod keys;
+mod lzss;
 mod mac;
 mod rsa_cipher;
 mod signature;
@@ -20,6 +22,7 @@ pub use keys::{
     AesKey, Ed25519PrivateKey, Ed25519PublicKey, MacKey, P256PrivateKey, P256PublicKey,
     RsaPrivateKey, RsaPublicKey, decode_hex_text,
 };
+pub use lzss::Lzss;
 pub use mac::{MacAlgorithm, MacMethod};
 pub use rsa_cipher::RsaPadding;
 pub use signature::{SignatureMethod, SignatureScheme, SigningKey, VerifyingKey};
@@ -67,6 +70,57 @@ pub enum DataProcessing {
         key: RsaPrivateKey,
         padding: RsaPadding,
     },
+    /// Compress each block.
+    Compress(Compression),
+    /// Decompress each block.
+    Decompress(Compression),
+    /// Compress each block with LZSS, then encrypt it with AES-CBC from `iv`.
+    CompressEncrypt(LzssAes),
+    /// Decrypt each block with AES-CBC from `iv`, then decompress it with LZSS.
+    DecryptDecompress(LzssAes),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compression {
+    /// LZSS. Decompression accepts any data: bits past the end read as zero, which ends
+    /// the stream, and a block that decompresses to nothing keeps its data, as in
+    /// HexView.
+    Lzss(Lzss),
+    /// HexView's ARLE run-length coding. Decompression fails on an incomplete token or
+    /// empty output.
+    Arle,
+}
+
+/// LZSS combined with AES-CBC, as HexView's `/DP59` and `/DP60`.
+#[derive(Debug, Clone)]
+pub struct LzssAes {
+    pub lzss: Lzss,
+    pub key: AesKey,
+    pub iv: [u8; 16],
+    pub padding: Option<AesPadding>,
+}
+
+impl Compression {
+    fn compress(self, data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Lzss(lzss) => lzss.compress(data),
+            Self::Arle => arle::compress(data),
+        }
+    }
+
+    fn decompress(self, data: &[u8]) -> Result<Vec<u8>, ProcessingError> {
+        match self {
+            Self::Lzss(lzss) => Ok(lzss.decompress(data)),
+            Self::Arle => arle::decompress(data),
+        }
+    }
+}
+
+impl LzssAes {
+    fn cipher(&self, decrypt: bool) -> AesBlocks {
+        let mode = AesMode::Cbc { iv: Some(self.iv) };
+        AesBlocks::new(&self.key, mode, self.padding, decrypt)
+    }
 }
 
 impl DataProcessing {
@@ -122,6 +176,12 @@ pub enum ProcessingError {
 
     #[error("RSA decryption needs blocks of the {0}-byte key length")]
     RsaDataLength(usize),
+
+    #[error("invalid LZSS window and length bits {0},{1}: need 0 < length < window < 16")]
+    InvalidLzss(u8, u8),
+
+    #[error("invalid ARLE data")]
+    InvalidArle,
 
     #[error("{0}")]
     Crypto(String),
@@ -187,6 +247,28 @@ impl HexFile {
             }
             DataProcessing::RsaDecrypt { key, padding } => {
                 self.transform_blocks(wrote_data, |data| padding.decrypt(key, data))?;
+                None
+            }
+            DataProcessing::Compress(compression) => {
+                self.transform_blocks(wrote_data, |data| Ok(compression.compress(data)))?;
+                None
+            }
+            DataProcessing::Decompress(compression) => {
+                self.transform_blocks(wrote_data, |data| compression.decompress(data))?;
+                None
+            }
+            DataProcessing::CompressEncrypt(lzss_aes) => {
+                let mut aes = lzss_aes.cipher(false);
+                self.transform_blocks(wrote_data, |data| {
+                    aes.process(&lzss_aes.lzss.compress(data))
+                })?;
+                None
+            }
+            DataProcessing::DecryptDecompress(lzss_aes) => {
+                let mut aes = lzss_aes.cipher(true);
+                self.transform_blocks(wrote_data, |data| {
+                    Ok(lzss_aes.lzss.decompress(&aes.process(data)?))
+                })?;
                 None
             }
         };
@@ -451,6 +533,31 @@ mod tests {
         let error = file.process_data(&decrypt, None).unwrap_err();
         assert!(matches!(error, ProcessingError::TagMismatch));
         assert_eq!(data(&file), [pat(0x40, 1), pat(0x20, 2)]);
+    }
+
+    /// HexView 1.15.2 `/DP59` without `#IV`: each block is compressed, then encrypted from
+    /// a zero IV.
+    #[test]
+    fn test_compress_encrypt_matches_hexview() {
+        let mut file = image(&[(0x1000, b"ABC".repeat(6)), (0x2000, vec![b'Q'; 40])]);
+        let lzss_aes = LzssAes {
+            lzss: Lzss::default(),
+            key: aes_key(),
+            iv: [0; 16],
+            padding: Some(AesPadding::Pkcs7),
+        };
+        let operation = DataProcessing::CompressEncrypt(lzss_aes.clone());
+        file.process_data(&operation, None).unwrap();
+        assert_eq!(
+            data(&file),
+            [
+                hex("b9f09bea7f33b9812a576f2d1a3ae0e1"),
+                hex("b4c9255950c4f357c3cb1b2c7f2fae40")
+            ]
+        );
+        let operation = DataProcessing::DecryptDecompress(lzss_aes);
+        file.process_data(&operation, None).unwrap();
+        assert_eq!(data(&file), [b"ABC".repeat(6), vec![b'Q'; 40]]);
     }
 
     /// HexView 1.15.2 `/DP4` and `/DP44` over gaps.hex; HMAC keys are cut after 64 bytes.

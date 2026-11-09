@@ -16,6 +16,8 @@ A `DataProcessing` operation runs over the image's blocks (`HexFile::blocks`):
 | `EncryptGcm(AesGcm)` | AES-GCM over all blocks as one stream | the tag |
 | `DecryptGcm { gcm, tag }` | AES-GCM decryption, then the tag check | none |
 | `RsaEncrypt` / `RsaDecrypt { key, padding }` | RSA, block by block | none |
+| `Compress` / `Decompress(Compression)` | LZSS or ARLE, block by block | none |
+| `CompressEncrypt` / `DecryptDecompress(LzssAes)` | LZSS and AES-CBC, block by block | none |
 
 `process_data` returns the output and, with a `Placement`, also writes it into the
 image. `verify_signature` does not modify the image.
@@ -111,6 +113,38 @@ When a cipher fails, the blocks before the failing one stay replaced, as in HexV
   decrypted without padding. `OaepSha1` and `OaepSha256` (OAEP without a label)
   encrypt blocks that fit one padded key length and decrypt blocks of one key length.
 
+### Compression
+
+Compression replaces each block's data from its start address, like a cipher; a block
+that grows overwrites what follows it. LZSS output matches HexView byte for byte.
+ARLE has documented differences for some interior-zero patterns; see
+[known divergences](known-divergences.md).
+
+`Lzss` holds the window and length field sizes in bits, 10 and 4 by default (Ford
+SWDL005), with `0 < length < window < 16`. The stream is MSB-first bits:
+
+- `1` and a byte is a literal
+- `0`, a window position and a length code copies `code + break_even + 1` bytes from
+  that absolute position, where `break_even` is `(1 + window + length) / 9`
+- `0` and position 0 ends the stream, with no length; the last byte is padded with zero
+  bits
+
+The window starts as zero bytes and is written from position 1, wrapping past the end.
+The compressor finds the longest match in a binary search tree of the window's strings
+and takes it greedily, which fixes its choice among equal matches. HexView holds match
+lengths in a byte, so with 8 or more length bits it compresses to literals only, and
+decompression wraps longer lengths. Decompression reads past the end of the data as
+zero bits, which end the stream, and ignores data after the end; a block that
+decompresses to nothing keeps its data, as in HexView.
+
+ARLE tokens are a header byte `KKCCCCCC` and data: kind 0 is `C` plain bytes, kinds 1,
+2 and 3 a byte, word or long word repeated `C` times. The compressor takes the run that
+covers the most bytes, with HexView's lookahead rules for overlapping runs; see the
+`arle` module for them. Decompression fails on an incomplete token or empty output.
+
+`LzssAes` compresses each block and then encrypts it with AES-CBC from `iv`, adding
+`padding`; decryption removes the padding and then decompresses.
+
 ## Key material
 
 Key types have `from_key_file` readers that take a key file's content, or key text,
@@ -197,6 +231,15 @@ The compat CLI owns the method numbers and the `/DP` parameter grammar.
 | `/DP52` | `Sign` `Ed25519` | `SignD_ED25519.ECC` |
 | `/DP53`, `/DP54` | `Encrypt`, `Decrypt` with `AesMode::Ctr` | |
 | `/DP55`, `/DP56` | `EncryptGcm`, `DecryptGcm` | |
+| `/DP26`, `/DP27` | `Compress`, `Decompress` with the default `Lzss` | |
+| `/DP57`, `/DP58` | `Compress`, `Decompress` with `#LZSS` bits | |
+| `/DP34`, `/DP35` | `CompressEncrypt`, `DecryptDecompress` with the default `Lzss` | |
+| `/DP59`, `/DP60` | `CompressEncrypt`, `DecryptDecompress` with `#LZSS` bits | |
+| `/DP36`, `/DP37` | `Compress`, `Decompress` with `Compression::Arle` | |
+
+HexView's Vector-specific LZ methods `/DP19` to `/DP25` and `/DP29` are not
+implemented: the manual names only their window and length sizes, and their coding is
+undocumented and not standard LZSS.
 
 The second signature or MAC method of each pair includes metadata. The RSA encryption
 methods read a public key (or the public part of a private key), and decryption a
@@ -217,7 +260,7 @@ HexView 1.15.2 implements `/SV12` to `/SV14`, which its manual does not list.
   the INI file; any other param1 is a key file
 - param4 is the output file of signatures and MACs; without it, the output goes to the
   default file above. HMAC-SHA-1 and HMAC-RIPEMD-160 output text ends with CRLF
-- for AES, param4 is the padding, read from its first four letters ignoring case:
+- for AES and LZSS with AES-CBC, param4 is the padding, read from its first four letters ignoring case:
   `PKCS` (PKCS #7), `ANSI` (ANSI X.923) or `RFC1` (RFC 1321); anything else is no padding.
   RSA encryption ignores param4
 - everything after the first `#` is options: `#SALT=`, `#IV=`, `#AUTH=`, `#TAG=` and
@@ -225,7 +268,11 @@ HexView 1.15.2 implements `/SV12` to `/SV14`, which its manual does not list.
 - `#SALT` is the `/DP38` and `/DP39` salt. HexView reads its first 255 characters, so
   the 128th byte of a longer salt is a single digit. An empty `#SALT=` is no salt
 - `#IV` is the CBC and CTR IV, padded with zero bytes or cut to 16 bytes; an empty
-  `#IV=` is no IV. For GCM it is the nonce, cut to 16 bytes
+  `#IV=` is no IV. For GCM it is the nonce, cut to 16 bytes. LZSS with AES-CBC uses zero
+  bytes without it, not the data
+- `#LZSS=window,length` is read as C's `scanf("%d,%d")`: `#LZSS= +12, 05x` is 12,5.
+  `/DP57` and `/DP58` fail on bits outside the limits and on any parameter text without
+  `#LZSS=`, such as `#LZSS12,5`; `/DP59` and `/DP60` use the default bits instead
 - GCM `#AUTH` is hex text or a binary file (one with a byte from 0x80); HexView ignores
   text files and missing files. `/DP55` writes the tag to a `#TAG` file and to the
   placement; `/DP56` reads `#TAG` as hex text or `@address,length` in the image

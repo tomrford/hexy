@@ -30,6 +30,7 @@ CipherMode = Literal[
     "ecb", "cbc", "ctr", "gcm", "rsa-pkcs1v15", "rsa-oaep-sha1", "rsa-oaep-sha256"
 ]
 AesPadding = Literal["pkcs7", "ansix923", "rfc1321"]
+Compression = Literal["lzss", "arle"]
 
 class AddressRange:
     def __init__(
@@ -227,6 +228,37 @@ class HexFile:
         exactly one key length per block; `rsa-pkcs1v15` also accepts whole
         numbers of key lengths, and decrypts a single key length without padding
         when its padding is not valid."""
+    def compress(
+        self,
+        method: Compression = "lzss",
+        *,
+        window_bits: int | None = None,
+        length_bits: int | None = None,
+        key: bytes | None = None,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+    ) -> None:
+        """Compress each block in place as HexView does (`/DP26`, `/DP36`, `/DP57`);
+        a block keeps its start address and takes the compressed length. LZSS uses a
+        `window_bits` window and `length_bits` lengths, 10 and 4 by default, with
+        0 < length_bits < window_bits < 16; with 8 or more length bits it codes
+        literals only, as HexView does. With `key`, each compressed block is then
+        AES-CBC encrypted from `iv` (zero bytes by default) after adding `padding`
+        (`/DP34`, `/DP59`). ARLE codes byte, word and long word runs."""
+    def decompress(
+        self,
+        method: Compression = "lzss",
+        *,
+        window_bits: int | None = None,
+        length_bits: int | None = None,
+        key: bytes | None = None,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+    ) -> None:
+        """Reverse `compress` (`/DP27`, `/DP37`, `/DP58`; with `key`, `/DP35`,
+        `/DP60`). LZSS reads any data, taking missing bits as zero; a block that
+        decompresses to nothing keeps its data. ARLE raises `ValueError` on an
+        incomplete token or empty output."""
     def verify_signature(
         self,
         method: SignatureMethod,
@@ -347,6 +379,28 @@ class Pipeline:
         tag: bytes | RangeLike | None = None,
     ) -> None:
         """Decrypt after the checksum stages (`/DP`); see `HexFile.decrypt`."""
+    def compress(
+        self,
+        method: Compression = "lzss",
+        *,
+        window_bits: int | None = None,
+        length_bits: int | None = None,
+        key: bytes | None = None,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+    ) -> None:
+        """Compress after the checksum stages (`/DP`); see `HexFile.compress`."""
+    def decompress(
+        self,
+        method: Compression = "lzss",
+        *,
+        window_bits: int | None = None,
+        length_bits: int | None = None,
+        key: bytes | None = None,
+        iv: bytes | None = None,
+        padding: AesPadding | None = None,
+    ) -> None:
+        """Decompress after the checksum stages (`/DP`); see `HexFile.decompress`."""
     def verify(
         self,
         method: SignatureMethod,

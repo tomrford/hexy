@@ -88,7 +88,9 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 - `/DP` with more than one `;`, or `@placement` without a following `:`: HexView fails the stage and still exports; hexy rejects the command
 - `/DP` output file in a folder that does not exist: HexView writes the default output file instead; hexy fails
 - `/DP` ignores `#IV`, `#AUTH`, `#TAG`, `#LZSS` and `#SALT` for methods that do not use them, as HexView does; hexy also warns
-- `/DP` ciphers whose padding grows a block into the next block, such as `/SB` pieces: HexView keeps both blocks and exports the overlapping bytes twice; hexy keeps the later block's bytes
+- `/DP` ciphers and compression that grow a block into the next block, such as `/SB` pieces or LZSS of random data: HexView keeps both blocks and exports the overlapping bytes twice; hexy keeps the later block's bytes
+- `/DP36` ARLE compression of some data with zero bytes, such as `00 00 00 00 02 00 02`: HexView reads past the block and picks other runs; hexy's output decompresses to the same data. Zero bytes that end a block, and data without zero bytes, compress as in HexView
+- `/DP19` to `/DP25` and `/DP29` (Vector-specific LZ compression, alone or with RIPEMD-160 signatures and MACs): hexy rejects them. The manual names only their window and length sizes; the coding is proprietary and undocumented, and it is not LZSS
 - `/DP55` without `#IV`: HexView takes the IV from the data but drops 16 bytes of ciphertext; hexy rejects the command
 - `/DP55` and `/DP56` with `#AUTH=@address,length`: HexView leaves that data unencrypted but also out of the tag; hexy rejects the command
 - `/DP56` with a `#TAG` file: HexView never reads it, so the check always fails; hexy rejects the command

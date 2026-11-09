@@ -46,8 +46,8 @@ pub(in crate::args) struct ProcessingOptions {
     pub auth: Option<DataInput>,
     /// `#TAG=@address,length`, hex text or a file.
     pub tag: Option<DataInput>,
-    /// `#LZSS=window,length` or `#LZSSwindow,length`, in bits.
-    pub lzss: Option<(u8, u8)>,
+    /// `#LZSS=window,length`: the text after `=`, read when the stage runs.
+    pub lzss: Option<String>,
 }
 
 impl ProcessingOptions {
@@ -73,6 +73,8 @@ pub(in crate::args) struct DataProcessingParams {
     /// param4: the output file of methods that produce output.
     pub param4: Option<String>,
     pub options: ProcessingOptions,
+    /// Whether any parameter text follows the method (and placement).
+    pub has_parameter: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +112,7 @@ pub(in crate::args) fn parse_data_processing(
         source: parse_source(params),
         param4: (!param4.is_empty()).then(|| param4.to_owned()),
         options: parse_options(options)?,
+        has_parameter: !rest.is_empty(),
     })
 }
 
@@ -160,8 +163,8 @@ fn parse_options(text: &str) -> Result<ProcessingOptions, ParseArgError> {
             options.auth = Some(parse_data_input(value)?);
         } else if let Some(value) = token.strip_prefix("TAG=") {
             options.tag = Some(parse_data_input(value)?);
-        } else if let Some(value) = token.strip_prefix("LZSS") {
-            options.lzss = Some(parse_lzss(token, value.strip_prefix('=').unwrap_or(value))?);
+        } else if let Some(value) = token.strip_prefix("LZSS=") {
+            options.lzss.get_or_insert_with(|| value.to_owned());
         }
     }
     Ok(options)
@@ -190,12 +193,6 @@ fn parse_data_input(value: &str) -> Result<DataInput, ParseArgError> {
         Some(bytes) => DataInput::Hex(bytes),
         None => DataInput::File(PathBuf::from(value)),
     })
-}
-
-fn parse_lzss(token: &str, value: &str) -> Result<(u8, u8), ParseArgError> {
-    let (window, length) = value.split_once(',').ok_or_else(|| invalid_option(token))?;
-    let bits = |text: &str| text.parse::<u8>().map_err(|_| invalid_option(token));
-    Ok((bits(window)?, bits(length)?))
 }
 
 #[cfg(test)]
@@ -242,7 +239,7 @@ mod tests {
     fn test_parse_processing_options() {
         let options = parse_data_processing(
             55,
-            "00#AUTH=@0x1000,32#TAG=tag.dat#SALT=11#LZSS12,5#iv=00#FOO=1",
+            "00#AUTH=@0x1000,32#TAG=tag.dat#SALT=11#LZSS=12,5#LZSS=3,1#iv=00#FOO=1",
         )
         .unwrap()
         .options;
@@ -255,13 +252,13 @@ mod tests {
                     AddressRange::from_start_length(0x1000, 32).unwrap()
                 )),
                 tag: Some(DataInput::File(PathBuf::from("tag.dat"))),
-                lzss: Some((12, 5)),
+                lzss: Some("12,5".to_owned()),
             }
         );
-        let options = parse_data_processing(59, "00#LZSS=12,4#TAG=0011")
+        let options = parse_data_processing(59, "00#LZSS12,4#TAG=0011")
             .unwrap()
             .options;
-        assert_eq!(options.lzss, Some((12, 4)));
+        assert_eq!(options.lzss, None);
         assert_eq!(options.tag, Some(DataInput::Hex(vec![0x00, 0x11])));
 
         // HexView 1.15.2 reads 255 characters of `#SALT`, so the last digit pair of a

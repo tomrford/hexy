@@ -169,7 +169,7 @@ fn test_unimplemented_methods_rejected_before_outputs() {
     let out = dir.join("out.hex");
     let out_arg = out.display().to_string();
     for flag in [
-        "/DP57",
+        "/DP19",
         "/DP55:00112233445566778899AABBCCDDEEFF",
         "/DP56:00112233445566778899AABBCCDDEEFF#IV=0#TAG=tag.txt",
         "/DP25:rsa.txt",
