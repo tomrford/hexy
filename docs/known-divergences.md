@@ -12,9 +12,8 @@ What each hexy crate exposes, and where hexy's behaviour differs from Vector Hex
 - `hexy-compat` is the HexView-style CLI. It reads slash flags and INI files into a
   `Pipeline`, runs it, and writes the export and the checksum and data processing
   output files. It also owns what HexView does outside the core operations: the `/L`
-  log commands, the `/SWAPLONG` repeat of blocks of 16 MiB or more, and the `/XP` and
-  `/XSB` file layouts. `/CSM*` and `/CSMR*`, which run several checksums in order, are
-  a hexy extension that HexView ignores.
+  log commands and the `/XP` and `/XSB` file layouts. `/CSM*` and `/CSMR*`, which run
+  several checksums in order, are a hexy extension that HexView ignores.
 - `hexy-py` exposes every `hexy-core` operation, parser, writer and `Pipeline` stage
   to Python with the same parameters, so a CLI run is reproduced by configuring the
   `Pipeline` stages of its flags. The compat-only steps above compose from
@@ -75,8 +74,6 @@ are not listed.
   `#AUTH`, `#TAG`, `#LZSS`, `#SALT`) are ignored by both, and hexy also warns.
 - `/DP` with more than one `;`, or `@placement` without a following `:`: HexView fails
   the stage and still exports; hexy rejects the command.
-- An output file in a folder that does not exist: HexView writes the default output
-  file instead; hexy fails.
 
 ### Data processing results
 
@@ -122,6 +119,12 @@ are not listed.
 
 ### Exports
 
+- Without `-o`, an export from a `/IN`, `/IA` or `/II2` import is named after the
+  import file, such as `firmware.s19` for `/IN:firmware.bin /XS`, and the export INI
+  file defaults to the import file with `.ini`. HexView writes a file named only the
+  suffix, such as `.s19` or `_f.hex`, and reads no INI file.
+- An export without any input file, such as `/MO:merge.hex /XI`, needs `-o` in hexy;
+  HexView writes `.hex`.
 - Forced S1 or S2 records (`/XS:len:0`, `/XS:len:1`) for addresses that do not fit:
   HexView truncates the addresses; hexy rejects the export.
 - `/XI` and `/XS` record lengths above 255, `/XC` `WordSize` values other than 0-2 and
@@ -135,3 +138,17 @@ are not listed.
 
 - `/vs` with a checksum method that fails on the data, such as method 5 on an odd
   length: HexView still writes its C files; hexy fails the stage without them.
+- `/vs` C files: hexy writes valid C where HexView's does not compile. The inserted
+  structure and the `.h` file are the same. In the `.c` file:
+  - the `WriteALFI` identifier: HexView writes no comma before it; hexy writes
+    `,0x22`
+  - checksums of other than 1, 2 or 4 bytes, such as SHA-1 digests or a 3-byte
+    `/CS16` constant: HexView writes one literal, such as `0x0A0B0C`; hexy writes
+    each byte, as in `0x0A, 0x0B, 0x0C`
+  - tags of other than 1, 2 or 4 bytes: HexView writes C's reading of the tag text
+    as one number, such as `0x1234u`; hexy writes a byte array of the tag's length
+    holding that number
+  - block checksums of a method HexView does not know or a `/CS16` constant it cannot
+    read: HexView writes a bare `0x`; hexy leaves them out
+  - without blocks: HexView writes a comma before the field after the begin tag, such
+    as the file checksum; hexy does not

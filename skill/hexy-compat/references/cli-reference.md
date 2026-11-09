@@ -196,7 +196,7 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 - Compute checksum method `x`; `/CSR` flips the output endianness from the algorithm's native format.
 - Omit `:target` to calculate without writing the result anywhere.
 - Methods 0-22 are supported. Method 16 writes a constant instead of a checksum: `NumBytes` bytes (default 2) of `HexDataString` (default `0815`) from the `[constant]` section of `expdatproc.ini` in the working directory. Methods 21 and 22 are CRC-16 with the CCITT polynomial and start value `0xCAFE`, little- and big-endian.
-- A failed checksum gives a non-zero exit, but the later stages and the export still run, as in HexView.
+- A checksum that fails, including a method HexView does not know or a method 16 constant that cannot be read, gives a non-zero exit, but the later stages and the export still run, as in HexView.
 
 `/CSMx[:target]` and `/CSMRx[:target]`
 - Run multi-checksum mode and allow repeated checksum flags in order.
@@ -216,11 +216,12 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 `/DPn[:@placement]:[param1][,param2,param3][;param4][#NAME=value]...`
 - Run after checksum operations. Supported methods: `/DP0` (no action), `/DP1` (XOR), AES `/DP2`/`/DP3` (ECB), `/DP11`/`/DP12` (CBC), `/DP53`/`/DP54` (CTR) and `/DP55`/`/DP56` (GCM), HMAC `/DP4`-`/DP7`, `/DP13`, `/DP14`, `/DP30`, `/DP31`, CMAC `/DP44`, `/DP45`, RSA signatures `/DP8`-`/DP10`, `/DP15`, `/DP16`, `/DP28`, `/DP32`, `/DP33`, `/DP38`, `/DP39`, RSA encryption `/DP17`, `/DP18`, `/DP40`-`/DP43`, Ed25519 `/DP46`-`/DP49`, `/DP52`, ECDSA P-256 `/DP50`, `/DP51`, LZSS `/DP26`, `/DP27`, `/DP57`, `/DP58`, LZSS with AES-CBC `/DP34`, `/DP35`, `/DP59`, `/DP60`, and ARLE `/DP36`, `/DP37`. HexView's Vector-specific LZ methods (`/DP19`-`/DP25`, `/DP29`) are rejected before any output is written, and unknown numbers fail when the stage runs. See [data processing](../../../docs/data-processing.md) for the method table.
 - param1 is the key: hex text inline (for example a HIS `FF49...` RSA key, a HIS `FF5B...` MAC key, an AES key, an Ed25519 seed or a P-256 scalar), `file,section,key` to read it from an INI file, or a key file (hex text, PEM or DER; symmetric keys must be hex text). See [data processing](../../../docs/data-processing.md) for the key formats.
-- For signatures and MACs, param4 is the output file. Without it, the output goes to HexView's default file, such as `SignD_SHA256.RSA` for `/DP32` or `SignD_SHA1.txt` for `/DP4`. The file holds `0xAA ,0xBB` text.
+- For signatures and MACs, param4 is the output file. Without it, or when it cannot be written, such as a file in a folder that does not exist, the output goes to HexView's default file, such as `SignD_SHA256.RSA` for `/DP32` or `SignD_SHA1.txt` for `/DP4`. The file holds `0xAA ,0xBB` text.
+- Fields are used exactly as given, as in HexView: blanks and quotes are part of a file name or key text, so `"key.pem"` or ` key.pem` fails the stage.
 - Everything after the first `#` is options (`#SALT=`, `#IV=`, `#AUTH=`, `#TAG=`, `#LZSS=`), so `key#IV=00;sig.txt` has no param4. Methods ignore options they do not use, with a warning. `#SALT=hex` is the `/DP38` and `/DP39` RSA-PSS salt (at most 255 hex digits are read); without it the salt is 32 random bytes.
 - `/DP1` XORs the data with param1, repeated across the blocks; without a hex key it inverts the data.
 - AES: the key length picks AES-128, -192 or -256. param4 is the padding (`PKCS7`, `ANSIX.923` or `RFC1321`; the first four letters count). ECB, CBC and CTR process and pad each block on its own; without padding, ECB and CBC need each block to be a multiple of 16 bytes. `#IV=hex` is the CBC or CTR IV, padded with zeros; without it the first 16 bytes of the first block are the IV and stay unencrypted.
-- AES-GCM encrypts all blocks as one stream: `#IV` (required) is the nonce, `#AUTH=hex` or a binary file adds authenticated data, and `/DP55` writes the 16-byte tag to `#TAG=file` and to `@placement`. `/DP56` checks `#TAG=hex` or `#TAG=@address,length`, image bytes at the start or end of a block that stay in place.
+- AES-GCM encrypts all blocks as one stream: `#IV` (required) is the nonce, `#AUTH=hex` or a binary file adds authenticated data, and `/DP55` writes the 16-byte tag to `#TAG=file`, unless that file cannot be written, and to `@placement`. `/DP56` checks `#TAG=hex` or `#TAG=@address,length`, image bytes at the start or end of a block that stay in place.
 - RSA encryption (`/DP17` PKCS #1 v1.5, `/DP40` OAEP SHA-1, `/DP42` OAEP SHA-256) encrypts each block on its own with a public key; `/DP17` encrypts blocks of whole key lengths without padding. Decryption needs the private key: `/DP41` and `/DP43` require exactly one key length per block, while `/DP18` accepts whole key lengths and removes PKCS #1 v1.5 padding from a single key length when it is valid.
 - Compression replaces each block from its start address. LZSS (`/DP26`/`/DP27`) uses a 10-bit window and 4-bit lengths; `/DP57`/`/DP58` take `#LZSS=window,length` (`0 < length < window < 16`) and fail on any other parameter text, including `#LZSS12,5` without `=`. A block that decompresses to nothing keeps its data. ARLE (`/DP36`/`/DP37`) fails on an incomplete token or empty output.
 - `/DP59` compresses with LZSS (`#LZSS` or the default) and then encrypts with AES-CBC; `/DP60` decrypts and then decompresses. `/DP34`/`/DP35` do the same with the default LZSS bits and ignore `#LZSS`. Param4 is the padding and `#IV` the IV; without `#IV` the IV is zero bytes.
@@ -242,15 +243,16 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 
 `/vs`
 - Build HexView's validation structure over the blocks, configured by `[VALIDATION]` in the INI file. Without that section it is skipped with a warning.
-- Layout: `IdTagBegin`, the block count, an address and length format identifier with `WriteALFI=1` (`0x22` or `0x44`), each block's address, length and `BlockChecksumType` checksum, the `FileChecksumType` checksum over all blocks, `IdTagEnd`, and with `ValidateChecksum=1` the 16-bit sum of those bytes. Checksum methods are `/CS` numbers; a missing or negative one leaves its checksum out, and an unknown one leaves it empty and fails the run.
+- Layout: `IdTagBegin`, the block count, an address and length format identifier with `WriteALFI=1` (`0x22` or `0x44`), each block's address, length and `BlockChecksumType` checksum, the `FileChecksumType` checksum over all blocks, `IdTagEnd`, and with `ValidateChecksum=1` the 16-bit sum of those bytes. Checksum methods are `/CS` numbers; a missing or negative one leaves its checksum out, and an unknown one, or method 16 with a constant that cannot be read, leaves it empty and fails the run.
 - Addresses and lengths take 16 bits, or 32 bits with `Force32BitFormat=1` or when a block ends above `0xFFFF`. The count takes one byte, or two with 32-bit addresses unless `ForceBlockSize1Byte=1`. `EndianType` 0 writes them little-endian; any other value, or none, big-endian. Checksums keep their method's byte order.
 - A tag's hex digits are its bytes, read like `/IA` data, or with `IdTagBeginLength` or `IdTagEndLength` its hex value in that many bytes. A missing tag is left out, but a tag with a length and no value, or an image without blocks or of a single byte, leaves the structure neither inserted nor summed. Flags count as set when they are not 0, signed or not.
 - `SpareRange` lists ranges left out of the blocks. With `InsertData=1` the structure is inserted at `BaseAddress` as a block of its own, unless it would overlap data.
-- With `GenerateCFiles=1`, `CFilename` and `HFilename`, HexView's `ValidateInfo` C initializer and its struct definitions are written there.
+- With `GenerateCFiles=1`, `CFilename` and `HFilename`, HexView's `ValidateInfo` C initializer and its struct definitions are written there, as valid C where HexView's `.c` file does not compile (see [known divergences](../../../docs/known-divergences.md)).
 
 `/vshsm:@placement`
 - Build the vHSM validation structure, configured by `[HSMBOOT]`, after `/vs`: big-endian `GROUP_ID` (4 bytes), the block count (2), and each block's address (4), length (4), `MODE` (2) and `HASH_METHOD` checksum (default 20, SHA-256).
-- `SIGNATURE_METHOD` and `SIGNATURE_PARAM` are a `/DP` method and parameter for a signature over the structure, written just before it in the same block and to the `/DP` output file.
+- `SIGNATURE_METHOD` and `SIGNATURE_PARAM` are a `/DP` method and parameter for a signature over the structure at the placement address, written to the `/DP` output file and in the same block as the structure: ending at the placement address or, without room below it, starting there with the structure after it.
+- A signature that fails leaves the structure inserted unsigned and fails the run, as in HexView.
 - `placement` is an address read like `/XI` values (`@1234h` is decimal 1234) or `@end` or `@append` for after the data; without it the structure goes to address 0, and other words insert nothing. Nothing is inserted where it would overlap data. `[HSMBOOT]` numbers are `0x` hex or decimal.
 - A cipher or XOR method as `SIGNATURE_METHOD` changes the inserted structure itself.
 
@@ -258,7 +260,7 @@ Mapping cuts blocks where windows start and end. When a mapped piece lands on ot
 
 `-o output.ext`
 - Write the export to `output.ext`.
-- Without `-o`, the export goes to the input file name with the format's extension: `.hex` for `/XI`, `.s19` for `/XS`, `.bin` for `/XN`, `/XP`, `/XSB` and `/XGACSWIL`, `.asc` for `/XA`, `.c` for `/XC`, `.fkl` for `/XK` and `_f.hex` for `/XF`. `/XI` without `-o` therefore overwrites a `.hex` input.
+- Without `-o`, the export goes to the input file name, or the import file name, with the format's extension: `.hex` for `/XI`, `.s19` for `/XS`, `.bin` for `/XN`, `/XP`, `/XSB` and `/XGACSWIL`, `.asc` for `/XA`, `.c` for `/XC`, `.fkl` for `/XK` and `_f.hex` for `/XF`. `/XI` without `-o` therefore overwrites a `.hex` input. Without an input or import file, `-o` is required.
 - Without an `/X...` flag nothing is exported, even with `-o`.
 
 `/XI[:reclinelen[:rectype]]`

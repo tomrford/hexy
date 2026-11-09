@@ -258,8 +258,11 @@ HexView 1.15.2 implements `/SV12` to `/SV14`, which its manual does not list.
 
 - param1 that is hex text is inline key text; `file,section,key` reads the key text from
   the INI file; any other param1 is a key file
-- param4 is the output file of signatures and MACs; without it, the output goes to the
-  default file above. HMAC-SHA-1 and HMAC-RIPEMD-160 output text ends with CRLF
+- every field is used exactly as given: blanks and quotes are part of a file name or
+  key text
+- param4 is the output file of signatures and MACs; without it, or when it cannot be
+  written, the output goes to the default file above. HMAC-SHA-1 and HMAC-RIPEMD-160
+  output text ends with CRLF
 - for AES and LZSS with AES-CBC, param4 is the padding, read from its first four letters ignoring case:
   `PKCS` (PKCS #7), `ANSI` (ANSI X.923) or `RFC1` (RFC 1321); anything else is no padding.
   RSA encryption ignores param4
@@ -274,8 +277,8 @@ HexView 1.15.2 implements `/SV12` to `/SV14`, which its manual does not list.
   `/DP57` and `/DP58` fail on bits outside the limits and on any parameter text without
   `#LZSS=`, such as `#LZSS12,5`; `/DP59` and `/DP60` use the default bits instead
 - GCM `#AUTH` is hex text or a binary file (one with a byte from 0x80); HexView ignores
-  text files and missing files. `/DP55` writes the tag to a `#TAG` file and to the
-  placement; `/DP56` reads `#TAG` as hex text or `@address,length` in the image
+  text files and missing files. `/DP55` writes the tag to a `#TAG` file, unless it
+  cannot be written, and to the placement; `/DP56` reads `#TAG` as hex text or `@address,length` in the image
 - file references, including the output file, resolve against the input file's folder,
   or the working directory without a positional input file
 

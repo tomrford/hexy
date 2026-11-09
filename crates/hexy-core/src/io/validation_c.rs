@@ -22,9 +22,10 @@ pub struct ValidationCOptions {
     pub tag_end_value: Option<u32>,
 }
 
-/// The `.c` and `.h` files HexView writes for a validation structure: `ValidateInfo` as
-/// a `tValidateInfo` initializer and the struct definitions. Without `structure`'s
-/// validate sum the field is left out.
+/// The `.c` and `.h` files of a validation structure in HexView's layout: `ValidateInfo`
+/// as a `tValidateInfo` initializer and the struct definitions, written as valid C where
+/// HexView's `.c` file does not compile. Without `structure`'s validate sum the field is
+/// left out.
 pub fn write_validation_c(
     options: &ValidationOptions,
     structure: &ValidationStructure,
