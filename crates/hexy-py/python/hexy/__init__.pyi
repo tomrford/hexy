@@ -579,5 +579,5 @@ class Pipeline:
         """Build the `/vshsm` structure after `/vs`, with an optional `signature`
         over it at the placement address; with `placement`, insert the signature and
         structure as one block unless it would overlap data, the signature ending at
-        that address or, without room below it, starting there. A signature that
-        fails leaves the structure inserted unsigned, and `apply` raises."""
+        that address or, without room below it, starting there. Signature failures
+        raise an exception; `apply` returns a result only on success."""

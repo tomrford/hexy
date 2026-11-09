@@ -339,15 +339,15 @@ fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
 /// constant it cannot read.
 #[test]
 fn test_cli_failed_checksum_still_exports() {
-    let dir = temp_dir("cli_checksum_failed");
-    write_file(&dir.join("in.bin"), &[0x01, 0x08, 0x0F]);
-    write_file(&dir.join("expdatproc.ini"), b"[constant]\r\nNumBytes=0\r\n");
     for flag in [
         "/CS12:@append",
         "/CS99:@append",
         "/CS23:cs.txt",
         "/CS16:cs.txt",
     ] {
+        let dir = temp_dir("cli_checksum_failed");
+        write_file(&dir.join("in.bin"), &[0x01, 0x08, 0x0F]);
+        write_file(&dir.join("expdatproc.ini"), b"[constant]\r\nNumBytes=0\r\n");
         let output = run_in(
             &dir,
             &["/IN:in.bin;0x1000", flag, "/DP1:FF", "/XI", "-o", "out.hex"],
