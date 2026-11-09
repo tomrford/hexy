@@ -161,13 +161,17 @@ fn test_sv_sees_placed_output_and_failures_still_export() {
     }
 }
 
+/// Methods and options hexy does not implement, and AES-GCM forms whose HexView output
+/// is broken, fail before any output.
 #[test]
 fn test_unimplemented_methods_rejected_before_outputs() {
     let (dir, input) = input("dp_unsupported");
     let out = dir.join("out.hex");
     let out_arg = out.display().to_string();
     for flag in [
-        "/DP2:00112233445566778899AABBCCDDEEFF",
+        "/DP57",
+        "/DP55:00112233445566778899AABBCCDDEEFF",
+        "/DP56:00112233445566778899AABBCCDDEEFF#IV=0#TAG=tag.txt",
         "/SV0:pub.txt!00",
         "/DP38:k.pem#SALT=00",
     ] {

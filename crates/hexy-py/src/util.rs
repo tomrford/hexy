@@ -1,5 +1,6 @@
 use hexy_core::{
-    AddressRange, IntelHexMode, MergeMode, Placement, SRecordType, SignatureMethod,
+    AddressRange, AesGcm, AesKey, AesMode, AesPadding, DataProcessing, GcmTag, IntelHexMode,
+    MacAlgorithm, MacKey, MacMethod, MergeMode, Placement, SRecordType, SignatureMethod,
     SignatureScheme, SwapMode, parse_compat_ranges,
 };
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -148,4 +149,102 @@ pub(crate) fn key_content(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     obj.extract::<String>()
         .map(String::into_bytes)
         .map_err(|_| PyTypeError::new_err("expected key bytes or key text"))
+}
+
+/// A MAC operation from its Python name and raw key.
+pub(crate) fn mac_operation(method: &str, key: &[u8], metadata: bool) -> PyResult<DataProcessing> {
+    let algorithm = match method.to_ascii_lowercase().as_str() {
+        "hmac-md5" => MacAlgorithm::HmacMd5,
+        "hmac-sha1" => MacAlgorithm::HmacSha1,
+        "hmac-ripemd160" => MacAlgorithm::HmacRipemd160,
+        "hmac-sha256" => MacAlgorithm::HmacSha256,
+        "cmac-aes128" => MacAlgorithm::CmacAes128,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown MAC method '{other}'"
+            )));
+        }
+    };
+    Ok(DataProcessing::Mac {
+        method: MacMethod {
+            algorithm,
+            with_metadata: metadata,
+        },
+        key: MacKey::new(key).map_err(value_error)?,
+    })
+}
+
+/// The AES arguments shared by `encrypt` and `decrypt`.
+pub(crate) struct AesArgs<'a> {
+    pub mode: &'a str,
+    pub key: &'a [u8],
+    pub iv: Option<&'a [u8]>,
+    pub padding: Option<&'a str>,
+    pub aad: &'a [u8],
+}
+
+/// An AES encryption or decryption; GCM decryption checks `tag`, bytes or a range of
+/// the image.
+pub(crate) fn aes_operation(
+    args: AesArgs<'_>,
+    decrypt: bool,
+    tag: Option<&Bound<'_, PyAny>>,
+) -> PyResult<DataProcessing> {
+    let key = AesKey::new(args.key).map_err(value_error)?;
+    let mode = args.mode.to_ascii_lowercase();
+    if mode == "gcm" {
+        let gcm = AesGcm {
+            key,
+            nonce: args
+                .iv
+                .ok_or_else(|| PyValueError::new_err("gcm needs an iv"))?
+                .to_vec(),
+            aad: args.aad.to_vec(),
+        };
+        if !decrypt {
+            return Ok(DataProcessing::EncryptGcm(gcm));
+        }
+        let tag = tag.ok_or_else(|| PyValueError::new_err("gcm decryption needs a tag"))?;
+        let tag = match tag.extract::<Vec<u8>>() {
+            Ok(bytes) => GcmTag::Bytes(bytes),
+            Err(_) => GcmTag::Image(parse_range_arg(tag)?),
+        };
+        return Ok(DataProcessing::DecryptGcm { gcm, tag });
+    }
+    if tag.is_some() {
+        return Err(PyValueError::new_err("only gcm takes a tag"));
+    }
+    let iv = args
+        .iv
+        .map(|iv| {
+            <[u8; 16]>::try_from(iv).map_err(|_| PyValueError::new_err("iv must be 16 bytes"))
+        })
+        .transpose()?;
+    let mode = match (mode.as_str(), iv) {
+        ("ecb", None) => AesMode::Ecb,
+        ("cbc", iv) => AesMode::Cbc { iv },
+        ("ctr", iv) => AesMode::Ctr { iv },
+        ("ecb", Some(_)) => return Err(PyValueError::new_err("ecb takes no iv")),
+        (other, _) => {
+            return Err(PyValueError::new_err(format!(
+                "unknown AES mode '{other}', expected 'ecb', 'cbc', 'ctr' or 'gcm'"
+            )));
+        }
+    };
+    let padding = match args.padding.map(str::to_ascii_lowercase).as_deref() {
+        None => None,
+        Some("pkcs7") => Some(AesPadding::Pkcs7),
+        Some("ansix923") => Some(AesPadding::AnsiX923),
+        Some("rfc1321") => Some(AesPadding::Rfc1321),
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "unknown padding '{other}', expected 'pkcs7', 'ansix923' or 'rfc1321'"
+            )));
+        }
+    };
+    Ok(if decrypt {
+        DataProcessing::Decrypt { key, mode, padding }
+    } else {
+        DataProcessing::Encrypt { key, mode, padding }
+    })
 }

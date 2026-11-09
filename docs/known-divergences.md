@@ -81,13 +81,18 @@ This is not a cosmetic whitespace issue; the exported contract differs.
 - forced S1 or S2 records (`/XS:len:0`, `/XS:len:1`) for addresses that do not fit: HexView truncates the addresses; hexy rejects the export
 - `/XI` and `/XS` record lengths above 255 crash HexView; hexy rejects them
 - `/CS16` `HexDataString` values with characters other than hex digits: HexView's parse is irregular; hexy rejects them
-- `/DP` and `/SV` key formats HexView rejects but hexy reads: RSA public keys as SPKI PEM, binary DER or X.509 certificates; RSA private keys as binary PKCS #1 DER; Ed25519 keys with the standard `id-Ed25519` OID, as SPKI, as binary DER or from certificates (see [data processing](signatures.md))
+- `/DP` and `/SV` key formats HexView rejects but hexy reads: RSA public keys as SPKI PEM, binary DER or X.509 certificates; RSA private keys as binary PKCS #1 DER; Ed25519 keys with the standard `id-Ed25519` OID, as SPKI, as binary DER or from certificates (see [data processing](data-processing.md))
 - `/DP` hex key files of 2999 bytes or more: HexView fails to read them; hexy reads them
 - `/DP` key text with stray characters, such as `12x34`: HexView reads some of them as zero bytes; hexy rejects the text
 - `/DP` option values that are not valid, such as `#IV=00;sig.txt`: HexView ignores options a method does not use; hexy rejects them
 - `/DP` with more than one `;`, or `@placement` without a following `:`: HexView fails the stage and still exports; hexy rejects the command
 - `/DP` output file in a folder that does not exist: HexView writes the default output file instead; hexy fails
 - `/DP` ignores `#IV`, `#AUTH`, `#TAG`, `#LZSS` and `#SALT` for methods that do not use them, as HexView does; hexy also warns. `#SALT` with `/DP38` and `/DP39` is not supported yet
+- `/DP` ciphers whose padding grows a block into the next block, such as `/SB` pieces: HexView keeps both blocks and exports the overlapping bytes twice; hexy keeps the later block's bytes
+- `/DP55` without `#IV`: HexView takes the IV from the data but drops 16 bytes of ciphertext; hexy rejects the command
+- `/DP55` and `/DP56` with `#AUTH=@address,length`: HexView leaves that data unencrypted but also out of the tag; hexy rejects the command
+- `/DP56` with a `#TAG` file: HexView never reads it, so the check always fails; hexy rejects the command
+- `/DP56` with an image `#TAG` in the middle of a block: HexView decrypts part of the data before it fails; hexy fails without changing the data
 - `/DP38`, `/DP39`: HexView's RSA-PSS salt is reproducible between runs; hexy uses a random salt, so only verification matches
 - `/DP48`, `/DP49`: HexView signs the SHA-512 digest with Ed25519ph; hexy signs it with plain Ed25519
 - `/CSM*` and `/CSMR*` are hexy extensions; HexView ignores them

@@ -9,8 +9,9 @@ use pyo3::types::PyBytes;
 
 use crate::hexfile::PyHexFile;
 use crate::util::{
-    key_content, parse_fill_pattern, parse_merge_mode, parse_placement, parse_range_arg,
-    parse_ranges_arg, parse_signature_method, parse_swap_mode, py_bytes, value_error,
+    AesArgs, aes_operation, key_content, mac_operation, parse_fill_pattern, parse_merge_mode,
+    parse_placement, parse_range_arg, parse_ranges_arg, parse_signature_method, parse_swap_mode,
+    py_bytes, value_error,
 };
 
 /// A `hexy_core::Pipeline`: each method configures one stage, and `apply` runs the
@@ -241,6 +242,81 @@ impl PyPipeline {
         self.inner.data_processing = Some(DataProcessingStage {
             operation: DataProcessing::Sign { method, key },
             placement: placement.map(parse_placement).transpose()?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
+    fn mac(
+        &mut self,
+        method: &str,
+        key: &[u8],
+        metadata: bool,
+        placement: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        self.inner.data_processing = Some(DataProcessingStage {
+            operation: mac_operation(method, key, metadata)?,
+            placement: placement.map(parse_placement).transpose()?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (key=None))]
+    fn xor(&mut self, key: Option<&[u8]>) {
+        self.inner.data_processing = Some(DataProcessingStage {
+            operation: DataProcessing::Xor {
+                key: key.unwrap_or_default().to_vec(),
+            },
+            placement: None,
+        });
+    }
+
+    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, placement=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn encrypt(
+        &mut self,
+        mode: &str,
+        key: &[u8],
+        iv: Option<&[u8]>,
+        padding: Option<&str>,
+        aad: Option<&[u8]>,
+        placement: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let args = AesArgs {
+            mode,
+            key,
+            iv,
+            padding,
+            aad: aad.unwrap_or_default(),
+        };
+        self.inner.data_processing = Some(DataProcessingStage {
+            operation: aes_operation(args, false, None)?,
+            placement: placement.map(parse_placement).transpose()?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, tag=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn decrypt(
+        &mut self,
+        mode: &str,
+        key: &[u8],
+        iv: Option<&[u8]>,
+        padding: Option<&str>,
+        aad: Option<&[u8]>,
+        tag: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let args = AesArgs {
+            mode,
+            key,
+            iv,
+            padding,
+            aad: aad.unwrap_or_default(),
+        };
+        self.inner.data_processing = Some(DataProcessingStage {
+            operation: aes_operation(args, true, tag)?,
+            placement: None,
         });
         Ok(())
     }

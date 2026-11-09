@@ -10,9 +10,9 @@ use std::path::PathBuf;
 
 use crate::types::PySegment;
 use crate::util::{
-    key_content, parse_fill_pattern, parse_intel_mode, parse_merge_mode, parse_placement,
-    parse_range_arg, parse_ranges_arg, parse_signature_method, parse_srec_type, parse_swap_mode,
-    py_bytes, value_error,
+    AesArgs, aes_operation, key_content, mac_operation, parse_fill_pattern, parse_intel_mode,
+    parse_merge_mode, parse_placement, parse_range_arg, parse_ranges_arg, parse_signature_method,
+    parse_srec_type, parse_swap_mode, py_bytes, value_error,
 };
 
 #[pyclass(name = "HexFile", skip_from_py_object)]
@@ -438,6 +438,87 @@ impl PyHexFile {
             )
             .map_err(value_error)?;
         Ok(py_bytes(py, &output.unwrap_or_default()))
+    }
+
+    #[pyo3(signature = (method, key, *, metadata=false, placement=None))]
+    fn mac(
+        &mut self,
+        py: Python<'_>,
+        method: &str,
+        key: &[u8],
+        metadata: bool,
+        placement: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyBytes>> {
+        let output = self
+            .inner
+            .process_data(
+                &mac_operation(method, key, metadata)?,
+                placement.map(parse_placement).transpose()?,
+            )
+            .map_err(value_error)?;
+        Ok(py_bytes(py, &output.unwrap_or_default()))
+    }
+
+    #[pyo3(signature = (key=None))]
+    fn xor(&mut self, key: Option<&[u8]>) -> PyResult<()> {
+        let key = key.unwrap_or_default().to_vec();
+        self.inner
+            .process_data(&DataProcessing::Xor { key }, None)
+            .map_err(value_error)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, placement=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn encrypt(
+        &mut self,
+        py: Python<'_>,
+        mode: &str,
+        key: &[u8],
+        iv: Option<&[u8]>,
+        padding: Option<&str>,
+        aad: Option<&[u8]>,
+        placement: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Option<Py<PyBytes>>> {
+        let args = AesArgs {
+            mode,
+            key,
+            iv,
+            padding,
+            aad: aad.unwrap_or_default(),
+        };
+        let output = self
+            .inner
+            .process_data(
+                &aes_operation(args, false, None)?,
+                placement.map(parse_placement).transpose()?,
+            )
+            .map_err(value_error)?;
+        Ok(output.map(|tag| py_bytes(py, &tag)))
+    }
+
+    #[pyo3(signature = (mode, key, *, iv=None, padding=None, aad=None, tag=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python keyword arguments
+    fn decrypt(
+        &mut self,
+        mode: &str,
+        key: &[u8],
+        iv: Option<&[u8]>,
+        padding: Option<&str>,
+        aad: Option<&[u8]>,
+        tag: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let args = AesArgs {
+            mode,
+            key,
+            iv,
+            padding,
+            aad: aad.unwrap_or_default(),
+        };
+        self.inner
+            .process_data(&aes_operation(args, true, tag)?, None)
+            .map_err(value_error)?;
+        Ok(())
     }
 
     #[pyo3(signature = (method, key, signature, *, metadata=false))]

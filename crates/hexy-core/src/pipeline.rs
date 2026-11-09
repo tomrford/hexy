@@ -190,7 +190,12 @@ impl Pipeline {
         hexfile: &mut HexFile,
         output: &mut PipelineOutput,
     ) -> Result<(), PipelineError> {
-        self.apply(stage, hexfile, output)?;
+        // Only normalize a failed stage if it committed data before failing.
+        let mut wrote_data = false;
+        let result = self.apply(stage, hexfile, output, &mut wrote_data);
+        if result.is_err() && !wrote_data {
+            return result;
+        }
         let places_data = match stage {
             Stage::Split | Stage::RemoveSmallBlocks | Stage::Swap | Stage::Verify => false,
             Stage::AddressMap => self.address_map.is_some(),
@@ -207,15 +212,14 @@ impl Pipeline {
                 .checksums
                 .get(index)
                 .is_some_and(|stage| stage.placement.is_some()),
-            Stage::DataProcessing => self
-                .data_processing
-                .as_ref()
-                .is_some_and(|stage| stage.placement.is_some()),
+            Stage::DataProcessing => self.data_processing.as_ref().is_some_and(|stage| {
+                stage.placement.is_some() || stage.operation.transforms_data()
+            }),
         };
         if places_data {
             hexfile.normalize();
         }
-        Ok(())
+        result
     }
 
     fn apply(
@@ -223,6 +227,7 @@ impl Pipeline {
         stage: Stage,
         hexfile: &mut HexFile,
         output: &mut PipelineOutput,
+        wrote_data: &mut bool,
     ) -> Result<(), PipelineError> {
         match stage {
             Stage::AddressMap => match &self.address_map {
@@ -311,8 +316,11 @@ impl Pipeline {
             }
             Stage::DataProcessing => {
                 if let Some(stage) = &self.data_processing {
-                    output.data_processing =
-                        hexfile.process_data(&stage.operation, stage.placement)?;
+                    output.data_processing = hexfile.process_data_tracked(
+                        &stage.operation,
+                        stage.placement,
+                        wrote_data,
+                    )?;
                 }
             }
             Stage::Verify => {
