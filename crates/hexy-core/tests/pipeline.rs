@@ -51,9 +51,9 @@ fn test_pipeline_matches_hexview_multistage_checksum() {
         }],
         address_filter: Some(vec![range(0x0F00, 0x1FFF)]),
         align: Some(AlignOptions {
-            alignment: 0x40,
+            address_alignment: 0x40,
+            length_alignment: 0x40,
             fill_byte: 0x00,
-            align_length: true,
         }),
         split: Some(0x40),
         swap_word: true,

@@ -287,7 +287,7 @@ impl Pipeline {
             }
             Stage::Align => {
                 if let Some(options) = &self.align {
-                    hexfile.align(options)?;
+                    hexfile.align(options);
                 }
             }
             Stage::Split => {

@@ -1,7 +1,10 @@
 use super::super::processing::ParamSource;
 use super::super::types::ChecksumTarget;
 use super::*;
-use crate::Placement;
+use crate::{AddressRange, MergeMode, Placement};
+use std::path::PathBuf;
+
+use super::super::types::ImportKind;
 
 /// HexView 1.15.2 reads /Xx parameters as lenient integers, falls back to auto record
 /// selection for unknown types and lets the last /Xx flag win.
@@ -64,7 +67,7 @@ fn test_parse_checksum_reverse_without_target_defaults_none() {
 fn test_parse_ar_matches_hexview() -> Result<(), Box<dyn std::error::Error>> {
     let ar = |value: &str| {
         let mut args = Args::default();
-        parse_option(&mut args, &format!("AR:{value}")).map(|()| args.address_range)
+        parse_option(&mut args, &format!("AR:{value}")).map(|_| args.address_range)
     };
     assert_eq!(
         ar("0x1000-0x1007:0x1004-0x100B")?,
@@ -76,6 +79,8 @@ fn test_parse_ar_matches_hexview() -> Result<(), Box<dyn std::error::Error>> {
         Some(vec![AddressRange::from_start_end(0x1000, 0x1007)?])
     );
     assert_eq!(ar("0x1000,0:0x1008-0x1007:0x1000-0x1007")?, None);
+    assert_eq!(ar("x")?, None);
+    assert_eq!(ar("0x1000é")?, None);
 
     let mut args = Args::default();
     parse_option(&mut args, "AR:0x1000,0x2")?;
@@ -91,14 +96,17 @@ fn test_parse_ar_matches_hexview() -> Result<(), Box<dyn std::error::Error>> {
 fn test_parse_i16_option_with_windows_absolute_path() {
     let mut args = Args::default();
     parse_option(&mut args, r"II2=C:\temp\input.hex").unwrap();
-    assert_eq!(args.import_i16, Some(PathBuf::from(r"C:\temp\input.hex")));
+    let import = args.import.expect("16-bit import parsed");
+    assert_eq!(import.kind, ImportKind::IntelHex16);
+    assert_eq!(import.file, PathBuf::from(r"C:\temp\input.hex"));
 }
 
 #[test]
 fn test_parse_in_option_with_windows_absolute_path() {
     let mut args = Args::default();
     parse_option(&mut args, r"IN:C:\temp\input.bin;0x1000").unwrap();
-    let import = args.import_binary.expect("binary import parsed");
+    let import = args.import.expect("binary import parsed");
+    assert_eq!(import.kind, ImportKind::Binary);
     assert_eq!(import.file, PathBuf::from(r"C:\temp\input.bin"));
     assert_eq!(import.offset, 0x1000);
 }
@@ -107,7 +115,8 @@ fn test_parse_in_option_with_windows_absolute_path() {
 fn test_parse_ia_option_with_windows_drive_and_forward_slashes() {
     let mut args = Args::default();
     parse_option(&mut args, "IA:C:/temp/input.txt;0x1000").unwrap();
-    let import = args.import_hex_ascii.expect("hex ascii import parsed");
+    let import = args.import.expect("hex ascii import parsed");
+    assert_eq!(import.kind, ImportKind::HexAscii);
     assert_eq!(import.file, PathBuf::from("C:/temp/input.txt"));
     assert_eq!(import.offset, 0x1000);
 }
@@ -116,8 +125,9 @@ fn test_parse_ia_option_with_windows_drive_and_forward_slashes() {
 fn test_parse_mt_option_with_windows_absolute_path_and_range() {
     let mut args = Args::default();
     parse_option(&mut args, r"MT:C:\temp\merge.hex;0x1000:0x0,0x4").unwrap();
-    assert_eq!(args.merge_transparent.len(), 1);
-    let merge = &args.merge_transparent[0];
+    let spec = args.merge.expect("merge parsed");
+    assert_eq!(spec.mode, MergeMode::Preserve);
+    let merge = &spec.files[0];
     assert_eq!(merge.file, PathBuf::from(r"C:\temp\merge.hex"));
     assert_eq!(merge.offset, Some(0x1000));
     assert_eq!(
@@ -145,16 +155,6 @@ fn test_parse_ini_file_option_with_windows_absolute_path() {
     let mut args = Args::default();
     parse_option(&mut args, r"P:C:\temp\hexy.ini").unwrap();
     assert_eq!(args.ini_file, Some(PathBuf::from(r"C:\temp\hexy.ini")));
-}
-
-#[test]
-fn test_parse_postbuild_option_with_windows_absolute_path() {
-    let mut args = Args::default();
-    parse_option(&mut args, r"PB:C:\temp\postbuild.bat").unwrap();
-    assert_eq!(
-        args.postbuild,
-        Some(PathBuf::from(r"C:\temp\postbuild.bat"))
-    );
 }
 
 #[test]
@@ -189,11 +189,62 @@ fn test_parse_dp_and_sv_windows_absolute_paths() {
     assert_eq!(sv.signature.as_deref(), Some(r"D:\temp\sig.bin"));
 }
 
+/// Options HexView knows but hexy does not reproduce are rejected; options HexView
+/// does not know are left to the caller to report.
 #[test]
-fn test_parse_unsupported_output_option_rejected() {
+fn test_parse_unsupported_and_unknown_options() {
     let mut args = Args::default();
-    let err = parse_option(&mut args, "XV").unwrap_err();
-    assert_eq!(err.to_string(), "invalid option: /XV not yet implemented");
+    for option in [
+        "XV",
+        "XGC:0x1000",
+        "XGC_APP_SIGN",
+        "PB:x.xml",
+        "expdat:x.dll",
+        "vs",
+    ] {
+        assert!(parse_option(&mut args, option).is_err(), "{option}");
+    }
+    for option in ["FOO", "RB:8", "S08", "CSX9:c.txt", "tms570-ECC"] {
+        assert!(!parse_option(&mut args, option).unwrap(), "{option}");
+    }
+    assert!(parse_option(&mut args, "XGACSWIL").unwrap());
+}
+
+/// HexView 1.15.2 uses the last /IN, /IA or /II2, and only the last /MO or /MT.
+#[test]
+fn test_parse_last_import_and_merge_win() {
+    let mut args = Args::default();
+    for option in ["IN:b.bin;0x10", "IA:a.asc;-0x10", "MO:a.hex", "MT:b.hex"] {
+        parse_option(&mut args, option).unwrap();
+    }
+    let import = args.import.expect("import parsed");
+    assert_eq!(import.kind, ImportKind::HexAscii);
+    assert_eq!(import.offset, 0xFFFF_FFF0);
+    let merge = args.merge.expect("merge parsed");
+    assert_eq!(merge.mode, MergeMode::Preserve);
+    assert_eq!(merge.files.len(), 1);
+}
+
+/// HexView 1.15.2 ignores /CR= and /FR=, reads /FP like HEX ASCII data and ignores
+/// `,target` after a /CDSPX range.
+#[test]
+fn test_parse_range_options_match_hexview() {
+    let mut args = Args::default();
+    for option in [
+        "CR=0x1000,4",
+        "FR=0x1000,4",
+        "FP:0xABC",
+        "CDSPX:0x1000,8,0x6000",
+    ] {
+        parse_option(&mut args, option).unwrap();
+    }
+    assert!(args.cut_ranges.is_empty());
+    assert!(args.fill_ranges.is_empty());
+    assert_eq!(args.fill_pattern, Some(vec![0xAB, 0x0C]));
+    assert_eq!(args.dspic_expand.len(), 1);
+    assert_eq!(args.dspic_expand[0].target, None);
+    parse_option(&mut args, "FP:XYZ").unwrap();
+    assert_eq!(args.fill_pattern, None);
 }
 
 #[test]

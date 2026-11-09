@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crate::{
-    AddressRange, DspicOp, ForcedRange, HexAsciiWriteOptions, IntelHexWriteOptions, Placement,
-    RemapOptions, SRecordWriteOptions,
+    AddressRange, DspicOp, ForcedRange, HexAsciiWriteOptions, IntelHexWriteOptions, MergeMode,
+    Placement, RemapOptions, SRecordWriteOptions,
 };
 
 use super::parse::parse_option;
@@ -27,12 +27,8 @@ pub struct Args {
     // Write version string to error log: /V
     pub write_version: bool,
 
-    // Import 16-bit Intel HEX: /II2=file
-    pub import_i16: Option<PathBuf>,
-    // Import binary data: /IN:file[;offset]
-    pub import_binary: Option<ImportParam>,
-    // Import HEX ASCII: /IA:file[;offset]
-    pub import_hex_ascii: Option<ImportParam>,
+    // Explicit import: /IN:file[;offset], /IA:file[;offset] or /II2=file; the last wins
+    pub import: Option<Import>,
 
     // Address mapping
     pub remap: Option<RemapOptions>,
@@ -40,17 +36,15 @@ pub struct Args {
     pub s12_map: bool,
     pub s12x_map: bool,
 
-    // Fill ranges: /FR:'range' with /FP:pattern
+    // Fill ranges: /FR:'range' with /FP:pattern; without a pattern the fill is random
     pub fill_ranges: Vec<AddressRange>,
-    pub fill_pattern: Vec<u8>,
-    pub fill_pattern_set: bool,
+    pub fill_pattern: Option<Vec<u8>>,
 
     // Cut ranges: /CR:'range1':'range2'
     pub cut_ranges: Vec<AddressRange>,
 
-    // Merge: /MO:file[;offset] or /MT:file[;offset]
-    pub merge_opaque: Vec<MergeParam>,
-    pub merge_transparent: Vec<MergeParam>,
+    // Merge: /MO:file[;offset][:range][+...] or /MT:...; the last of them wins
+    pub merge: Option<MergeSpec>,
 
     // Address range filter: /AR:'range'[:'range']; an empty list keeps nothing
     pub address_range: Option<Vec<AddressRange>>,
@@ -61,12 +55,9 @@ pub struct Args {
     // Single region: /FA
     pub fill_all: bool,
 
-    // Postbuild: /PB:"file"
-    pub postbuild: Option<PathBuf>,
-
-    // Alignment: /AD:xx, /AL, /AF:xx
+    // Alignment: /AD:xx, /AL[:len], /AF:xx; a bare /AL is Some(0) and aligns to /AD
     pub align_address: Option<u32>,
-    pub align_length: bool,
+    pub align_length: Option<u32>,
     pub align_fill: u8,
     pub align_erase: Option<u32>, // /AE:zzzz
 
@@ -96,17 +87,38 @@ pub struct Args {
 
     // Output format; the last /Xx flag wins
     pub output_format: Option<OutputFormat>,
+
+    // Options HexView does not know, and extra positional arguments: reported, not run
+    pub unrecognized: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct MergeSpec {
+    pub mode: MergeMode,
+    pub files: Vec<MergeParam>,
+}
+
+/// One `/MO` or `/MT` file. A file name with `*` or `?` merges every matching file, the
+/// offset and range applying to the first.
 #[derive(Debug, Clone)]
 pub struct MergeParam {
     pub file: PathBuf,
     pub offset: Option<i64>,
     pub range: Option<AddressRange>,
+    /// A range HexView rejects: the whole file is merged and the command fails.
+    pub invalid_range: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportKind {
+    Binary,
+    HexAscii,
+    IntelHex16,
 }
 
 #[derive(Debug, Clone)]
-pub struct ImportParam {
+pub struct Import {
+    pub kind: ImportKind,
     pub file: PathBuf,
     pub offset: u32,
 }
@@ -137,6 +149,8 @@ pub enum OutputFormat {
     HexAscii(HexAsciiWriteOptions), // /XA[:len[:separator]]
     CCode,                          // /XC
     FordIntelHex,                   // /XF
+    FlashKernel,                    // /XK
+    GacSwil,                        // /XGACSWIL
     Porsche,                        // /XP
     SeparateBinary,                 // /XSB
 }
@@ -147,17 +161,17 @@ impl OutputFormat {
         match self {
             Self::IntelHex(_) => ".hex",
             Self::SRecord(_) => ".s19",
-            Self::Binary | Self::Porsche | Self::SeparateBinary => ".bin",
+            Self::Binary | Self::GacSwil | Self::Porsche | Self::SeparateBinary => ".bin",
             Self::HexAscii(_) => ".asc",
             Self::CCode => ".c",
             Self::FordIntelHex => "_f.hex",
+            Self::FlashKernel => ".fkl",
         }
     }
 }
 
 #[derive(Debug)]
 pub enum ParseArgError {
-    MissingInputFile,
     InvalidOption(String),
     InvalidRange(String),
     InvalidNumber(String),
@@ -167,7 +181,6 @@ pub enum ParseArgError {
 impl std::fmt::Display for ParseArgError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingInputFile => write!(f, "missing input file"),
             Self::InvalidOption(s) => write!(f, "invalid option: {s}"),
             Self::InvalidRange(s) => write!(f, "invalid range: {s}"),
             Self::InvalidNumber(s) => write!(f, "invalid number: {s}"),
@@ -198,15 +211,12 @@ impl Args {
         F: Fn(&str) -> bool,
     {
         let mut result = Args {
-            fill_pattern: vec![0xFF],
-            fill_pattern_set: false,
             align_fill: 0xFF,
             ..Default::default()
         };
 
-        let mut args_iter = args.iter().peekable();
+        let mut args_iter = args.iter();
         let mut force_positional = false;
-        let is_existing_abs_path = &is_existing_abs_path;
 
         while let Some(arg) = args_iter.next() {
             if arg == "--" {
@@ -222,30 +232,24 @@ impl Args {
                 continue;
             }
 
-            if force_positional {
-                if result.input_file.is_none() {
-                    result.input_file = Some(PathBuf::from(arg));
+            let option = (!force_positional)
+                .then(|| arg.strip_prefix('/').or_else(|| arg.strip_prefix('-')))
+                .flatten();
+            if let Some(opt) = option {
+                if parse_option(&mut result, opt)? {
                     continue;
                 }
-                return Err(ParseArgError::InvalidOption(arg.clone()));
-            }
-
-            if let Some(opt) = arg.strip_prefix('/').or_else(|| arg.strip_prefix('-')) {
-                match parse_option(&mut result, opt) {
-                    Ok(()) => {}
-                    Err(ParseArgError::InvalidOption(_)) => {
-                        if result.input_file.is_none() && is_existing_abs_path(arg) {
-                            result.input_file = Some(PathBuf::from(arg));
-                        } else {
-                            return Err(ParseArgError::InvalidOption(arg.clone()));
-                        }
-                    }
-                    Err(e) => return Err(e),
+                if !(result.input_file.is_none() && is_existing_abs_path(arg)) {
+                    // HexView reports unknown options and carries on.
+                    result.unrecognized.push(format!("-{opt}"));
+                    continue;
                 }
-            } else if result.input_file.is_none() {
+            }
+            if result.input_file.is_none() {
                 result.input_file = Some(PathBuf::from(arg));
             } else {
-                return Err(ParseArgError::InvalidOption(arg.clone()));
+                // HexView reads the first positional argument and ignores the others.
+                result.unrecognized.push(arg.clone());
             }
         }
 

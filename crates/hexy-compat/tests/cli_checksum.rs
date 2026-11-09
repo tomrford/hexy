@@ -350,8 +350,7 @@ fn test_cli_checksum_reject_mix_legacy_and_multi() {
     let output = run_hexy(&args);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("invalid option"));
-    assert!(stderr.contains("/CSM0:@append"));
+    assert!(stderr.contains("cannot combine /CS* with /CSM*"));
 }
 
 fn run_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {

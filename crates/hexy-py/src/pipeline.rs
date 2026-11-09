@@ -142,12 +142,12 @@ impl PyPipeline {
         self.inner.fill_gaps = Some(fill);
     }
 
-    #[pyo3(signature = (alignment, *, fill=0xFF, length=false))]
-    fn align(&mut self, alignment: u32, fill: u8, length: bool) {
+    #[pyo3(signature = (alignment, *, length=0, fill=0xFF))]
+    fn align(&mut self, alignment: u32, length: u32, fill: u8) {
         self.inner.align = Some(AlignOptions {
-            alignment,
+            address_alignment: alignment,
+            length_alignment: length,
             fill_byte: fill,
-            align_length: length,
         });
     }
 

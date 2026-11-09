@@ -82,9 +82,10 @@ fn test_cli_merge_opaque_range_offset() {
     );
 }
 
+/// HexView 1.15.2 uses only the last /MO or /MT.
 #[test]
-fn test_cli_mt_mo_conflict() {
-    let dir = temp_dir("cli_mt_mo_conflict");
+fn test_cli_last_merge_option_wins() {
+    let dir = temp_dir("cli_mt_mo_last");
     let base = dir.join("base.bin");
     let merge = dir.join("merge.bin");
     let out = dir.join("out.hex");
@@ -93,15 +94,16 @@ fn test_cli_mt_mo_conflict() {
 
     let args = vec![
         format!("/IN:{};0x0", base.display()),
-        format!("/MT:{};0x0", merge.display()),
         format!("/MO:{};0x0", merge.display()),
-        "/XI".to_owned(),
+        format!("/MT:{};0x0", merge.display()),
+        "/XN".to_owned(),
         "-o".to_owned(),
         out.display().to_string(),
     ];
 
     let output = run_hexy(&args);
-    assert!(!output.status.success());
+    assert_success(&output);
+    assert_eq!(std::fs::read(&out).unwrap(), [0x00, 0x01]);
 }
 
 #[test]
@@ -129,63 +131,30 @@ fn test_cli_remap_s08map_conflict() {
     );
 }
 
+/// HexView 1.15.2 empties the image on `FileOpen` in a /L log and fails only when the
+/// file name is missing.
 #[test]
-fn test_cli_dspic_error_precedes_loading_merge_inputs() {
-    let dir = temp_dir("cli_dspic_before_merge");
+fn test_cli_log_file_open_empties_image() {
+    let dir = temp_dir("cli_log_open");
     let input = dir.join("input.bin");
-    write_file(&input, &[1, 2, 3, 4]);
-
-    let output = run_hexy(&[
-        format!("/IN:{};0", input.display()),
-        "/CDSPX:0-2;0x10".to_owned(),
-        format!("/MO:{}", dir.join("missing.hex").display()),
-    ]);
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("/CDSPX"));
-}
-
-#[test]
-fn test_cli_merge_error_precedes_loading_later_merge_inputs() {
-    let dir = temp_dir("cli_merge_before_later_merge");
-    let input = dir.join("input.bin");
-    let merge = dir.join("merge.bin");
-    write_file(&input, &[1]);
-    write_file(&merge, &[0xAA, 0xBB]);
-
-    let output = run_hexy(&[
-        format!("/IN:{};0", input.display()),
-        format!(
-            "/MO:{};0xFFFFFFFF+{}",
-            merge.display(),
-            dir.join("missing.bin").display()
-        ),
-    ]);
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("/MO: address overflow"));
-}
-
-#[test]
-fn test_cli_log_file_open_relative_path_is_rejected_with_raw_path() {
-    let dir = temp_dir("cli_log_open_relative_rejected");
     let log = dir.join("commands.log");
-    let out = dir.join("out.hex");
-    write_file(&log, b"FileOpen relative/input.bin");
+    let out = dir.join("out.bin");
+    write_file(&input, &[0x01, 0x02]);
 
-    let args = vec![
-        format!("/L:{}", log.display()),
-        "/XI".to_owned(),
-        "-o".to_owned(),
-        out.display().to_string(),
-    ];
-
-    let output = run_hexy(&args);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("FileOpen"));
-    assert!(stderr.contains("relative/input.bin"));
-    assert!(!out.exists());
+    let run = |log_text: &[u8]| {
+        write_file(&log, log_text);
+        run_hexy(&[
+            format!("/IN:{}", input.display()),
+            format!("/L:{}", log.display()),
+            "/XN".to_owned(),
+            "-o".to_owned(),
+            out.display().to_string(),
+        ])
+    };
+    assert_success(&run(b"FileOpen relative/input.bin"));
+    assert_eq!(std::fs::read(&out).unwrap(), []);
+    assert!(!run(b"FileOpen  \r\n").status.success());
+    assert_eq!(std::fs::read(&out).unwrap(), []);
 }
 
 #[test]
@@ -209,25 +178,30 @@ fn test_cli_log_file_new_clears_data() {
     assert!(hexfile.segments().is_empty());
 }
 
+/// HexView 1.15.2 ignores log lines it does not know, including `FileClose`.
 #[test]
-fn test_cli_log_file_invalid_command() {
+fn test_cli_log_file_ignores_other_commands() {
     let dir = temp_dir("cli_log_invalid");
     let input = dir.join("input.bin");
     let log = dir.join("commands.log");
     let out = dir.join("out.hex");
     write_file(&input, &[0xAA]);
-    write_file(&log, b"BogusCommand");
+    write_file(
+        &log,
+        b"BogusCommand\r\nFileClose\r\n  FileNew\r\nfilenew\r\n",
+    );
 
     let args = vec![
         format!("/IN:{};0x0", input.display()),
         format!("/L:{}", log.display()),
-        "/XI".to_owned(),
+        "/XN".to_owned(),
         "-o".to_owned(),
         out.display().to_string(),
     ];
 
     let output = run_hexy(&args);
-    assert!(!output.status.success());
+    assert_success(&output);
+    assert_eq!(std::fs::read(&out).unwrap(), [0xAA]);
 }
 
 #[test]
@@ -250,7 +224,7 @@ fn test_cli_version_string_written_to_error_log() {
     let output = run_hexy(&args);
     assert_success(&output);
     let log = std::fs::read_to_string(&err).unwrap();
-    assert_eq!(log, format!("hexy V{}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(log, format!("hexy V{}\r\n", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
@@ -606,8 +580,9 @@ fn test_cli_auto_detect_srec_lowercase() {
     assert_eq!(data, vec![0x01, 0x02]);
 }
 
+/// HexView 1.15.2 ignores an import next to an input file, with a warning.
 #[test]
-fn test_cli_hex_ascii_overlap_ignores_input() {
+fn test_cli_hex_ascii_import_next_to_input_is_ignored() {
     let dir = temp_dir("cli_hex_ascii_overlap");
     let input = dir.join("input.hex");
     let ascii = dir.join("ascii.txt");
@@ -625,7 +600,8 @@ fn test_cli_hex_ascii_overlap_ignores_input() {
     let output = run_hexy(&args);
     assert_success(&output);
     let data = std::fs::read(&out).unwrap();
-    assert_eq!(data, vec![0x01, 0x02]);
+    assert_eq!(data, vec![0xAA]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ignoring the import"));
 }
 
 #[test]
@@ -797,4 +773,51 @@ fn test_cli_fa_uses_align_fill_before_length_alignment() {
     expected[0x21..0x23].copy_from_slice(&[0xCC, 0xDD]);
 
     assert_eq!(cli_bytes, expected);
+}
+
+#[test]
+fn test_cli_dspic_error_precedes_loading_merge_inputs() {
+    let dir = temp_dir("cli_dspic_before_merge");
+    let input = dir.join("input.bin");
+    write_file(&input, &[1, 2, 3, 4]);
+
+    let output = run_hexy(&[
+        format!("/IN:{};0", input.display()),
+        "/CDSPX:0-2;0x10".to_owned(),
+        format!("/MO:{}", dir.join("missing.hex").display()),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/CDSPX"));
+}
+
+#[test]
+fn test_cli_merge_error_precedes_loading_later_merge_inputs() {
+    let dir = temp_dir("cli_merge_before_later_merge");
+    let input = dir.join("input.bin");
+    let merge = dir.join("merge.bin");
+    write_file(&input, &[1]);
+    write_file(&merge, &[0xAA, 0xBB]);
+
+    let output = run_hexy(&[
+        format!("/IN:{};0", input.display()),
+        format!(
+            "/MO:{};0xFFFFFFFF+{}",
+            merge.display(),
+            dir.join("missing.bin").display()
+        ),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/MO: address overflow"));
+}
+
+#[test]
+fn test_cli_wildcard_merge_error_precedes_loading_later_matches() {
+    let dir = temp_dir("cli_wildcard_merge_order");
+    write_file(&dir.join("a.hex"), b":02000000AABB99\r\n:00000001FF\r\n");
+    write_file(&dir.join("b.hex"), b":02000000INVALID\r\n:00000001FF\r\n");
+    let output = run_hexy(&[format!("/MO:{};0xFFFFFFFF", dir.join("*.hex").display())]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("/MO: address overflow"));
 }
