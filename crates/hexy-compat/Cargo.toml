@@ -9,7 +9,7 @@ keywords = ["hex", "firmware", "intel-hex", "srec"]
 
 [dependencies]
 chrono.workspace = true
-hexy-core = { path = "../hexy-core", version = "0.3.0" }
+hexy-core = { path = "../hexy-core", version = "0.4.0" }
 thiserror.workspace = true
 
 [[bin]]
