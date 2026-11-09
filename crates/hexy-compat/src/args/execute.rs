@@ -7,11 +7,11 @@ use crate::{
 
 use super::error::CliError;
 use super::export::write_output_for_args;
-use super::io::{checksum_options, load_input, write_checksum_text, write_data_processing_text};
+use super::io::{checksum_options, load_input, write_checksum_text};
 use super::log::execute_log;
 use super::processing::{
-    data_processing_output, data_processing_stage, validate_data_processing,
-    validate_signature_verify, verify_stage,
+    data_processing_stage, validate_data_processing, validate_signature_verify, verify_stage,
+    write_data_processing_output,
 };
 use super::report::Report;
 use super::types::{Args, ChecksumParams, ChecksumTarget, ImportKind};
@@ -321,17 +321,14 @@ impl Args {
                 if let Some(signature) = &output.hsm_signature
                     && let Some(params) = hsm_signature_params(self)
                         .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?
-                    && let Some((path, crlf)) = data_processing_output(&params, dir)
                 {
-                    write_data_processing_text(&path, signature, crlf)
+                    write_data_processing_output(&params, dir, signature)
                         .map_err(|e| CliError::Other(format!("/vshsm: {e}")))?;
                 }
             }
             Stage::DataProcessing => {
-                if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing)
-                    && let Some((path, crlf)) = data_processing_output(dp, dir)
-                {
-                    write_data_processing_text(&path, bytes, crlf)
+                if let (Some(dp), Some(bytes)) = (&self.data_processing, &output.data_processing) {
+                    write_data_processing_output(dp, dir, bytes)
                         .map_err(|e| CliError::Other(format!("/DP{}: {e}", dp.method)))?;
                 }
             }
