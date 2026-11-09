@@ -177,6 +177,9 @@ jobs:
         shell: bash
         run: uv run --directory crates/hexy-py --group dev maturin sdist --out ../../dist
 
+      - name: Build CLI for the equivalence tests
+        run: cargo build -p hexy-compat --locked
+
       - name: Test built wheel
         shell: bash
         run: |
